@@ -19,8 +19,10 @@ secrets.json
 # Playwright MCP logs/cache
 .playwright-mcp/
 
-# trafficlab-project has its own git repo
-trafficlab-project/
+# Large binary files
+*.mp4
+*.mov
+*.pt
 
 # Large model weights (not needed for reading the project)
 models/*.pb

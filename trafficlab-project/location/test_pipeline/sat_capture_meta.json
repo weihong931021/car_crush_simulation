@@ -1,0 +1,10 @@
+{
+  "lat": 25.048,
+  "lon": 121.517,
+  "zoom": 19,
+  "tile_source": "esri_world_imagery",
+  "px_per_meter": 3.6968,
+  "img_w": 1024,
+  "img_h": 1024,
+  "timestamp": "2026-06-01T16:28:42.625536"
+}
