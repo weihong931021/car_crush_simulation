@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>車輛碰撞模擬</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #111; color: #eee; font-family: monospace; overflow: hidden; }
+    #canvas-container { position: fixed; inset: 0; }
+    canvas { display: block; width: 100% !important; height: 100% !important; }
+
+    #controls {
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: rgba(0,0,0,0.6);
+      padding: 8px 16px;
+      border-radius: 8px;
+      z-index: 10;
+    }
+    #controls button {
+      background: #444;
+      color: #eee;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    #controls button:hover { background: #666; }
+    #frame-display { font-size: 14px; min-width: 80px; text-align: center; }
+    #frame-slider { width: 240px; accent-color: #88aaff; }
+
+    #legend {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      background: rgba(0,0,0,0.6);
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.8;
+      z-index: 10;
+    }
+    .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+
+    #speed-panel {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      background: rgba(0,0,0,0.6);
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-width: 220px;
+    }
+    #speed-panel .panel-title {
+      font-size: 12px;
+      color: #aaa;
+      margin-bottom: 2px;
+      letter-spacing: 0.5px;
+    }
+    .speed-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .speed-row span:first-child {
+      width: 52px;
+      color: #ccc;
+      flex-shrink: 0;
+    }
+    .speed-row input[type=range] {
+      flex: 1;
+      accent-color: #88aaff;
+    }
+    .speed-val {
+      width: 60px;
+      text-align: right;
+      color: #88aaff;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+
+  <div id="controls">
+    <button id="btn-play">▶ 播放</button>
+    <button id="btn-reset">↺ 重置</button>
+    <button id="btn-topdown">⊙ 頂視圖</button>
+    <input id="frame-slider" type="range" min="1" max="89" value="1" step="1" />
+    <span id="frame-display">Frame 1</span>
+  </div>
+
+  <div id="speed-panel">
+    <div class="panel-title">碰撞前車速調整</div>
+    <div class="speed-row">
+      <span>汽車</span>
+      <input id="tesla-speed" type="range" min="5" max="80" step="1" value="20" />
+      <span id="tesla-speed-label" class="speed-val">20 km/h</span>
+    </div>
+    <div class="speed-row">
+      <span>機車</span>
+      <input id="gogoro-speed" type="range" min="5" max="80" step="1" value="40" />
+      <span id="gogoro-speed-label" class="speed-val">40 km/h</span>
+    </div>
+  </div>
+
+  <div id="legend">
+    <div><span class="dot" style="background:#4488ff"></span>汽車 (Car id=7)</div>
+    <div><span class="dot" style="background:#ff4444"></span>機車 (Two-Wheeler id=373)</div>
+    <div><span class="dot" style="background:#ffcc00; opacity:0.6"></span>汽車路徑</div>
+    <div><span class="dot" style="background:#ff8844; opacity:0.6"></span>機車路徑</div>
+  </div>
+
+  <!-- Three.js r165 (ES Module build via importmap) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.165.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

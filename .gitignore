@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.env
+
+# API keys / secrets
+.env.local
+secrets.json
+
+# Claude local settings (permissions, not source)
+.claude/
+
+# Playwright MCP logs/cache
+.playwright-mcp/
+
+# trafficlab-project has its own git repo
+trafficlab-project/
+
+# Large model weights (not needed for reading the project)
+models/*.pb
