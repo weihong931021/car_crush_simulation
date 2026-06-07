@@ -1,0 +1,5 @@
+.env
+.maps_key
+__pycache__/
+*.pyc
+output/

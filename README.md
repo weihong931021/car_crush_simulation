@@ -36,6 +36,12 @@ blender_crash_project/
 │   ├── sat_bw.png
 │   └── screenshots/
 ├── paper/                          ← 學術參考論文
+├── satellite_pipeline/            ← 衛星底圖自動化（lat/lon → 去車 → 貼 Blender）
+│   ├── pipeline.py                ← 一鍵流程
+│   ├── map_capture.py             ← Google Static API 擷取
+│   ├── image_enhance.py           ← Gemini 去車 + 銳化
+│   ├── blender_ground.py          ← 貼 Blender 地板（MCP）
+│   └── output/<code>/             ← sat_raw / sat_clean / meta.json
 ├── blender_scripts/
 │   ├── vehicle_specs.py
 │   ├── import_vehicle.py
