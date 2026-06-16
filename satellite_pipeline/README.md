@@ -115,4 +115,16 @@ world_y = sat_y / px_per_meter
 | `.env` | API keys（勿進版控） |
 | `refs/` | genai 風格參考圖（road_style_ref.png） |
 | `output/` | 各地點結果（gitignore） |
-| `compare/` | 圖源比對圖 |
+| `compare/` | 圖源比對圖（Esri vs Google、Apple vs Google） |
+| `demo/` | 多地點範例對比圖（原圖 vs HD 處理後） |
+
+---
+
+## 範例（`demo/`）
+
+5 個台灣路口的「原圖 vs HD 處理後」並排對比，示範 pipeline 換地點都能跑：
+`taipei_sogo`（忠孝復興，斑馬線+車道箭頭）、`taipei_nanjing`（南京復興）、
+`banqiao_xianmin`（板橋多線道）、`kaohsiung_wufu`（五福路口）、`chiayi_fountain`（嘉義噴水）。
+
+> 選點經驗：座標要落在**真正的路口/路面**才有效；市中心地標常落在建物/停車場/公園。
+> 用 zoom=21 時單張最大約 40m（1280px / 29px/m）。

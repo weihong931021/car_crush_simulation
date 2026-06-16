@@ -17,7 +17,8 @@
 
 ### 待辦（微調）
 
-- [x] genai prompt 優化：整片路面單一深炭灰材質 + 道路輪廓/標線銳化 + 不過度生成（temp 0.4, raw 來源）
+- [x] genai prompt 定案：真實深柏油 + 粗糙質感 + 標線最小化 + 風格參考圖（refs/road_style_ref.png，借柏油材質）（temp 0.4, raw 來源）
+- [x] 多地點範例：`satellite_pipeline/demo/` 5 個台灣路口原圖 vs HD 對比圖
 - [x] Codex 審查 #1 修正：`build_blender_code` 加 variant（auto>genai>clean>raw）；map_capture 重抓時清除過時 sat_clean/sat_genai（修「新地形配舊圖」bug）
 - [ ] Codex 審查 #2（待軌跡接入時驗）：`uv.reset()` 沒明確指定哪個 UV 角=世界原點，image-y-down 映射是隱性的，衛星圖可能上下相反
 - [x] Codex 審查 #3：px_per_meter 是「此緯度」專屬非通用常數（README 已註明「此地點 29px/m」）
