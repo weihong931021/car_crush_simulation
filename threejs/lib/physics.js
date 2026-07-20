@@ -16,10 +16,38 @@ export function headingOf(wps) {
   return Math.atan2(b[1] - a[1], b[2] - a[2]);
 }
 
-// 摩擦滑行積分；omega0 非 0 時同步積分 heading（碰後自旋）。
-// omega 隨線速度「同比例」衰減：omega(t) = omega0 · (speed(t) / speed0)，
-// 讓自旋與平移同時停止（視覺選擇，非輪胎偏航阻尼的物理模型）。
-// speed0 為 0（碰前即靜止）時無比例基準可言，直接視為不轉，避免除以零。
+// 摩擦滑行的單一時間步（純函數）：套用一步 mu*G 減速，並依「與線速度同比例」衰減 heading
+// 的自旋速率（見 frictionSlide 的說明）。抽出成獨立函式的原因：simulate.js 的碰後迭代接觸
+// 解算（Task 5 Part A）需要在滑行途中插入額外衝量，無法沿用 frictionSlide 一次吐出整段未來
+// 軌跡的介面（它不回傳逐步的 vx/vz），只能逐步呼叫；抽出這個純函數讓 frictionSlide（整段滑行）
+// 與 simulate.js（逐步滑行＋期間可能重新解算接觸）共用同一份衰減數學，不必分岔成兩份實作。
+//
+// omega0/speed0：這段「滑行episode」的參考基準（通常是上一次衝量剛結束時的角速度／線速度），
+// 全程固定不變；每步用「目前線速度／speed0」的比例去乘 omega0，得到這一步的『目前角速度』
+// （omegaNow），讓自旋與平移同時衰減到 0（視覺選擇，非輪胎偏航阻尼的物理模型）。
+// speed0 為 0（滑行一開始就是靜止）時無比例基準可言，omegaNow 直接視為 0，避免除以零。
+export function frictionStep({ x, z, vx, vz, heading, omega0, speed0, dt, mu }) {
+  let cx = x, cz = z, cvx = vx, cvz = vz;
+  const spd = Math.hypot(cvx, cvz);
+  if (spd >= 1e-3) {
+    const decel = Math.min(mu * G * dt, spd);
+    cvx -= (cvx / spd) * decel;
+    cvz -= (cvz / spd) * decel;
+    cx += cvx * dt;
+    cz += cvz * dt;
+  }
+  let omegaNow = 0;
+  let heading2 = heading;
+  if (omega0 !== 0 && speed0 > 1e-9) {
+    const curSpeed = Math.hypot(cvx, cvz);
+    omegaNow = omega0 * (curSpeed / speed0);
+    heading2 = heading + omegaNow * dt;
+  }
+  return { x: cx, z: cz, vx: cvx, vz: cvz, heading: heading2, omegaNow };
+}
+
+// 摩擦滑行積分；omega0 非 0 時同步積分 heading（碰後自旋）。內部逐步呼叫 frictionStep（見上），
+// 純粹是把它包成「一次要一整段」的介面，行為與抽出前完全相同。
 export function frictionSlide({ x0, z0, vx, vz, heading0, omega0, startFrame, endFrame,
                                 mu, fps = 30, step = 3 }) {
   const dt = 1 / fps;
@@ -29,18 +57,9 @@ export function frictionSlide({ x0, z0, vx, vz, heading0, omega0, startFrame, en
   let cx = x0, cz = z0, cvx = vx, cvz = vz, h = heading0 ?? 0;
   for (let f = step; startFrame + f <= endFrame; f += step) {
     for (let s = 0; s < step; s++) {
-      const spd = Math.hypot(cvx, cvz);
-      if (spd >= 1e-3) {
-        const decel = Math.min(mu * G * dt, spd);
-        cvx -= (cvx / spd) * decel;
-        cvz -= (cvz / spd) * decel;
-        cx += cvx * dt;
-        cz += cvz * dt;
-      }
-      if (spin && speed0 > 1e-9) {
-        const curSpeed = Math.hypot(cvx, cvz);
-        h += omega0 * (curSpeed / speed0) * dt;
-      }
+      const next = frictionStep({ x: cx, z: cz, vx: cvx, vz: cvz, heading: h, omega0, speed0, dt, mu });
+      cx = next.x; cz = next.z; cvx = next.vx; cvz = next.vz;
+      if (spin) h = next.heading;
     }
     result.push([startFrame + f, cx, cz, spin ? h : null]);
   }
@@ -78,45 +97,83 @@ function legacySpinFromImpulse(centerWp, heading, jx, jz, mass_kg, length_m, con
 // 簡化——偏心正面撞（衝量平行前向軸、接觸點偏離質心連線）在此可正確產生自旋。
 // 只回傳碰撞瞬間的碰後速度/角速度；滑行積分仍交給 frictionSlide。
 //
-// a/b: {x, z, heading, vx, vz, mass_kg, length_m}；contact: {x,z}；normal: {nx,nz}（單位向量，指向 a→b）。
+// a/b: {x, z, heading, vx, vz, mass_kg, length_m, omega?}；omega 為碰前既有角速度（首次碰撞恆為
+// 0；simulate.js 迭代重新解算同一接觸時可能非 0，省略時預設 0，向後相容舊呼叫）。
+// contact: {x,z}；normal: {nx,nz}（單位向量，指向 a→b）；muContact：接觸面（不是路面）摩擦係數，
+// 預設 0.5——決定切向衝量能吸收多少偏心衝量原本會全部轉成自旋的量，與路面滑行摩擦係數（frictionSlide
+// 的 mu，本專案取 0.7）是兩回事，不要混用。
 //
 // v_rel·n 慣例：v_rel = v_a − v_b，n 指向 a→b。
 // v_rel·n > 0 表示 a 正朝 b 逼近（closing，兩車距離持續縮小）→ 需施加衝量；
-// v_rel·n <= 0 表示兩車已在分離或無相對趨近 → 回傳零衝量（否則會產生「吸附」而非「推開」的力）。
+// v_rel·n <= 0 表示兩車已在分離或無相對趨近 → 回傳零衝量、原樣保留兩車既有速度／角速度
+// （早期版本這裡誤把 omega 重置為 0——只呼叫一次、omega 恆為 0 的舊介面下看不出差異；
+//  simulate.js 迭代重新解算接觸時可能在角速度非 0 時呼叫到這個分支，若重置成 0 會憑空吃掉
+//  既有自旋，已修正為原樣回傳）。
 // （沿用本專案舊 applyCollision 已驗證的動量守恆符號慣例；舊版 normal 方向是 b→a，
 //  這裡介面改指定 a→b，guard 的不等號方向隨之對調——已用動量守恆／自旋測試逐一驗證。）
-export function collisionImpulse({ a, b, contact, normal, restitution }) {
+export function collisionImpulse({ a, b, contact, normal, restitution, muContact = 0.5 }) {
   const { nx, nz } = normal;
+  const omegaA0 = a.omega ?? 0, omegaB0 = b.omega ?? 0;
   const vrelX = a.vx - b.vx, vrelZ = a.vz - b.vz;
   const vrn = vrelX * nx + vrelZ * nz;
 
   if (vrn <= 0) {
     return {
-      aAfter: { vx: a.vx, vz: a.vz, omega: 0 },
-      bAfter: { vx: b.vx, vz: b.vz, omega: 0 },
+      aAfter: { vx: a.vx, vz: a.vz, omega: omegaA0 },
+      bAfter: { vx: b.vx, vz: b.vz, omega: omegaB0 },
       j: 0,
+      jt: 0,
     };
   }
 
   const j = -(1 + restitution) * vrn / (1 / a.mass_kg + 1 / b.mass_kg);
-  const avx = a.vx + j * nx / a.mass_kg;
-  const avz = a.vz + j * nz / a.mass_kg;
-  const bvx = b.vx - j * nx / b.mass_kg;
-  const bvz = b.vz - j * nz / b.mass_kg;
 
   // 力臂 r = 接觸點 − 車輛中心：完整 2D 向量，不投影到前向軸、不 clamp。
   const rax = contact.x - a.x, raz = contact.z - a.z;
   const rbx = contact.x - b.x, rbz = contact.z - b.z;
-
-  // 施加在 a 上的衝量為 j·n；施加在 b 上為反作用力 −j·n。
-  const JaX = j * nx, JaZ = j * nz;
-  const JbX = -JaX, JbZ = -JaZ;
-
   const Ia = a.mass_kg * a.length_m * a.length_m / 12;
   const Ib = b.mass_kg * b.length_m * b.length_m / 12;
 
+  // --- 切向摩擦衝量（先算「只有法向衝量」的中間狀態，再用這個中間狀態算切向滑動速度）---
+  // 為什麼要用「法向衝量後」而非「碰前」的狀態算切向滑動：偏心正撞在碰前兩車速度往往完全
+  // 平行於法向（無切向分量、碰前也還沒有自旋），此時切向滑動速度恆為 0，摩擦無從施力；
+  // 真正的切向滑動是法向衝量本身造成的偏心自旋「憑空產生」的——接觸點因為這個新自旋開始
+  // 相對滑動，摩擦才有東西可以抓。這也是本函式修正前「全部偏心衝量都轉成自旋、完全沒有東西
+  // 抵抗」的根源。中間態的 omega 刻意不 clamp（只用來算切向滑動速度，不是最終回傳值）。
+  const JaXn = j * nx, JaZn = j * nz;
+  const avx1 = a.vx + JaXn / a.mass_kg, avz1 = a.vz + JaZn / a.mass_kg;
+  const bvx1 = b.vx - JaXn / b.mass_kg, bvz1 = b.vz - JaZn / b.mass_kg;
+  const omegaA1raw = (raz * JaXn - rax * JaZn) / Ia;
+  const omegaB1raw = (rbz * (-JaXn) - rbx * (-JaZn)) / Ib;
+
+  const tx = nz, tz = -nx; // t 為 n 逆時針轉 90 度；下面 jt 的正負號會自動抓對抵抗滑動的方向。
+
+  // 接觸點速度 = 線速度 + ω×r。2D 形式：(vx + ω·r_z, vz − ω·r_x)——正負號經過與本檔案既有、
+  // 已由動量守恆／自旋測試驗證過的 torque 慣例（τ = r_z·F_x − r_x·F_z，omega = τ/I，未取負）
+  // 反推校對過：若照「vx − ω·r_z, vz + ω·r_x」代入，算出的切向有效質量 1/(1/ma+1/mb+D²/Ia+D²/Ib)
+  // 會變成負值（物理上不合理，代表力臂方向反了），且對本檔案 Test 3 的偏心撞數值代入後，摩擦
+  // 衝量會讓機車 |ω| 從 21.3 rad/s 惡化到 39 rad/s（方向錯誤，摩擦不該讓滑動變大）；改成這裡
+  // 的正負號後兩者都恢復正常（有效質量為正、|ω| 降到 5.79 rad/s，見 Task 5 報告的健檢數字）。
+  const vcAx = avx1 + omegaA1raw * raz, vcAz = avz1 - omegaA1raw * rax;
+  const vcBx = bvx1 + omegaB1raw * rbz, vcBz = bvz1 - omegaB1raw * rbx;
+  const vt = (vcAx - vcBx) * tx + (vcAz - vcBz) * tz;
+
+  const mEff = 1 / (1 / a.mass_kg + 1 / b.mass_kg);
+  const jtMax = muContact * Math.abs(j);
+  const jt = Math.max(-jtMax, Math.min(jtMax, -vt * mEff));
+
+  // 施加在 a 上的總衝量為 (j·n + jt·t)；施加在 b 上為反作用力，方向相反。
+  const JaX = JaXn + jt * tx, JaZ = JaZn + jt * tz;
+  const JbX = -JaX, JbZ = -JaZ;
+
+  const avx = a.vx + JaX / a.mass_kg;
+  const avz = a.vz + JaZ / a.mass_kg;
+  const bvx = b.vx - JaX / b.mass_kg;
+  const bvz = b.vz - JaZ / b.mass_kg;
+
   // (r × J)_y = r_z·J_x − r_x·J_z（右手系）；a、b 受力相反，力臂各自不同，故兩者 τ 未必等大反向，
-  // 但同一接觸點、相反的 J 通常仍使兩車自旋方向相反（作用力與反作用力）。
+  // 但同一接觸點、相反的 J 通常仍使兩車自旋方向相反（作用力與反作用力）。J 已含法向+切向合力，
+  // 切向摩擦對自旋的貢獻在這裡自動一併算入，不需要另外疊加。
   const omegaA = clampOmega(raz * JaX - rax * JaZ, Ia, 'a');
   const omegaB = clampOmega(rbz * JbX - rbx * JbZ, Ib, 'b');
 
@@ -124,6 +181,7 @@ export function collisionImpulse({ a, b, contact, normal, restitution }) {
     aAfter: { vx: avx, vz: avz, omega: omegaA },
     bAfter: { vx: bvx, vz: bvz, omega: omegaB },
     j,
+    jt,
   };
 }
 
