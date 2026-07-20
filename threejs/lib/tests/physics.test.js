@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { velocityAtEnd, frictionSlide, applyCollision, spinFromImpulse, headingOf } from '../physics.js';
+import { velocityAtEnd, frictionSlide, applyCollision, collisionImpulse, headingOf } from '../physics.js';
 
 const straight = [[1, 0, 0, null], [10, 0, 9, null]]; // 沿 +Z 前進
 
@@ -37,17 +37,41 @@ test('applyCollision: 動量守恆（總動量誤差 < 1e-6）', () => {
   assert.ok(Number.isFinite(vax));
 });
 
-test('spinFromImpulse: 正面撞（衝量沿前向軸）不產生自旋', () => {
-  // 車朝 +Z（h=0），衝量也沿 Z → 槓桿臂與 J 平行 → τ=0
-  const w = spinFromImpulse([32, 0, 0, null], 0, 0, -500, 1500, 3.8, 0.85);
-  assert.ok(Math.abs(w) < 1e-9);
+test('collisionImpulse: 動量守恆', () => {
+  const a = { x: 0, z: -1, heading: 0, vx: 0, vz: 10, mass_kg: 1500, length_m: 4.69 };
+  const b = { x: 0, z: 1, heading: 0, vx: 0, vz: 0, mass_kg: 200, length_m: 1.85 };
+  const r = collisionImpulse({ a, b, contact: { x: 0, z: 0 }, normal: { nx: 0, nz: 1 }, restitution: 0.15 });
+  const p0 = 1500 * 10 + 200 * 0;
+  const p1 = 1500 * r.aAfter.vz + 200 * r.bAfter.vz;
+  assert.ok(Math.abs(p1 - p0) < 1e-6, `動量應守恆: ${p0} vs ${p1}`);
 });
 
-test('spinFromImpulse: 側向衝量產生自旋且方向正確', () => {
-  // 車朝 +Z（h=0），衝量沿 +X 打在前保桿（接觸點在車前方）→ 車頭被推向 +X
-  // → heading 應往 +X 轉（rotation.y 增加）→ ω > 0
-  const w = spinFromImpulse([32, 0, 0, null], 0, 800, 0, 200, 1.7, /*contactAhead=*/0.85);
-  assert.ok(w > 0, `expected ω>0, got ${w}`);
+test('collisionImpulse: 正撞且接觸點在質心連線上 → 無自旋', () => {
+  const a = { x: 0, z: -1, heading: 0, vx: 0, vz: 10, mass_kg: 1500, length_m: 4.69 };
+  const b = { x: 0, z: 1, heading: 0, vx: 0, vz: 0, mass_kg: 200, length_m: 1.85 };
+  const r = collisionImpulse({ a, b, contact: { x: 0, z: 0 }, normal: { nx: 0, nz: 1 }, restitution: 0.15 });
+  assert.ok(Math.abs(r.aAfter.omega) < 1e-9 && Math.abs(r.bAfter.omega) < 1e-9);
+});
+
+test('collisionImpulse: 偏心正面撞會產生自旋（舊模型恆為 0 的情形）', () => {
+  // 兩車都朝 +Z，接觸點偏 +x 側 0.6 m —— 舊的「力臂只取前向軸投影」在此恆為 0
+  const a = { x: 0, z: -1, heading: 0, vx: 0, vz: 10, mass_kg: 1500, length_m: 4.69 };
+  const b = { x: 0, z: 1, heading: 0, vx: 0, vz: 0, mass_kg: 200, length_m: 1.85 };
+  const r = collisionImpulse({ a, b, contact: { x: 0.6, z: 0 }, normal: { nx: 0, nz: 1 }, restitution: 0.15 });
+  assert.ok(Math.abs(r.bAfter.omega) > 1e-3, `偏心撞應有自旋，實得 ${r.bAfter.omega}`);
+  assert.ok(r.aAfter.omega * r.bAfter.omega < 0, '兩車自旋方向相反（作用力與反作用力）');
+});
+
+test('frictionSlide: omega 與速度同比例衰減，且同時歸零', () => {
+  const wps = frictionSlide({ x0: 0, z0: 0, vx: 0, vz: 10, heading0: 0, omega0: 2,
+                              startFrame: 0, endFrame: 120, mu: 0.7, fps: 30, step: 1 });
+  const headings = wps.map(w => w[3]);
+  const deltas = [];
+  for (let i = 1; i < headings.length; i++) deltas.push(Math.abs(headings[i] - headings[i - 1]));
+  const firstNonZero = deltas.findIndex(d => d > 1e-9);
+  assert.ok(firstNonZero >= 0, '應有轉動');
+  assert.ok(deltas[deltas.length - 1] <= deltas[firstNonZero] + 1e-9, '轉速應遞減');
+  assert.ok(deltas[deltas.length - 1] < 1e-6, '末端應停止轉動');
 });
 
 test('applyCollision: 斜撞後輕車 heading 有累積轉動、且終值凍結', () => {
@@ -60,7 +84,10 @@ test('applyCollision: 斜撞後輕車 heading 有累積轉動、且終值凍結'
   const post = bWps.filter(wp => wp[0] > 32);
   assert.ok(post.every(wp => wp[3] != null), '碰後 heading 欄位需有值');
   const dH = Math.abs(post[post.length - 1][3] - post[0][3]);
-  assert.ok(dH > 0.05, `碰後應有可見轉動，Δh=${dH}`);
+  // 門檻於 Task 4 由 0.05 下修至 0.03：frictionSlide 的 omega 衰減模型改為「與線速度同比例」
+  // 後，此情境碰後極短（~6 個 30fps 子步）就滑停，離散化下總轉動量從舊模型的線性遞減
+  // 變為 Δh≈0.0455（實測值，見 physics.test.js 相關 commit），仍明顯可見、非雜訊量級。
+  assert.ok(dH > 0.03, `碰後應有可見轉動，Δh=${dH}`);
   // 最後兩點 heading 差 < 前兩點 heading 差（自旋衰減）
   const early = Math.abs(post[1][3] - post[0][3]);
   const late = Math.abs(post[post.length - 1][3] - post[post.length - 2][3]);
