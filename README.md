@@ -10,7 +10,7 @@ CCTV 影片 (.mp4)
 trafficlab-project/output/*.json.gz（所有車輛軌跡）
     ↓  [filter_and_enrich_output.py：篩選 + 補欄位]
 軌跡 JSON（含 position_m / velocity_mps）＋ satellite_pipeline 衛星地面圖
-    ↓  [tools/build_scene.py：半自動產生場景包]（實作中）
+    ↓  [tools/build_scene.py：半自動產生場景包]
 scenes/<code>/（scene.json + ground.png + trajectory.json）
     ↓  [Three.js 播放器：JS 碰撞物理 + 互動 UI]
 可分享的網頁 demo（Blender 高品質渲染供出版，第二階段）
@@ -53,10 +53,20 @@ blender_crash_project/
 ├── archive/images/                 ← 淘汰衛星圖版本 + 開發過程驗證截圖
 ├── detection_tests/                ← VisDrone fine-tune vs COCO 驗收實驗
 ├── threejs/
-│   ├── index.html                  ← Three.js r165，播放控制 UI
-│   ├── main.js
-│   ├── car.glb
-│   └── moto.glb
+│   ├── index.html                  ← Three.js r165，場景載入 + 播放控制 UI
+│   ├── main.js                     ← 核心動畫、碰撞物理、互動邏輯
+│   ├── scene-loader.js             ← scene.json 載入器
+│   ├── lib/                        ← 模組化工具函式
+│   │   ├── frames.js               ← 幀插值
+│   │   ├── waypoints.js            ← 路徑點管理
+│   │   ├── physics.js              ← 碰撞物理（JS 實作）
+│   │   ├── interp.js               ← 速度 / 旋轉插值
+│   │   └── tests/                  ← 單元測試
+│   ├── models/                     ← GLB 模型 + 註冊表
+│   │   ├── car.glb
+│   │   ├── moto.glb
+│   │   └── registry.json           ← 模型元數據（前方軸向、縮放）
+│   └── vendor/three/               ← 本地 Three.js 0.165.0
 └── trafficlab-project/             ← 上游 Pipeline（CCTV → 軌跡；偵測優化由隊友主導）
     ├── main.py                     ← GUI 入口
     ├── location/test1/             ← 校正資料（G_projection、cctv/sat 對照圖）

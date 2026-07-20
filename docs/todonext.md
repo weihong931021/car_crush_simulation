@@ -5,14 +5,15 @@
 > 設計文件：`docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md`
 > 方向：偵測交隊友，我們做組件整合——軌跡 JSON + 衛星圖 → 場景包 → 可分享的網頁 demo
 
-- [ ] `scenes/test1/` 場景包（scene.json schema 定案，data/、images/ 遷入）
-- [ ] `tools/build_scene.py` 半自動場景包產生器
-- [ ] Three.js 播放器：讀場景包、移除硬綁常數與 fallback waypoints
-- [ ] 動畫真實度：碰後旋轉（角動量）、碰撞瞬間視覺回饋
-- [ ] 視覺品質：光影、genai HD 地面、相機 preset（頂視／45°／跟車）
-- [ ] 互動 UI：播放速度 0.25x–2x、視角切換
-- [ ] 部署：three.js 本地 vendor、靜態部署、手機可開
-- [ ] MODEL_FLIP per-model 設定（確認 car.glb / moto.glb 前方軸向）
+- [x] `scenes/test1/` 場景包（scene.json schema 定案，data/、images/ 遷入）
+- [x] `tools/build_scene.py` 半自動場景包產生器
+- [x] Three.js 播放器：讀場景包、移除硬綁常數與 fallback waypoints
+- [x] 動畫真實度：碰後旋轉（角動量）、碰撞瞬間視覺回饋
+- [x] 視覺品質：光影、genai HD 地面、相機 preset（頂視／45°／跟車）
+- [x] 互動 UI：播放速度 0.25x–2x、視角切換
+- [x] 部署：three.js 本地 vendor、靜態部署、手機可開
+- [x] MODEL_FLIP per-model 設定（確認 car.glb / moto.glb 前方軸向 → registry.json）
+- [ ] 靜態部署（GitHub Pages）（待 repo 管理者於 Settings → Pages 啟用）
 - [ ] 第二場景驗證（satellite_pipeline 既有地點 + 合成軌跡）
 - 第二階段：Blender 讀 scene.json 自動搭渲染場景（出版用高品質畫面）
 
