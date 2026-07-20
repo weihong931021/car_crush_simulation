@@ -1,7 +1,8 @@
 {
+  "_comment": "flip = 讓模型車頭對齊 pivot +Z 所需的 Y 軸旋轉（弧度）。量法：在 Blender 匯入 GLB，取前後輪中心連線向量 (dx,dy)，轉 three.js 得 (dx,-dy)，車頭角 = atan2(dx,-dy)，flip = -車頭角。勿憑 GLTF 慣例直接填 π。",
   "models": {
-    "car.glb":  { "flip": 3.141592653589793 },
-    "moto.glb": { "flip": 3.141592653589793 }
+    "car.glb":  { "flip": -2.9490, "measured_heading_deg": 169.0, "length_m": 4.77 },
+    "moto.glb": { "flip": -0.9495, "measured_heading_deg": 54.4, "length_m": 1.42 }
   },
   "class_fallback": {
     "Car": "car.glb", "SUV": "car.glb", "Van": "car.glb", "Truck": "car.glb", "Bus": "car.glb",
