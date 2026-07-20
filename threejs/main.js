@@ -52,7 +52,7 @@ let crashRing = null;
 function ensureCrashRing() {
   if (crashRing) return crashRing;
   crashRing = new THREE.Mesh(
-    new THREE.RingGeometry(0.6, 1.0, 32),
+    new THREE.RingGeometry(0.95, 1.12, 48),
     new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, side: THREE.DoubleSide }));
   crashRing.rotation.x = -Math.PI / 2;
   crashRing.visible = false;
@@ -183,8 +183,8 @@ function updateScene(frame) {
       const s0 = getState(colliderStates[0].wps, cf);
       const s1 = getState(colliderStates[1].wps, cf);
       ring.position.set((s0.x + s1.x) / 2, 0.06, (s0.z + s1.z) / 2);
-      ring.scale.setScalar(1 + dt * 0.5);
-      ring.material.opacity = 1 - dt / 8;
+      ring.scale.setScalar(1 + dt * 0.28);
+      ring.material.opacity = 0.75 * (1 - dt / 8);
       ring.visible = true;
     } else {
       ring.visible = false;
