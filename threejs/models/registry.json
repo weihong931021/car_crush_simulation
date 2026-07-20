@@ -1,0 +1,10 @@
+{
+  "models": {
+    "car.glb":  { "flip": 3.141592653589793 },
+    "moto.glb": { "flip": 3.141592653589793 }
+  },
+  "class_fallback": {
+    "Car": "car.glb", "SUV": "car.glb", "Van": "car.glb", "Truck": "car.glb", "Bus": "car.glb",
+    "Two_Wheeler": "moto.glb", "motor": "moto.glb", "motorcycle": "moto.glb"
+  }
+}

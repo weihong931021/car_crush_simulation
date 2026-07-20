@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "code": "test1",
+  "name": "台南 test1 汽車×機車碰撞",
+  "ground": { "image": "ground.png", "px_per_meter": 31.10, "size_m": [48.71, 33.36] },
+  "origin_offset_m": [24.355, 16.68],
+  "frames": { "source_start": 17, "source_collision": 442, "source_end": 885,
+              "anim_start": 1, "anim_collision": 32, "anim_end": 89, "fps": 30 },
+  "vehicles": [
+    { "track_id": 7, "class": "Car", "label": "汽車", "model": "car.glb", "mass_kg": 1500,
+      "length_m": 3.8, "role": "collider", "default_speed_kmh": 20, "pre_samples": 15 },
+    { "track_id": 373, "class": "Two_Wheeler", "label": "機車", "model": "moto.glb", "mass_kg": 200,
+      "length_m": 1.7, "role": "collider", "default_speed_kmh": 40, "pre_samples": 4 }
+  ],
+  "extras": "auto",
+  "collision": { "restitution": 0.15, "friction": 0.7 },
+  "camera": { "default": "persp45" }
+}
