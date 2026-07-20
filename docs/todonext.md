@@ -1,5 +1,21 @@
 # 下一步
 
+## 主線：場景包驅動的 Three.js Demo（2026-07-20 起）
+
+> 設計文件：`docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md`
+> 方向：偵測交隊友，我們做組件整合——軌跡 JSON + 衛星圖 → 場景包 → 可分享的網頁 demo
+
+- [ ] `scenes/test1/` 場景包（scene.json schema 定案，data/、images/ 遷入）
+- [ ] `tools/build_scene.py` 半自動場景包產生器
+- [ ] Three.js 播放器：讀場景包、移除硬綁常數與 fallback waypoints
+- [ ] 動畫真實度：碰後旋轉（角動量）、碰撞瞬間視覺回饋
+- [ ] 視覺品質：光影、genai HD 地面、相機 preset（頂視／45°／跟車）
+- [ ] 互動 UI：播放速度 0.25x–2x、視角切換
+- [ ] 部署：three.js 本地 vendor、靜態部署、手機可開
+- [ ] MODEL_FLIP per-model 設定（確認 car.glb / moto.glb 前方軸向）
+- [ ] 第二場景驗證（satellite_pipeline 既有地點 + 合成軌跡）
+- 第二階段：Blender 讀 scene.json 自動搭渲染場景（出版用高品質畫面）
+
 ## Track A：衛星圖自動化 pipeline（→ `satellite_pipeline/` 模組，✅ 已完成）
 
 ### 已完成（2025-06）
@@ -27,20 +43,19 @@
 - 註：舊版 `trafficlab-project/scripts/{map_capture,image_enhance,blender_ground,
   pipeline_mapground}.py`（Esri 版）已被 `satellite_pipeline/` 取代
 
-## Track B：TrafficLab 偵測優化
+## Track B：TrafficLab 偵測優化（❄️ 凍結，隊友主導）
 
-- [ ] VisDrone 訓練完成後（目前 21/50 epochs，mAP50=0.386）→ 複製 `best.pt` → 跑 viz 比較
-- [ ] 實作 Kalman filter + bbox filter（設計文件：`docs/superpowers/specs/2026-05-25-trajectory-stabilization-design.md`）
-- [ ] 測試 VisDrone 對機車、行人的偵測效果（比對 COCO baseline）
-- [ ] 評估輪胎辨識可行性（wheel pair angle → 改善機車 heading 計算）
-- [ ] 啟用並測試 `MotorcycleLateralCorrector` + `MotorcycleMotionFilter`（程式完成，未開啟）
+- [x] VisDrone 訓練完成（Colab 50 epochs，mAP50=0.400）→ 模型已放 `trafficlab-project/models/yolo11l-visdrone-ft.pt`
+- [x] 測試 VisDrone 對機車偵測效果：二輪 ×21、汽車信心 +0.03，驗收見 `detection_tests/`
+- 以下轉隊友，不在本 repo 追蹤：Kalman filter、輪胎辨識、Motorcycle 濾波器啟用、
+  inference_config.yaml weights 更新（現指向不存在的舊檔，跑推論前需改指新模型）
 
-## Track C：Blender 碰撞動畫
+## Track C：Blender 碰撞動畫（→ 退居出版渲染，第二階段）
 
+- [ ] 第二階段：Blender 讀 `scene.json` 自動搭渲染場景（地面 + 車輛 + 軌跡動畫）
 - [ ] 寫 `blender-collision-physics` skill（固定碰撞物理公式 + Blender 5.x API 細節，避免每次重推）
 - [ ] 測試斜角碰撞（T-bone、追尾偏轉）：用自然語言描述碰撞角度，驗證力分量計算是否正確
-- [ ] 測試 Track A 軌跡輸入格式 `[(frame, x, y, heading_deg)]` 注入 Blender 場景
-- [ ] 確認 car.glb / moto.glb 各自的前方軸向，修正 MODEL_FLIP 分開設定
+- 註：MODEL_FLIP 待辦已併入主線；`archive/blender_scripts/` 為淘汰腳本（rigid body 版 setup_crash 等）
 
 ## 之後
 

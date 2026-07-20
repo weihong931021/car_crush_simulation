@@ -4,25 +4,19 @@
 
 ---
 
-## 當前工作方向
+## 當前工作方向（2026-07-20 起）
 
-**Blender 優先，Three.js 是最終輸出。**
+**組件整合優先，Three.js 是最終呈現。** 偵測／軌跡品質由隊友主導，不做 inference 優化。
+完整設計見 `docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md`。
 
-1. Blender：用 `filtered_output.json` 軌跡 + 物理公式做完整碰撞動畫（位置、方向、碰後路徑）
-2. 物理公式決定碰後行為（動量守恆、角動量），不靠 Blender rigid body（太難控制）
-3. 完成後匯出 GLB → Three.js 只做播放速度調整和 UI
+1. **場景包**：每個事故場景一個 `scenes/<code>/`（scene.json + ground.png + trajectory.json），
+   `main.js` 的硬綁常數（OFFSET、track ID、圖路徑）全數遷入
+2. **`tools/build_scene.py`**：軌跡 JSON + satellite_pipeline 輸出 → 半自動產生場景包
+3. **Three.js 播放器**：物理留在 JS（保住互動調車速）、加碰後旋轉、光影、相機 preset、
+   播放速度、本地 vendor + 靜態部署
+4. **Blender 退居出版渲染**（第二階段：讀同一份 scene.json 自動搭渲染場景）
 
-### Blender 物理動畫流程
-
-```text
-filtered_output.json 軌跡（frame 1–32）
-    ↓  碰撞前：直接從 position_m 轉換成 keyframe
-frame 32：用動量公式算碰後初速和旋轉角
-    ↓  碰撞後：等減速（摩擦力）+ 旋轉關鍵幀
-frame 32–89：碰後滑行路徑
-```
-
-**碰撞物理公式**（每次用到直接查這裡）：
+### 碰撞物理公式（JS 內實作，每次用到直接查這裡）
 
 ```python
 # 動量守恆（斜角碰撞）
@@ -81,46 +75,72 @@ v2_after = (m1 * v1 + m2 * v2 + m1 * e * (v1 - v2)) / (m1 + m2)
 ## TrafficLab 必記的坑
 
 - **Apple Silicon MPS + half precision**：推論失敗先確認 `inference_config.yaml` 的 `half: false`
-- **conda run 在沙盒環境失敗**：改用 `source activate trafficlab && python ...`
+- **Python 環境**：`trafficlab` conda env 不存在，改用 `/Users/weihong/Documents/littering_prediction/venv/bin/python`（有 ultralytics, supervision, opencv）
+- **MPS 訓練 bug**：Python 3.14 + PyTorch + MPS 在 tal.py loss 計算會 shape mismatch crash，訓練必須用 `device="cpu"` 或 Colab GPU
 - **G-projection 路徑**：推論讀 `location/<code>/G_projection_<code>.json` 或 `G_projection_svg_<code>.json`
+- **supervision 0.28.0**：`InferenceSlicer` 用 `overlap_wh=100`（不是 `overlap_ratio_wh`）；`ByteTrack` deprecated 但還能用
+
+---
+
+## TrafficLab 偵測優化進度（trafficlab-project/）
+
+> **2026-07-20 起凍結**：偵測／軌跡優化由隊友主導（他們的結果更好），本 repo 不再投入。
+> 以下保留為記錄與參考。
+
+### 已實作
+
+- **bbox quality filter**（`pipeline.py:_is_valid_detection`）：`min_conf=0.45`、`min_area_px=400`、`aspect_ratio 0.4–4.0`，在 `inference_config.yaml` `detection_filter` 段落控制
+- **視覺化腳本**：
+  - `scripts/viz_detection_filter.py` — 顯示哪些框被過濾
+  - `scripts/viz_slicer_compare.py` — InferenceSlicer vs 全圖推論對比
+  - `scripts/viz_rife_compare.py` — 原始 25fps vs RIFE 4x 對比
+
+### VisDrone Fine-tune ✅ 完成且驗收通過
+
+- **Colab notebook**：`scripts/colab_train_visdrone.ipynb`，T4 GPU
+- **結果**（2026-06-06，50 epochs）：mAP50=0.400，mAP50-95=0.228，val loss 在 epoch 25–30 平台
+- **模型位置**：`trafficlab-project/models/yolo11l-visdrone-ft.pt`（勿與 `models/training/` 內
+  epoch 21 的本地未完成訓練混淆）
+- **驗收**（2026-06-06，`detection_tests/`）：二輪偵測 10→214（×21）、汽車信心 0.761→0.790、
+  COCO 的 337 個紅綠燈誤報消失。比較影片與對比圖在 `detection_tests/outputs/`
+- 註：`inference_config.yaml` 各 config 的 weights 仍指向不存在的舊模型檔，若隊友要在本機跑
+  推論需先改指 `./models/yolo11l-visdrone-ft.pt`
+
+### 測試結果摘要
+
+| 方法 | 效果 | 結論 |
+| --- | --- | --- |
+| conf 門檻調整 | -24% 框（多為噪音） | 已加入 config |
+| InferenceSlicer（640px patch） | +15% 軌跡數 | 可選，腳本已備 |
+| RIFE 4x 補幀 | +8% 但偵測品質**下降** | **不用**，AI 生成幀干擾 YOLO |
+| VisDrone fine-tune | 二輪 ×21、汽車信心 +0.03 | ✅ 驗收通過，見 `detection_tests/` |
+
+### 已寫好但未啟用的功能
+
+- `MotorcycleLateralCorrector`（`lateral_correction.enabled: false`）
+- `MotorcycleMotionFilter`（`motorcycle_filter.enabled: false`）
 
 ---
 
 ## TrafficLab-3D 2D→3D 優化方向（/Documents/TrafficLab-3D）
 
-> 問題根源：YOLO bbox 噪音 + 幾幀沒偵測到 → 軌跡抖動、heading 亂跳
+> **同樣凍結**（隊友主導）。問題根源：YOLO bbox 噪音 + 幾幀沒偵測到 → 軌跡抖動、heading 亂跳
 
-### 補幀前處理（機車偵測用）
+### 偵測改進
 
-**選定工具：`rife-ncnn-vulkan`**（不用 Python，Metal/Vulkan，macOS binary）
+- `yolo11l.pt`（COCO）對轎車偵測良好（conf ≈ 0.90），機車容易漏
+- `yolo11l-obb.pt`（DOTA）**不適用**：鏡頭斜角透視，機車被誤判為 ship
+- **RIFE 補幀不適用於偵測改進**：AI 生成幀讓 YOLO 品質下降，已測試確認
 
-```bash
-# 一次性下載（416MB）
-curl -L -o rife.zip https://github.com/nihui/rife-ncnn-vulkan/releases/download/20221029/rife-ncnn-vulkan-20221029-macos.zip
-unzip rife.zip -d ~/tools/rife
-
-# 4x 補幀（25fps → 100fps），讓快速機車不模糊
-~/tools/rife/rife-ncnn-vulkan -i input.mp4 -o output_4x.mp4 -m rife-v4.6 -n 4
-```
-
-不用 Practical-RIFE（需 PyTorch，與現有 conda env 衝突風險）。
-不用 FFmpeg minterpolate（非 AI，快速物體補幀品質差）。
-
-### 偵測改進（已測試 test1.mp4）
-
-- `yolo11l.pt`（COCO）對轎車偵測良好（conf ≈ 0.90），機車在 100fps 影片中 frame 333–560 有 112 幀偵測到
-- `yolo11l-obb.pt`（DOTA）**不適用**此場景：鏡頭是斜角透視（非正射俯視），機車被誤判為 ship
-- 偵測品質 filter 建議：`min_conf=0.45`、`min_area_px=400`、`aspect_ratio 0.4–4.0`
-
-### 軌跡穩定（Kalman Filter）
+### 軌跡穩定（Kalman Filter，尚未實作）
 
 設計文件：`TrafficLab-3D/docs/superpowers/specs/2026-05-25-trajectory-stabilization-design.md`
 
-改動三個檔案：
+需改動三個檔案：
 
-1. `trafficlab/inference/pipeline.py` — 加 bbox quality filter + missing-frame predict loop
+1. `trafficlab/inference/pipeline.py` — 加 missing-frame predict loop
 2. `trafficlab/motion/kinematics.py` — 加 2D Kalman Filter（state: x, y, vx, vy）+ innovation gate
-3. `inference_config.yaml` — 加 `detection_filter` 和 `kalman_*` 參數
+3. `inference_config.yaml` — 加 `kalman_*` 參數
 
 Kalman 關鍵參數：`kalman_process_noise=0.1`、`kalman_measure_noise=2.0`、`kalman_gate_threshold=3.5`
 
@@ -128,9 +148,14 @@ Kalman 關鍵參數：`kalman_process_noise=0.1`、`kalman_measure_noise=2.0`、
 
 ## 待辦（詳見 docs/todonext.md）
 
-- [ ] 確認 car.glb / moto.glb 各自的前方軸向，修正 MODEL_FLIP 分開設定
-- [ ] 寫 `blender-collision-physics` skill
-- [ ] 測試斜角碰撞（T-bone、追尾偏轉）
-- [ ] 接 Track A 軌跡格式 `[(frame, x, y, heading_deg)]` 注入 Blender 場景
-- [ ] TrafficLab-3D：實作 Kalman + bbox filter（見設計文件）
-- [ ] TrafficLab-3D：整合 rife-ncnn-vulkan 補幀到推論前處理
+主線＝場景包 demo（spec：`docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md`）：
+
+- [ ] `scenes/test1/` 場景包 + scene.json schema 定案
+- [ ] `tools/build_scene.py` 半自動場景包產生器
+- [ ] Three.js 播放器改造：讀場景包、碰後旋轉、光影、相機 preset、播放速度、本地 vendor
+- [ ] 確認 car.glb / moto.glb 各自的前方軸向，MODEL_FLIP 改 per-model 設定
+- [ ] 靜態部署（丟連結就能看，含手機）
+- [ ] 第二場景驗證（satellite_pipeline 既有地點 + 合成軌跡）
+
+第二階段：Blender 讀 scene.json 自動搭渲染場景（出版用）。
+凍結（隊友主導）：TrafficLab inference config、Kalman、Motorcycle 濾波器。
