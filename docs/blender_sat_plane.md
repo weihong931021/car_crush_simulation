@@ -48,7 +48,7 @@ bpy.ops.object.transform_apply(scale=True)
 import bpy
 
 plane = bpy.data.objects['SatPlane']
-img_path = '/Users/weihong/Documents/blender_crash_project/images/image.png'
+img_path = '/Users/weihong/Documents/blender_crash_project/scenes/test1/ground.png'
 
 mat = bpy.data.materials.new(name="SatMat")
 mat.use_nodes = True

@@ -9,12 +9,12 @@ world_y = -(sat_y / 34.41 - 16.68)
 ```
 
 ```js
-// filtered_output.json pos_m → Three.js
+// scenes/test1/trajectory.json pos_m → Three.js
 three_x = pos_m[0] - 24.35
 three_z = pos_m[1] - 16.68   // 不取負號，south = +Z
 ```
 
-衛星圖：`images/image.png`，1515×1038 px，px_per_meter=31.10（銳化版）
+衛星圖：`scenes/test1/ground.png`，1515×1038 px，px_per_meter=31.10（銳化版）
 test1 G-projection：px_per_meter=34.41
 
 ## 動畫時間軸
@@ -49,10 +49,10 @@ conda activate trafficlab
 PYTORCH_ENABLE_MPS_FALLBACK=1 python scripts/run_inference.py \
   --config-name car_heading_smooth --location test1
 
-# 篩選 + 補欄位 → 輸出到 data/
+# 篩選 + 補欄位 → 輸出到 scenes/test1/
 python scripts/filter_and_enrich_output.py \
   output/model-*/car_heading_smooth/test1/*.json.gz \
-  ../data/filtered_output.json \
+  ../scenes/test1/trajectory.json \
   --ids 7 373 \
   --g-projection location/test1/G_projection_test1.json \
   --prior-dimensions prior_dimensions.json

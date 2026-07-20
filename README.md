@@ -24,6 +24,7 @@ scenes/<code>/（scene.json + ground.png + trajectory.json）
 blender_crash_project/
 ├── CLAUDE.md                       ← Claude 行為指令
 ├── README.md
+├── index.html                      ← 根目錄轉址至 threejs/index.html
 ├── docs/
 │   ├── specs/                      ← 設計文件（含當前方向 spec）
 │   ├── papers/                     ← 外部參考文獻 PDF
@@ -35,12 +36,8 @@ blender_crash_project/
 │   ├── filter_and_enrich_output.md ← filter_and_enrich_output.py 使用說明
 │   ├── video-processing-commands.md ← yt-dlp / ffmpeg / RIFE 指令速查
 │   └── *.pdf
-├── scenes/                         ← [實作中] 場景包（scene.json + ground + trajectory）
-├── tools/                          ← [實作中] build_scene.py 場景包產生器
-├── data/                           ← [過渡] test1 軌跡，將遷入 scenes/test1/
-│   ├── filtered_output.json        ← 已篩選 + 補欄位的軌跡資料（含 sat_center）
-│   └── road_features.json
-├── images/                         ← [過渡] test1 衛星圖與驗證截圖
+├── scenes/                         ← 場景包（scene.json + ground.png + trajectory.json）
+├── tools/                          ← build_scene.py 場景包產生器
 ├── satellite_pipeline/            ← 衛星底圖自動化（lat/lon → 去車 → 貼 Blender）
 │   ├── pipeline.py                ← 一鍵流程
 │   ├── map_capture.py             ← Google Static API 擷取
@@ -53,6 +50,7 @@ blender_crash_project/
 │   ├── import_vehicle.py
 │   └── snap_to_ground.py
 ├── archive/blender_scripts/        ← 淘汰腳本（import_tesla、setup_crash rigid body 版）
+├── archive/images/                 ← 淘汰衛星圖版本 + 開發過程驗證截圖
 ├── detection_tests/                ← VisDrone fine-tune vs COCO 驗收實驗
 ├── threejs/
 │   ├── index.html                  ← Three.js r165，播放控制 UI
