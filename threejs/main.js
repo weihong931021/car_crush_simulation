@@ -16,6 +16,7 @@ let currentFrame = 1;
 let isPlaying = false;
 let accumulator = 0;
 let lastTS = 0;
+let playbackSpeed = 1;
 
 // ── Renderer / Scene / Camera ────────────────────────────────────────────────
 const container = document.getElementById('canvas-container');
@@ -45,6 +46,19 @@ sun.position.set(20, 35, 12);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 scene.add(sun);
+
+// ── 碰撞瞬間標記 ─────────────────────────────────────────────────────────────
+let crashRing = null;
+function ensureCrashRing() {
+  if (crashRing) return crashRing;
+  crashRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.6, 1.0, 32),
+    new THREE.MeshBasicMaterial({ color: 0xff3333, transparent: true, side: THREE.DoubleSide }));
+  crashRing.rotation.x = -Math.PI / 2;
+  crashRing.visible = false;
+  scene.add(crashRing);
+  return crashRing;
+}
 
 // ── 錯誤 overlay（scene 包壞掉時唯一的出口）─────────────────────────────────
 function showError(msg) {
@@ -160,6 +174,22 @@ function updateScene(frame) {
   }
   if (frameDisplay) frameDisplay.textContent = `${frame}`;
   if (slider) slider.value = `${frame}`;
+
+  const cf = CFG?.frames.anim_collision;
+  if (cf != null && colliderStates[0]?.wps) {
+    const ring = ensureCrashRing();
+    const dt = frame - cf;
+    if (dt >= 0 && dt <= 8) {
+      const s0 = getState(colliderStates[0].wps, cf);
+      const s1 = getState(colliderStates[1].wps, cf);
+      ring.position.set((s0.x + s1.x) / 2, 0.06, (s0.z + s1.z) / 2);
+      ring.scale.setScalar(1 + dt * 0.5);
+      ring.material.opacity = 1 - dt / 8;
+      ring.visible = true;
+    } else {
+      ring.visible = false;
+    }
+  }
 }
 
 // ── UI ───────────────────────────────────────────────────────────────────────
@@ -202,6 +232,9 @@ if (perspBtn) perspBtn.addEventListener('click', setPersp45View);
 if (chaseBtn) chaseBtn.addEventListener('click', () => { chaseMode = true; });
 if (slider) slider.addEventListener('input', () => { isPlaying = false; setPlayLabel(); gotoFrame(Number(slider.value)); });
 
+const speedSelect = document.getElementById('playback-speed');
+if (speedSelect) speedSelect.addEventListener('change', () => { playbackSpeed = Number(speedSelect.value); });
+
 function bindSpeedSlider(idx) {
   const input = document.getElementById(`collider${idx}-speed`);
   const label = document.getElementById(`collider${idx}-speed-label`);
@@ -241,7 +274,7 @@ function animate(ts) {
   const delta = Math.min((ts - lastTS) / 1000, 0.2);
   lastTS = ts;
   if (isPlaying && CFG) {
-    accumulator += delta;
+    accumulator += delta * playbackSpeed;
     while (accumulator >= FRAME_DURATION) {
       accumulator -= FRAME_DURATION;
       currentFrame++;

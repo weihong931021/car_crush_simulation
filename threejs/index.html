@@ -17,7 +17,10 @@
       transform: translateX(-50%);
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
+      justify-content: center;
       gap: 12px;
+      max-width: min(96vw, 900px);
       background: rgba(0,0,0,0.6);
       padding: 8px 16px;
       border-radius: 8px;
@@ -31,10 +34,19 @@
       border-radius: 4px;
       cursor: pointer;
       font-size: 14px;
+      white-space: nowrap;
     }
     #controls button:hover { background: #666; }
     #frame-display { font-size: 14px; min-width: 80px; text-align: center; }
     #frame-slider { width: 240px; accent-color: #88aaff; }
+    #playback-speed {
+      background: #444;
+      color: #eee;
+      border: none;
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-size: 14px;
+    }
 
     #legend {
       position: fixed;
@@ -89,6 +101,14 @@
       color: #88aaff;
       font-weight: bold;
     }
+
+    @media (max-width: 640px) {
+      #speed-panel { top: auto; bottom: 150px; left: 8px; right: 8px; min-width: 0; }
+      #legend { top: 8px; right: 8px; font-size: 11px; padding: 6px 8px; }
+      #controls { bottom: 8px; left: 8px; right: 8px; transform: none;
+                  flex-wrap: wrap; justify-content: center; gap: 8px; }
+      #frame-slider { width: 100%; order: 9; }
+    }
   </style>
 </head>
 <body>
@@ -100,6 +120,12 @@
     <button id="btn-topdown">⊙ 頂視圖</button>
     <button id="btn-persp">◇ 45°</button>
     <button id="btn-chase">🚗 跟車</button>
+    <select id="playback-speed">
+      <option value="0.25">0.25×</option>
+      <option value="0.5">0.5×</option>
+      <option value="1" selected>1×</option>
+      <option value="2">2×</option>
+    </select>
     <input id="frame-slider" type="range" min="1" max="89" value="1" step="1" />
     <span id="frame-display">Frame 1</span>
   </div>
