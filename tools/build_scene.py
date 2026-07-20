@@ -12,6 +12,7 @@
 import argparse
 import json
 import shutil
+import struct
 import sys
 from pathlib import Path
 
@@ -32,6 +33,16 @@ CLASS_DEFAULTS = {
 
 class SceneBuildError(Exception):
     pass
+
+
+def png_size(path):
+    """讀 PNG 寬高（IHDR 位於簽名後第一個 chunk）。"""
+    with open(path, "rb") as f:
+        header = f.read(24)
+    if header[:8] != b"\x89PNG\r\n\x1a\n":
+        raise SceneBuildError(f"{path} 不是 PNG")
+    w, h = struct.unpack(">II", header[16:24])
+    return w, h
 
 
 def list_tracks(trajectory):
@@ -111,7 +122,11 @@ def pick_sat(sat_dir):
     meta = json.loads((sat_dir / "meta.json").read_text())
     for variant in SAT_VARIANTS:
         if (sat_dir / variant).exists():
-            return sat_dir / variant, meta
+            img_path = sat_dir / variant
+            # 根據實際 PNG 寬度重新計算 px_per_meter，以補償 variant 與原始解析度的差異
+            png_width, _ = png_size(img_path)
+            px_per_meter = png_width / meta["size_m"]
+            return img_path, meta, px_per_meter
     raise SceneBuildError(f"{sat_dir} 內找不到 {SAT_VARIANTS}")
 
 
@@ -144,11 +159,11 @@ def main(argv=None):
                   f"frames {t['frames_present']:>4}  [{t['first']}–{t['last']}]")
         return 0
 
-    if not (args.code and args.collider and args.source_collision is not None):
+    if not (args.code and len(args.collider) >= 2 and args.source_collision is not None):
         ap.error("產生模式需要 --code、至少兩個 --collider、--source-collision")
     if args.sat_dir:
-        src_img, meta = pick_sat(args.sat_dir)
-        px, size = meta["px_per_meter"], [meta["size_m"], meta["size_m"]]
+        src_img, meta, px = pick_sat(args.sat_dir)
+        size = [meta["size_m"], meta["size_m"]]
     elif args.ground_image and args.px_per_meter and args.size_m:
         src_img, px, size = Path(args.ground_image), args.px_per_meter, args.size_m
     else:

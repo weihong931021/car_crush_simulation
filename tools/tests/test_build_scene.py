@@ -1,4 +1,4 @@
-import json, tempfile, unittest
+import json, tempfile, unittest, struct
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -65,6 +65,48 @@ class BuildSceneTest(unittest.TestCase):
                 trajectory=json.loads(self.traj.read_text()), code="synth",
                 ground_image="ground.png", px_per_meter=30.0, size_m=[25.0, 25.0],
                 colliders=[(99, "Car"), (2, "Two_Wheeler")], source_collision=40)
+
+    def test_png_size(self):
+        """讀 PNG 寬高：正確解析 IHDR、非 PNG 應拋例外。"""
+        # 建最小合法 PNG：簽名(8) + IHDR chunk(13 data + 12 header/CRC)
+        png_path = self.tmp / "test.png"
+        png_signature = b"\x89PNG\r\n\x1a\n"
+        ihdr_data = struct.pack(">II", 1024, 768) + b"\x08\x02\x00\x00\x00"
+        ihdr_chunk_len = struct.pack(">I", 13)
+        crc = b"\x00\x00\x00\x00"  # 隨意 CRC（測試只驗 header）
+        png_bytes = png_signature + ihdr_chunk_len + b"IHDR" + ihdr_data + crc
+        png_path.write_bytes(png_bytes)
+
+        w, h = build_scene.png_size(png_path)
+        self.assertEqual((w, h), (1024, 768))
+
+        # 非 PNG 應拋 SceneBuildError
+        not_png = self.tmp / "not.png"
+        not_png.write_bytes(b"fake data")
+        with self.assertRaises(build_scene.SceneBuildError):
+            build_scene.png_size(not_png)
+
+    def test_pick_sat_recomputes_px(self):
+        """pick_sat 應根據實際 PNG 寬度重新計算 px_per_meter。"""
+        sat_dir = self.tmp / "sat_output"
+        sat_dir.mkdir()
+
+        # meta.json：原始解析度描述
+        meta = {"px_per_meter": 29.113, "size_m": 25.0}
+        (sat_dir / "meta.json").write_text(json.dumps(meta))
+
+        # sat_genai.png：1000×1000（與 meta 的原始 px_per_meter 不匹配）
+        png_signature = b"\x89PNG\r\n\x1a\n"
+        ihdr_data = struct.pack(">II", 1000, 1000) + b"\x08\x02\x00\x00\x00"
+        ihdr_chunk_len = struct.pack(">I", 13)
+        crc = b"\x00\x00\x00\x00"
+        png_bytes = png_signature + ihdr_chunk_len + b"IHDR" + ihdr_data + crc
+        (sat_dir / "sat_genai.png").write_bytes(png_bytes)
+
+        img_path, returned_meta, px_per_meter = build_scene.pick_sat(sat_dir)
+        # 應基於 PNG 寬度重算：1000 / 25.0 == 40.0
+        self.assertAlmostEqual(px_per_meter, 40.0, places=5)
+        self.assertEqual(str(img_path), str(sat_dir / "sat_genai.png"))
 
 
 if __name__ == "__main__":
