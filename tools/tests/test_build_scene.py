@@ -1,0 +1,71 @@
+import json, tempfile, unittest
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import build_scene
+
+
+def synth_trajectory(path):
+    frames = []
+    for i in range(1, 61):
+        objs = [{"tracked_id": 1, "class": "Car", "position_m": [10.0, i * 0.4]}]
+        if i >= 20:
+            objs.append({"tracked_id": 2, "class": "Two_Wheeler", "position_m": [i * 0.3, 12.0]})
+        if i >= 5:
+            objs.append({"tracked_id": 9, "class": "Car", "position_m": [20.0, i * 0.2]})
+        frames.append({"frame_index": i, "objects": objs})
+    data = {"meta": {"px_per_meter": 30.0}, "frames": frames}
+    path.write_text(json.dumps(data))
+    return data
+
+
+class BuildSceneTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.traj = self.tmp / "traj.json"
+        synth_trajectory(self.traj)
+
+    def test_list_tracks(self):
+        tracks = build_scene.list_tracks(json.loads(self.traj.read_text()))
+        self.assertEqual({t["track_id"] for t in tracks}, {1, 2, 9})
+        t1 = next(t for t in tracks if t["track_id"] == 1)
+        self.assertEqual(t1["cls"], "Car")
+        self.assertEqual(t1["frames_present"], 60)
+
+    def test_build_scene_dict(self):
+        cfg = build_scene.build(
+            trajectory=json.loads(self.traj.read_text()), code="synth",
+            ground_image="ground.png", px_per_meter=30.0, size_m=[25.0, 25.0],
+            colliders=[(1, "Car"), (2, "Two_Wheeler")],
+            source_collision=40, anim=(1, 32, 89), name=None)
+        self.assertEqual(cfg["schema_version"], 1)
+        self.assertEqual(cfg["origin_offset_m"], [12.5, 12.5])
+        f = cfg["frames"]
+        self.assertEqual((f["source_start"], f["source_collision"], f["source_end"]), (1, 40, 60))
+        self.assertEqual((f["anim_start"], f["anim_collision"], f["anim_end"]), (1, 32, 89))
+        car = cfg["vehicles"][0]
+        self.assertEqual((car["track_id"], car["model"], car["mass_kg"]), (1, "car.glb", 1500))
+        self.assertEqual(cfg["vehicles"][1]["mass_kg"], 200)
+
+    def test_validate_catches_missing(self):
+        cfg = build_scene.build(
+            trajectory=json.loads(self.traj.read_text()), code="synth",
+            ground_image="ground.png", px_per_meter=30.0, size_m=[25.0, 25.0],
+            colliders=[(1, "Car"), (2, "Two_Wheeler")], source_collision=40)
+        self.assertEqual(build_scene.validate_scene(cfg), [])
+        del cfg["ground"]
+        cfg["vehicles"][0]["role"] = "extra"
+        errs = build_scene.validate_scene(cfg)
+        self.assertTrue(any("ground" in e for e in errs))
+        self.assertTrue(any("collider" in e for e in errs))
+
+    def test_unknown_collider_id_raises(self):
+        with self.assertRaises(build_scene.SceneBuildError):
+            build_scene.build(
+                trajectory=json.loads(self.traj.read_text()), code="synth",
+                ground_image="ground.png", px_per_meter=30.0, size_m=[25.0, 25.0],
+                colliders=[(99, "Car"), (2, "Two_Wheeler")], source_collision=40)
+
+
+if __name__ == "__main__":
+    unittest.main()
