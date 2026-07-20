@@ -94,19 +94,15 @@ function loadModel(file) {
   return modelCache.get(file).then(base => base.clone(true));
 }
 
-// class → [length_m, width_m] 預設值（與 tools/build_scene.py 的 CLASS_DEFAULTS 對齊），
-// 用於 extras（無 scene.json vehicle 記錄）與 boxFallback 未帶明確尺寸時的保底。
-const CLASS_DIM_DEFAULTS = {
-  Car: [4.69, 1.85], SUV: [4.60, 1.90], Van: [4.80, 2.00],
-  Truck: [7.00, 2.50], Bus: [11.00, 2.55], Two_Wheeler: [1.85, 0.70],
-};
-function defaultDims(cls) {
-  return CLASS_DIM_DEFAULTS[cls] ?? (/wheel|motor/i.test(cls) ? [1.85, 0.70] : [4.69, 1.85]);
-}
-
 // 排除 Collider 命名 mesh 與零厚度平面（如 moto.glb 的地面參考片 Object_4），
 // 量測「車體」本身的世界座標 bbox；沒有殘留該類 mesh 就退回整個物件的 bbox。
+//
+// 呼叫前必須 updateMatrixWorld(true)：Box3.setFromObject()/expandByObject() 內部用
+// child.updateWorldMatrix(false, false)（updateParents=false），只會沿用「快取」的
+// parent matrixWorld。wrapModel 在呼叫這裡之前剛設過 gltfScene.scale，若不強制刷新，
+// 量到的還是縮放前的舊 matrixWorld——回傳的 box 完全沒反映新 scale。
 function measureBodyBox(gltfScene) {
+  gltfScene.updateMatrixWorld(true);
   const box = new THREE.Box3();
   const tmp = new THREE.Box3();
   const size = new THREE.Vector3();
@@ -177,7 +173,15 @@ function wrapModel(gltfScene, flip, targetLengthM) {
   // 沿車頭方向（角度 = -flip）對車體 8 角點做精確投影量測，換算成等比縮放係數
   // （scale-to-length）。順序是關鍵——縮放/旋轉/位移一旦套用，corners 就不再是
   // gltfScene-local 座標，量測會錯。
-  if (targetLengthM) {
+  //
+  // targetLengthM 只允許「未提供」（== null，僅 extras 這種沒有已驗證尺寸的呼叫方
+  // 會這樣做，代表刻意不縮放、用 GLB 原始比例）或「正的有限數字」（colliders 一律
+  // 走這條路，scene-loader 已在載入時驗證過）。0/NaN/負數視為程式錯誤直接 throw，
+  // 不要像過去那樣被 `if (targetLengthM)` 悄悄吃掉、用未縮放的原始尺寸渲染出去。
+  if (targetLengthM != null) {
+    if (!Number.isFinite(targetLengthM) || targetLengthM <= 0) {
+      throw new Error(`wrapModel: targetLengthM 必須是正的有限數字，收到 ${targetLengthM}`);
+    }
     const noseAngle = -flip;
     const noseX = Math.sin(noseAngle), noseZ = Math.cos(noseAngle);
     const modelLen = measureBodyExtentAlongAxis(gltfScene, noseX, noseZ);
@@ -208,11 +212,16 @@ function wrapModel(gltfScene, flip, targetLengthM) {
   return pivot;
 }
 
+// extras（無 scene.json vehicle 記錄、沒有經驗證的 length_m/width_m）與模型載入失敗
+// 時唯一的保底尺寸來源。刻意只分「二輪」與「其餘」兩種概略值，不是證據等級的資料，
+// 純粹讓色塊方塊有個合理大小可畫——不要重建一份完整車種對照表（那份表已隨 Fix 3
+// 刪除，尺寸真相只有 scene.json 的 length_m/width_m 一份，見 scene-loader.js 驗證）。
 function boxFallback(cls, lengthM, widthM) {
-  const [defLen, defWidth] = defaultDims(cls);
+  const isTwoWheeler = /wheel|motor/i.test(cls);
+  const [defLen, defWidth] = isTwoWheeler ? [1.85, 0.70] : [4.69, 1.85];
   const length = lengthM ?? defLen;
   const width = widthM ?? defWidth;
-  const height = /wheel|motor/i.test(cls) ? 1.2 : 1.4;
+  const height = isTwoWheeler ? 1.2 : 1.4;
   const geo = new THREE.BoxGeometry(width, height, length);
   const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x999999 }));
   mesh.position.y = geo.parameters.height / 2;
@@ -490,17 +499,18 @@ async function boot() {
       const st = { ...ex, pivot: null };
       extraStates.push(st);
       const m = modelFor(ex.cls, registry);
-      const [exLength, exWidth] = defaultDims(ex.cls);
       if (!m) {
         console.warn(`車輛 track_id=${ex.track_id} class=${ex.cls} 無對應模型，改用色塊`);
-        st.pivot = boxFallback(ex.cls, exLength, exWidth);
+        st.pivot = boxFallback(ex.cls);
         return;
       }
       try {
-        st.pivot = wrapModel(await loadModel(m.file), m.flip, exLength);
+        // extras 沒有 scene.json vehicle 記錄、沒有經驗證的 length_m，故不傳
+        // targetLengthM——wrapModel 視為「刻意不縮放」，直接用 GLB 原始比例。
+        st.pivot = wrapModel(await loadModel(m.file), m.flip);
       } catch (e) {
         console.error(`模型 ${m.file} 載入失敗，改用色塊`, e);
-        st.pivot = boxFallback(ex.cls, exLength, exWidth);
+        st.pivot = boxFallback(ex.cls);
       }
     }),
   ]);

@@ -19,10 +19,23 @@ export async function loadScene(code) {
     throw new Error(`scene.json 需要恰好 2 台 role=collider，目前 ${colliders.length}`);
   }
 
+  const finite = n => typeof n === 'number' && Number.isFinite(n);
+
+  // length_m/width_m 是 wrapModel 縮放（scale-to-length）與貼地量測的唯一依據，
+  // 壞資料（0、NaN、缺欄位）絕不能靜默跳過縮放去渲染原始 GLB 尺寸——那樣機車/汽車
+  // 模型會用錯誤比例出現在場景裡卻沒有任何錯誤訊號。壞資料一律在此 throw。
+  for (const v of cfg.vehicles) {
+    if (!finite(v.length_m) || v.length_m <= 0) {
+      throw new Error(`scene.json vehicle track_id=${v.track_id} 的 length_m 必須是正的有限數字（目前 ${v.length_m}）`);
+    }
+    if (!finite(v.width_m) || v.width_m <= 0) {
+      throw new Error(`scene.json vehicle track_id=${v.track_id} 的 width_m 必須是正的有限數字（目前 ${v.width_m}）`);
+    }
+  }
+
   // frame mapper 用 (collision-start)/(end-start) 當分母；start==collision 或
   // collision==end 會除以零，車輛座標變 -Infinity/NaN 卻不報錯地渲染出去。
   const f = cfg.frames;
-  const finite = n => typeof n === 'number' && Number.isFinite(n);
   const sourceKeys = ['source_start', 'source_collision', 'source_end'];
   const animKeys = ['anim_start', 'anim_collision', 'anim_end'];
   for (const k of [...sourceKeys, ...animKeys]) {
