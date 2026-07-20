@@ -89,16 +89,12 @@ test('buildPreWaypoints: extras 超過上限要截斷並警告', () => {
   }
 });
 
-test('buildPreWaypoints: selected_tracked_ids 非空時只有名單內的 track 可當 extras', () => {
+test('buildPreWaypoints: selected_tracked_ids 不限制 extras（該欄位是碰撞車名單）', () => {
   const traj = synthTrajectory();
-  traj.selected_tracked_ids = [1, 2]; // 不含 track 9 → track 9 應被排除
+  traj.selected_tracked_ids = [1, 2];   // 只列 collider，如真實 filtered_output.json
   const { extras } = buildPreWaypoints(traj, sceneCfg);
-  assert.equal(extras.length, 0);
-
-  traj.selected_tracked_ids = [1, 2, 9]; // 含 track 9 → 應保留
-  const { extras: extras2 } = buildPreWaypoints(traj, sceneCfg);
-  assert.equal(extras2.length, 1);
-  assert.equal(extras2[0].track_id, 9);
+  assert.equal(extras.length, 1);        // track 9 仍應成為 extras
+  assert.equal(extras[0].track_id, 9);
 });
 
 test('getState: heading 欄位優先於 segment 方向，且走最短弧', () => {

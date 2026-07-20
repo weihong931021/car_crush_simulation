@@ -26,11 +26,6 @@ export function buildPreWaypoints(trajectory, cfg) {
   const colliderIds = new Map(cfg.vehicles.filter(v => v.role === 'collider')
                                           .map(v => [v.track_id, []]));
   const extraRaw = new Map();
-  // trajectory.selected_tracked_ids（若存在）是 pipeline/人工圈定的合法 track 名單；
-  // 非空時當 extras 白名單，避免原始輸出裡幾十條雜訊軌跡全變成模型 clone。
-  const allowedExtraIds = Array.isArray(trajectory.selected_tracked_ids) && trajectory.selected_tracked_ids.length
-    ? new Set(trajectory.selected_tracked_ids)
-    : null;
 
   for (const frame of trajectory.frames) {
     for (const obj of frame.objects) {
@@ -38,7 +33,7 @@ export function buildPreWaypoints(trajectory, cfg) {
       const rec = { orig: frame.frame_index, x: obj.position_m[0] - offX,
                     z: obj.position_m[1] - offZ, cls: obj.class };
       if (colliderIds.has(obj.tracked_id)) colliderIds.get(obj.tracked_id).push(rec);
-      else if (cfg.extras === 'auto' && (!allowedExtraIds || allowedExtraIds.has(obj.tracked_id))) {
+      else if (cfg.extras === 'auto') {
         if (!extraRaw.has(obj.tracked_id)) extraRaw.set(obj.tracked_id, []);
         extraRaw.get(obj.tracked_id).push(rec);
       }
