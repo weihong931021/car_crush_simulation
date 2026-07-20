@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { velocityAtEnd, frictionSlide, applyCollision } from '../physics.js';
+import { velocityAtEnd, frictionSlide, applyCollision, spinFromImpulse } from '../physics.js';
 
 const straight = [[1, 0, 0, null], [10, 0, 9, null]]; // 沿 +Z 前進
 
@@ -35,4 +35,34 @@ test('applyCollision: 動量守恆（總動量誤差 < 1e-6）', () => {
   const vax = (aWps[aPre.length][1] - aWps[aPre.length - 1][1]) / dt;
   // 摩擦讓數值不嚴格守恆，只驗證量級與方向合理
   assert.ok(Number.isFinite(vax));
+});
+
+test('spinFromImpulse: 正面撞（衝量沿前向軸）不產生自旋', () => {
+  // 車朝 +Z（h=0），衝量也沿 Z → 槓桿臂與 J 平行 → τ=0
+  const w = spinFromImpulse([32, 0, 0, null], 0, 0, -500, 1500, 3.8, 0.85);
+  assert.ok(Math.abs(w) < 1e-9);
+});
+
+test('spinFromImpulse: 側向衝量產生自旋且方向正確', () => {
+  // 車朝 +Z（h=0），衝量沿 +X 打在前保桿（接觸點在車前方）→ 車頭被推向 +X
+  // → heading 應往 +X 轉（rotation.y 增加）→ ω > 0
+  const w = spinFromImpulse([32, 0, 0, null], 0, 800, 0, 200, 1.7, /*contactAhead=*/0.85);
+  assert.ok(w > 0, `expected ω>0, got ${w}`);
+});
+
+test('applyCollision: 斜撞後輕車 heading 有累積轉動、且終值凍結', () => {
+  const aPre = [[1, 0, -5, null], [32, 0, -0.5, null]];      // 汽車沿 +Z
+  const bPre = [[1, -5, -0.4, null], [32, -0.6, -0.45, null]]; // 機車沿 +X，稍偏
+  const { bWps } = applyCollision({ aPre, bPre,
+    a: { mass_kg: 1500, length_m: 3.8, speed_kmh: 30 },
+    b: { mass_kg: 200, length_m: 1.7, speed_kmh: 40 },
+    restitution: 0.15, mu: 0.7, animCollision: 32, animEnd: 89, fps: 30 });
+  const post = bWps.filter(wp => wp[0] > 32);
+  assert.ok(post.every(wp => wp[3] != null), '碰後 heading 欄位需有值');
+  const dH = Math.abs(post[post.length - 1][3] - post[0][3]);
+  assert.ok(dH > 0.05, `碰後應有可見轉動，Δh=${dH}`);
+  // 最後兩點 heading 差 < 前兩點 heading 差（自旋衰減）
+  const early = Math.abs(post[1][3] - post[0][3]);
+  const late = Math.abs(post[post.length - 1][3] - post[post.length - 2][3]);
+  assert.ok(late <= early + 1e-9, '自旋應隨時間衰減');
 });
