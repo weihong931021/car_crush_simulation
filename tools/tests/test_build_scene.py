@@ -66,6 +66,22 @@ class BuildSceneTest(unittest.TestCase):
                 ground_image="ground.png", px_per_meter=30.0, size_m=[25.0, 25.0],
                 colliders=[(99, "Car"), (2, "Two_Wheeler")], source_collision=40)
 
+    def test_validate_catches_degenerate_frames(self):
+        cfg = build_scene.build(
+            trajectory=json.loads(self.traj.read_text()), code="synth",
+            ground_image="ground.png", px_per_meter=30.0, size_m=[25.0, 25.0],
+            colliders=[(1, "Car"), (2, "Two_Wheeler")], source_collision=40)
+        cfg["frames"]["source_collision"] = cfg["frames"]["source_start"]
+        errs = build_scene.validate_scene(cfg)
+        self.assertTrue(any("source" in e for e in errs), errs)
+
+    def test_build_rejects_collision_at_boundary(self):
+        traj = json.loads(self.traj.read_text())
+        with self.assertRaises(build_scene.SceneBuildError):
+            build_scene.build(trajectory=traj, code="synth", ground_image="ground.png",
+                              px_per_meter=30.0, size_m=[25.0, 25.0],
+                              colliders=[(1, "Car"), (2, "Two_Wheeler")], source_collision=1)
+
     def test_png_size(self):
         """讀 PNG 寬高：正確解析 IHDR、非 PNG 應拋例外。"""
         # 建最小合法 PNG：簽名(8) + IHDR chunk(13 data + 12 header/CRC)

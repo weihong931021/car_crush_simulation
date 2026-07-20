@@ -26,8 +26,11 @@ def make(frames_total=200, collision_frame=100):
             objects.append({"tracked_id": 9, "class": "Car",
                             "position_m": [18.5, 24.0 - (i - 20) * 0.13]})
         frames.append({"frame_index": i, "objects": objects})
+    # track 9（extras 驗證用）也要列進 selected_tracked_ids：waypoints.js 的
+    # buildPreWaypoints 現在把此欄位當 extras 白名單，沒列進來會被悄悄濾掉，
+    # 讓這份合成軌跡自己的「extras 驗證」目的失效。
     return {"meta": {"px_per_meter": 29.113, "fps": 25.0}, "location_code": "synth",
-            "frames": frames, "selected_tracked_ids": [1, 2]}
+            "frames": frames, "selected_tracked_ids": [1, 2, 9]}
 
 
 def main():

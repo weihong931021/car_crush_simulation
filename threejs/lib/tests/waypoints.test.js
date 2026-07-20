@@ -50,6 +50,57 @@ test('buildPreWaypoints: 缺 collider track 直接 throw', () => {
   assert.throws(() => buildPreWaypoints(synthTrajectory(), bad), /777/);
 });
 
+test('buildPreWaypoints: collider 軌跡在碰撞前中斷要 throw', () => {
+  const traj = synthTrajectory();
+  // 讓 track 2 只活到 source frame 25（碰撞在 40）
+  traj.frames = traj.frames.map(f => f.frame_index > 25
+    ? { ...f, objects: f.objects.filter(o => o.tracked_id !== 2) } : f);
+  assert.throws(() => buildPreWaypoints(traj, sceneCfg), /中斷/);
+});
+
+function manyExtrasTrajectory() {
+  const frames = [];
+  for (let i = 1; i <= 60; i++) {
+    const objects = [
+      { tracked_id: 1, class: 'Car', position_m: [10, i * 0.4] },
+      { tracked_id: 2, class: 'Two_Wheeler', position_m: [i * 0.3, 12] },
+    ];
+    if (i === 1 || i === 39) {
+      for (let k = 0; k < 20; k++) {
+        objects.push({ tracked_id: 100 + k, class: 'Car', position_m: [k, i] });
+      }
+    }
+    frames.push({ frame_index: i, objects });
+  }
+  return { frames };
+}
+
+test('buildPreWaypoints: extras 超過上限要截斷並警告', () => {
+  const traj = manyExtrasTrajectory();
+  const originalWarn = console.warn;
+  let warned = null;
+  console.warn = (msg) => { warned = msg; };
+  try {
+    const { extras } = buildPreWaypoints(traj, sceneCfg);
+    assert.equal(extras.length, 12);
+    assert.ok(warned && /12/.test(warned), 'console.warn 要提到上限/捨棄數量，不能默默截斷');
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('buildPreWaypoints: selected_tracked_ids 非空時只有名單內的 track 可當 extras', () => {
+  const traj = synthTrajectory();
+  traj.selected_tracked_ids = [1, 2]; // 不含 track 9 → track 9 應被排除
+  const { extras } = buildPreWaypoints(traj, sceneCfg);
+  assert.equal(extras.length, 0);
+
+  traj.selected_tracked_ids = [1, 2, 9]; // 含 track 9 → 應保留
+  const { extras: extras2 } = buildPreWaypoints(traj, sceneCfg);
+  assert.equal(extras2.length, 1);
+  assert.equal(extras2[0].track_id, 9);
+});
+
 test('getState: heading 欄位優先於 segment 方向，且走最短弧', () => {
   const wps = [[1, 0, 0, 0], [11, 0, 10, Math.PI / 2]];
   const s = getState(wps, 6);

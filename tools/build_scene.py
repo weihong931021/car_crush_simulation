@@ -67,8 +67,10 @@ def build(trajectory, code, ground_image, px_per_meter, size_m, colliders,
     if not frames_idx:
         raise SceneBuildError("軌跡 JSON 沒有任何有 objects 的 frame")
     src_start, src_end = min(frames_idx), max(frames_idx)
-    if not (src_start <= source_collision <= src_end):
-        raise SceneBuildError(f"source_collision {source_collision} 不在 [{src_start},{src_end}]")
+    if not (src_start < source_collision < src_end):
+        raise SceneBuildError(
+            f"source_collision {source_collision} 必須嚴格介於 src_start={src_start} 與 "
+            f"src_end={src_end} 之間（不可等於端點，否則 frame mapper 除以零）")
 
     vehicles = []
     for tid, cls in colliders:
@@ -114,6 +116,18 @@ def validate_scene(cfg):
               "anim_start", "anim_collision", "anim_end"):
         if k not in f:
             errs.append(f"frames 缺 {k}")
+    # frame mapper 用 (collision - start) / (end - start) 當分母；start==collision 或
+    # collision==end 會除以零產生 -Infinity/NaN，車輛座標整個壞掉卻不報錯。
+    if all(k in f for k in ("source_start", "source_collision", "source_end")):
+        if not (f["source_start"] < f["source_collision"] < f["source_end"]):
+            errs.append(
+                f"frames.source_start/source_collision/source_end 必須嚴格遞增（目前 "
+                f"{f['source_start']}, {f['source_collision']}, {f['source_end']}）")
+    if all(k in f for k in ("anim_start", "anim_collision", "anim_end")):
+        if not (f["anim_start"] < f["anim_collision"] < f["anim_end"]):
+            errs.append(
+                f"frames.anim_start/anim_collision/anim_end 必須嚴格遞增（目前 "
+                f"{f['anim_start']}, {f['anim_collision']}, {f['anim_end']}）")
     return errs
 
 

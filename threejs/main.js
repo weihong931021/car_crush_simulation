@@ -34,6 +34,16 @@ controls.dampingFactor = 0.08;
 controls.minDistance = 3;
 controls.maxDistance = 200;
 
+// ── Debug hooks（scratchpad smoke test 依賴這些存在）─────────────────────────
+// scene/camera/controls/renderer 建立後不再變動，指定一次即可，不必每幀重指。
+// colliderStates 會在 boot() 內被整包換掉，那裡完成後會再指一次。
+window.__scene = scene;
+window.__camera = camera;
+window.__controls = controls;
+window.__renderer = renderer;
+window.__colliders = colliderStates;
+window.__extras = extraStates;
+
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 scene.background = new THREE.Color(0x87a5c4);
@@ -137,16 +147,21 @@ function rebuildPhysics() {
   updateScene(currentFrame);
 }
 
+const PATH_COLORS = [0xffcc33, 0xff8833];
+
 function rebuildPaths() {
-  for (const l of pathLines) scene.remove(l);
+  for (const l of pathLines) {
+    scene.remove(l);
+    l.geometry.dispose();
+    l.material.dispose();
+  }
   pathLines = [];
-  const colors = [0xffcc33, 0xff8833];
   colliderStates.forEach((st, i) => {
     if (!st.wps) return;
     const pts = st.wps.map(wp => new THREE.Vector3(wp[1], 0.05, wp[2]));
     const line = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints(pts),
-      new THREE.LineBasicMaterial({ color: colors[i % 2], transparent: true, opacity: 0.75 }));
+      new THREE.LineBasicMaterial({ color: PATH_COLORS[i % PATH_COLORS.length], transparent: true, opacity: 0.75 }));
     scene.add(line);
     pathLines.push(line);
   });
@@ -229,7 +244,7 @@ if (playBtn) playBtn.addEventListener('click', () => { isPlaying = !isPlaying; a
 if (resetBtn) resetBtn.addEventListener('click', () => { isPlaying = false; accumulator = 0; setPlayLabel(); gotoFrame(CFG.frames.anim_start); });
 if (topdownBtn) topdownBtn.addEventListener('click', setTopDownView);
 if (perspBtn) perspBtn.addEventListener('click', setPersp45View);
-if (chaseBtn) chaseBtn.addEventListener('click', () => { chaseMode = true; });
+if (chaseBtn) chaseBtn.addEventListener('click', () => { chaseMode = true; camera.up.set(0, 1, 0); });
 if (slider) slider.addEventListener('input', () => { isPlaying = false; setPlayLabel(); gotoFrame(Number(slider.value)); });
 
 const speedSelect = document.getElementById('playback-speed');
@@ -255,11 +270,15 @@ function fillLegend() {
   const legend = document.getElementById('legend');
   if (!legend) return;
   const dots = ['#4488ff', '#ff4444'];
+  const pathHex = PATH_COLORS.map(c => '#' + c.toString(16).padStart(6, '0'));
   legend.innerHTML = colliderStates.map((st, i) =>
     `<div><span class="dot" style="background:${dots[i % 2]}"></span>` +
     `${st.vehicle.label ?? st.vehicle.class} (${st.vehicle.class} id=${st.vehicle.track_id})</div>`
   ).join('') +
-  `<div><span class="dot" style="background:#ffcc00; opacity:0.6"></span>路徑</div>`;
+  colliderStates.map((st, i) =>
+    `<div><span class="dot" style="background:${pathHex[i % pathHex.length]}; opacity:0.75"></span>` +
+    `${st.vehicle.label ?? st.vehicle.class} 路徑</div>`
+  ).join('');
 }
 
 // ── Resize / Render loop ─────────────────────────────────────────────────────
@@ -296,12 +315,6 @@ function animate(ts) {
   }
   controls.update();
   renderer.render(scene, camera);
-  window.__scene = scene;
-  window.__camera = camera;
-  window.__controls = controls;
-  window.__renderer = renderer;
-  window.__colliders = colliderStates;
-  window.__extras = extraStates;
 }
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
@@ -396,6 +409,10 @@ async function boot() {
       }
     }),
   ]);
+
+  // colliderStates 在上面被整包換掉了（不是原地 mutate），debug hook 要重指才會反映新陣列
+  window.__colliders = colliderStates;
+  window.__extras = extraStates;
 
   loadDiv.remove();
   gotoFrame(cfg.frames.anim_start);

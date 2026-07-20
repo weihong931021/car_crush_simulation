@@ -19,6 +19,22 @@ export async function loadScene(code) {
     throw new Error(`scene.json 需要恰好 2 台 role=collider，目前 ${colliders.length}`);
   }
 
+  // frame mapper 用 (collision-start)/(end-start) 當分母；start==collision 或
+  // collision==end 會除以零，車輛座標變 -Infinity/NaN 卻不報錯地渲染出去。
+  const f = cfg.frames;
+  const finite = n => typeof n === 'number' && Number.isFinite(n);
+  const sourceKeys = ['source_start', 'source_collision', 'source_end'];
+  const animKeys = ['anim_start', 'anim_collision', 'anim_end'];
+  for (const k of [...sourceKeys, ...animKeys]) {
+    if (!finite(f[k])) throw new Error(`scene.json frames.${k} 必須是有限數字（目前 ${f[k]}）`);
+  }
+  if (!(f.source_start < f.source_collision && f.source_collision < f.source_end)) {
+    throw new Error(`scene.json frames.source_start/source_collision/source_end 必須嚴格遞增（目前 ${f.source_start}, ${f.source_collision}, ${f.source_end}）`);
+  }
+  if (!(f.anim_start < f.anim_collision && f.anim_collision < f.anim_end)) {
+    throw new Error(`scene.json frames.anim_start/anim_collision/anim_end 必須嚴格遞增（目前 ${f.anim_start}, ${f.anim_collision}, ${f.anim_end}）`);
+  }
+
   const trajRes = await fetch(basePath + 'trajectory.json');
   if (!trajRes.ok) throw new Error(`scenes/${code}/trajectory.json 載入失敗（HTTP ${trajRes.status}）`);
   const trajectory = await trajRes.json();
