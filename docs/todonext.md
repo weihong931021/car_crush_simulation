@@ -11,7 +11,7 @@
 - [x] 動畫真實度：碰後旋轉（角動量）、碰撞瞬間視覺回饋
 - [x] 視覺品質：光影、genai HD 地面、相機 preset（頂視／45°／跟車）
 - [x] 互動 UI：播放速度 0.25x–2x、視角切換
-- [x] 部署：three.js 本地 vendor、靜態部署、手機可開
+- [x] three.js 本地 vendor（離線可用）、手機 RWD
 - [x] MODEL_FLIP per-model 設定（確認 car.glb / moto.glb 前方軸向 → registry.json）
 - [ ] 靜態部署（GitHub Pages）（待 repo 管理者於 Settings → Pages 啟用）
 - [ ] 第二場景驗證（satellite_pipeline 既有地點 + 合成軌跡）
