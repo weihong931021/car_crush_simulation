@@ -103,7 +103,11 @@ function legacySpinFromImpulse(centerWp, heading, jx, jz, mass_kg, length_m, con
 // 預設 0.5——決定切向衝量能吸收多少偏心衝量原本會全部轉成自旋的量，與路面滑行摩擦係數（frictionSlide
 // 的 mu，本專案取 0.7）是兩回事，不要混用。
 //
-// v_rel·n 慣例：v_rel = v_a − v_b，n 指向 a→b。
+// v_rel·n 慣例：v_rel = v_a,contact − v_b,contact（接觸點速度，= 質心線速度 + ω×r，
+// 含碰前既有角速度 omega 的貢獻，不是只有質心線速度），n 指向 a→b。
+// 這裡刻意用「接觸點」而非「質心」的相對速度，是為了跟 simulate.js 外層迭代接觸
+// 迴圈判斷「是否還在逼近」用的量保持一致——該迴圈本來就是用含旋轉項的接觸點相對
+// 速度在做判斷，若這裡的 guard 只看質心線速度會跟外層不一致（見下方 guard 實作處註解）。
 // v_rel·n > 0 表示 a 正朝 b 逼近（closing，兩車距離持續縮小）→ 需施加衝量；
 // v_rel·n <= 0 表示兩車已在分離或無相對趨近 → 回傳零衝量、原樣保留兩車既有速度／角速度
 // （早期版本這裡誤把 omega 重置為 0——只呼叫一次、omega 恆為 0 的舊介面下看不出差異；
@@ -114,7 +118,24 @@ function legacySpinFromImpulse(centerWp, heading, jx, jz, mass_kg, length_m, con
 export function collisionImpulse({ a, b, contact, normal, restitution, muContact = 0.5 }) {
   const { nx, nz } = normal;
   const omegaA0 = a.omega ?? 0, omegaB0 = b.omega ?? 0;
-  const vrelX = a.vx - b.vx, vrelZ = a.vz - b.vz;
+
+  // 力臂 r = 接觸點 − 車輛中心：完整 2D 向量，不投影到前向軸、不 clamp。
+  // 提前到 guard 之前算：guard 判斷「是否還在逼近」要用接觸點的相對速度
+  // （v + ω×r，含旋轉項），跟 simulate.js 外層迭代接觸迴圈判斷「還在逼近」用的
+  // 是同一種量——若這裡的 guard 只看質心線速度（忽略既有 omega），兩者在
+  // 某些幾何下會不一致：外層認定「還在逼近」而呼叫本函式，這裡卻判定「已分離」
+  // 靜默回傳零衝量，接觸解算就這樣無聲漏掉一次。
+  const rax = contact.x - a.x, raz = contact.z - a.z;
+  const rbx = contact.x - b.x, rbz = contact.z - b.z;
+  const Ia = a.mass_kg * a.length_m * a.length_m / 12;
+  const Ib = b.mass_kg * b.length_m * b.length_m / 12;
+
+  // 接觸點速度 = 線速度 + ω×r，2D 形式 (vx + ω·r_z, vz − ω·r_x)——與下方切向摩擦
+  // 段落 vcAx/vcAz 用的是同一套已驗證過的正負號慣例（見該處註解）。omegaA0/omegaB0
+  // 是碰前既有角速度（首次碰撞恆為 0，此時退化為純線速度、guard 行為與舊版相同）。
+  const vcA0x = a.vx + omegaA0 * raz, vcA0z = a.vz - omegaA0 * rax;
+  const vcB0x = b.vx + omegaB0 * rbz, vcB0z = b.vz - omegaB0 * rbx;
+  const vrelX = vcA0x - vcB0x, vrelZ = vcA0z - vcB0z;
   const vrn = vrelX * nx + vrelZ * nz;
 
   if (vrn <= 0) {
@@ -126,13 +147,9 @@ export function collisionImpulse({ a, b, contact, normal, restitution, muContact
     };
   }
 
+  // j 的公式本身不變（仍是 -(1+e)·v_rel·n / (1/ma+1/mb)），只是這裡的 v_rel·n
+  // 換成上面接觸點（含旋轉）算出的同一個 vrn，跟 guard 用的是同一份數字。
   const j = -(1 + restitution) * vrn / (1 / a.mass_kg + 1 / b.mass_kg);
-
-  // 力臂 r = 接觸點 − 車輛中心：完整 2D 向量，不投影到前向軸、不 clamp。
-  const rax = contact.x - a.x, raz = contact.z - a.z;
-  const rbx = contact.x - b.x, rbz = contact.z - b.z;
-  const Ia = a.mass_kg * a.length_m * a.length_m / 12;
-  const Ib = b.mass_kg * b.length_m * b.length_m / 12;
 
   // --- 切向摩擦衝量（先算「只有法向衝量」的中間狀態，再用這個中間狀態算切向滑動速度）---
   // 為什麼要用「法向衝量後」而非「碰前」的狀態算切向滑動：偏心正撞在碰前兩車速度往往完全

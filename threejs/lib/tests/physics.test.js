@@ -132,6 +132,17 @@ test('applyCollision: 斜撞後輕車 heading 有累積轉動、且終值凍結'
   assert.ok(late <= early + 1e-9, '自旋應隨時間衰減');
 });
 
+test('collisionImpulse: 分離中的碰撞不改變任何速度與角速度', () => {
+  const a = { x: 0, z: -1, heading: 0, vx: 0, vz: -5, omega: 5,  mass_kg: 1500, length_m: 4.69 };
+  const b = { x: 0, z: 1,  heading: 0, vx: 0, vz: 10, omega: -3, mass_kg: 200,  length_m: 1.85 };
+  const r = collisionImpulse({ a, b, contact: { x: 0, z: 0 }, normal: { nx: 0, nz: 1 }, restitution: 0.15 });
+  assert.equal(r.aAfter.vz, a.vz);
+  assert.equal(r.bAfter.vz, b.vz);
+  assert.equal(r.aAfter.omega, a.omega);
+  assert.equal(r.bAfter.omega, b.omega);
+  assert.equal(r.j, 0);
+});
+
 test('headingOf: 單點 waypoint 回傳 0 而非 throw', () => {
   assert.equal(headingOf([[1, 0, 0, null]]), 0);
   assert.equal(headingOf([]), 0);
