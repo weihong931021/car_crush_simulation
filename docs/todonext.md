@@ -14,7 +14,8 @@
 - [x] three.js 本地 vendor（離線可用）、手機 RWD
 - [x] MODEL_FLIP per-model 設定（確認 car.glb / moto.glb 前方軸向 → registry.json）
 - [ ] 靜態部署（GitHub Pages）（待 repo 管理者於 Settings → Pages 啟用）
-- [ ] 第二場景驗證（satellite_pipeline 既有地點 + 合成軌跡）
+- [x] 第二場景驗證（satellite_pipeline 既有地點 + 合成軌跡，`tools/synth_trajectory.py` +
+  `scenes/tainan_yongkang/`，換場景零程式碼修改驗證通過）
 - 第二階段：Blender 讀 scene.json 自動搭渲染場景（出版用高品質畫面）
 
 ## Track A：衛星圖自動化 pipeline（→ `satellite_pipeline/` 模組，✅ 已完成）

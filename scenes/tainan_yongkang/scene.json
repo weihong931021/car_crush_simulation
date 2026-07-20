@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "code": "tainan_yongkang",
+  "name": "台南永康（合成軌跡驗證）",
+  "ground": {
+    "image": "ground.png",
+    "px_per_meter": 40.96,
+    "size_m": [
+      25.0,
+      25.0
+    ]
+  },
+  "origin_offset_m": [
+    12.5,
+    12.5
+  ],
+  "frames": {
+    "source_start": 1,
+    "source_collision": 100,
+    "source_end": 200,
+    "anim_start": 1,
+    "anim_collision": 32,
+    "anim_end": 89,
+    "fps": 30
+  },
+  "vehicles": [
+    {
+      "track_id": 1,
+      "class": "Car",
+      "label": "汽車",
+      "model": "car.glb",
+      "mass_kg": 1500,
+      "length_m": 3.8,
+      "role": "collider",
+      "default_speed_kmh": 20,
+      "pre_samples": 15
+    },
+    {
+      "track_id": 2,
+      "class": "Two_Wheeler",
+      "label": "機車",
+      "model": "moto.glb",
+      "mass_kg": 200,
+      "length_m": 1.7,
+      "role": "collider",
+      "default_speed_kmh": 40,
+      "pre_samples": 4
+    }
+  ],
+  "extras": "auto",
+  "collision": {
+    "restitution": 0.15,
+    "friction": 0.7
+  },
+  "camera": {
+    "default": "persp45"
+  }
+}
