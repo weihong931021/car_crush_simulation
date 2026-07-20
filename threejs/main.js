@@ -25,7 +25,6 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 container.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1a1a2e);
 
 const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 500);
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -34,9 +33,17 @@ controls.dampingFactor = 0.08;
 controls.minDistance = 3;
 controls.maxDistance = 200;
 
-scene.add(new THREE.AmbientLight(0xffffff, 2.0));
-const sun = new THREE.DirectionalLight(0xfff4e0, 1.0);
-sun.position.set(5, 20, 10);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+scene.background = new THREE.Color(0x87a5c4);
+scene.fog = new THREE.Fog(0x87a5c4, 90, 260);
+
+scene.add(new THREE.HemisphereLight(0xcfe5ff, 0x8a8f7a, 1.1));
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const sun = new THREE.DirectionalLight(0xfff2dd, 2.4);
+sun.position.set(20, 35, 12);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
 scene.add(sun);
 
 // ── 錯誤 overlay（scene 包壞掉時唯一的出口）─────────────────────────────────
@@ -77,6 +84,8 @@ function wrapModel(gltfScene, flip) {
       if (child.material) {
         child.material = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
       }
+    } else if (child.isMesh) {
+      child.castShadow = true;
     }
   });
   pivot.add(gltfScene);
@@ -89,6 +98,7 @@ function boxFallback(cls) {
   const geo = isTwoWheeler ? new THREE.BoxGeometry(0.7, 1.2, 1.8) : new THREE.BoxGeometry(1.8, 1.4, 4.2);
   const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x999999 }));
   mesh.position.y = geo.parameters.height / 2;
+  mesh.castShadow = true;
   const pivot = new THREE.Group();
   pivot.add(mesh);
   scene.add(pivot);
@@ -156,6 +166,10 @@ function updateScene(frame) {
 const playBtn = document.getElementById('btn-play');
 const resetBtn = document.getElementById('btn-reset');
 const topdownBtn = document.getElementById('btn-topdown');
+const perspBtn = document.getElementById('btn-persp');
+const chaseBtn = document.getElementById('btn-chase');
+
+let chaseMode = false;
 
 function setPlayLabel() {
   if (playBtn) playBtn.textContent = isPlaying ? '⏸ 暫停' : '▶ 播放';
@@ -165,16 +179,27 @@ function gotoFrame(f) {
   updateScene(currentFrame);
 }
 function setTopDownView() {
+  chaseMode = false;
   const h = Math.max(...CFG.ground.size_m) * 1.15;
   camera.position.set(0, h, 0.001);
   camera.up.set(0, 0, -1);
   controls.target.set(0, 0, 0);
   controls.update();
 }
+function setPersp45View() {
+  chaseMode = false;
+  const span = Math.max(...CFG.ground.size_m);
+  camera.up.set(0, 1, 0);
+  camera.position.set(-span * 0.06, span * 0.57, span * 0.45);
+  controls.target.set(-span * 0.06, 0, span * 0.12);
+  controls.update();
+}
 
 if (playBtn) playBtn.addEventListener('click', () => { isPlaying = !isPlaying; accumulator = 0; setPlayLabel(); });
 if (resetBtn) resetBtn.addEventListener('click', () => { isPlaying = false; accumulator = 0; setPlayLabel(); gotoFrame(CFG.frames.anim_start); });
 if (topdownBtn) topdownBtn.addEventListener('click', setTopDownView);
+if (perspBtn) perspBtn.addEventListener('click', setPersp45View);
+if (chaseBtn) chaseBtn.addEventListener('click', () => { chaseMode = true; });
 if (slider) slider.addEventListener('input', () => { isPlaying = false; setPlayLabel(); gotoFrame(Number(slider.value)); });
 
 function bindSpeedSlider(idx) {
@@ -229,11 +254,19 @@ function animate(ts) {
     }
     updateScene(currentFrame);
   }
+  if (chaseMode && colliderStates[0]?.pivot) {
+    const p = colliderStates[0].pivot;
+    const h = p.rotation.y;
+    const back = new THREE.Vector3(-Math.sin(h) * 9, 5, -Math.cos(h) * 9);
+    camera.position.lerp(p.position.clone().add(back), 0.08);
+    controls.target.lerp(p.position.clone().setY(1), 0.15);
+  }
   controls.update();
   renderer.render(scene, camera);
   window.__scene = scene;
   window.__camera = camera;
   window.__controls = controls;
+  window.__renderer = renderer;
   window.__colliders = colliderStates;
   window.__extras = extraStates;
 }
@@ -262,16 +295,23 @@ async function boot() {
   satTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(cfg.ground.size_m[0], cfg.ground.size_m[1]),
-    new THREE.MeshBasicMaterial({ map: satTex }));
+    new THREE.MeshLambertMaterial({ map: satTex }));
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.02;
+  ground.receiveShadow = true;
   scene.add(ground);
 
+  // 陰影相機範圍（依地圖大小）
+  const ext = Math.max(...cfg.ground.size_m) * 0.65;
+  Object.assign(sun.shadow.camera, { left: -ext, right: ext, top: ext, bottom: -ext, near: 1, far: 120 });
+  sun.shadow.camera.updateProjectionMatrix();
+
   // 相機初始位（依地圖大小縮放）
-  const span = Math.max(...cfg.ground.size_m);
-  camera.position.set(-span * 0.06, span * 0.57, span * 0.45);
-  controls.target.set(-span * 0.06, 0, span * 0.12);
-  controls.update();
+  if (cfg.camera?.default === 'ortho_top') {
+    setTopDownView();
+  } else {
+    setPersp45View();
+  }
 
   // waypoints + 物理
   const { colliders, extras } = buildPreWaypoints(trajectory, cfg);
