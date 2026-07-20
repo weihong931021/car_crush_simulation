@@ -105,23 +105,18 @@
   <div id="speed-panel">
     <div class="panel-title">碰撞前車速調整</div>
     <div class="speed-row">
-      <span>汽車</span>
-      <input id="tesla-speed" type="range" min="5" max="80" step="1" value="20" />
-      <span id="tesla-speed-label" class="speed-val">20 km/h</span>
+      <span id="collider0-name">—</span>
+      <input id="collider0-speed" type="range" min="5" max="80" step="1" value="20" />
+      <span id="collider0-speed-label" class="speed-val">20 km/h</span>
     </div>
     <div class="speed-row">
-      <span>機車</span>
-      <input id="gogoro-speed" type="range" min="5" max="80" step="1" value="40" />
-      <span id="gogoro-speed-label" class="speed-val">40 km/h</span>
+      <span id="collider1-name">—</span>
+      <input id="collider1-speed" type="range" min="5" max="80" step="1" value="40" />
+      <span id="collider1-speed-label" class="speed-val">40 km/h</span>
     </div>
   </div>
 
-  <div id="legend">
-    <div><span class="dot" style="background:#4488ff"></span>汽車 (Car id=7)</div>
-    <div><span class="dot" style="background:#ff4444"></span>機車 (Two-Wheeler id=373)</div>
-    <div><span class="dot" style="background:#ffcc00; opacity:0.6"></span>汽車路徑</div>
-    <div><span class="dot" style="background:#ff8844; opacity:0.6"></span>機車路徑</div>
-  </div>
+  <div id="legend"></div>
 
   <!-- Three.js r165（本地 vendor，離線可用） -->
   <script type="importmap">
