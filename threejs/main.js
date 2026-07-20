@@ -294,6 +294,11 @@ async function boot() {
   await Promise.all([
     ...colliderStates.map(async st => {
       const m = modelFor(st.vehicle, registry);
+      if (!m) {
+        console.warn(`車輛 track_id=${st.vehicle.track_id} class=${st.vehicle.class} 無對應模型，改用色塊`);
+        st.pivot = boxFallback(st.vehicle.class);
+        return;
+      }
       try {
         st.pivot = wrapModel(await loadModel(m.file), m.flip);
       } catch (e) {
@@ -305,9 +310,15 @@ async function boot() {
       const st = { ...ex, pivot: null };
       extraStates.push(st);
       const m = modelFor(ex.cls, registry);
+      if (!m) {
+        console.warn(`車輛 track_id=${ex.track_id} class=${ex.cls} 無對應模型，改用色塊`);
+        st.pivot = boxFallback(ex.cls);
+        return;
+      }
       try {
-        st.pivot = m ? wrapModel(await loadModel(m.file), m.flip) : boxFallback(ex.cls);
-      } catch {
+        st.pivot = wrapModel(await loadModel(m.file), m.flip);
+      } catch (e) {
+        console.error(`模型 ${m.file} 載入失敗，改用色塊`, e);
         st.pivot = boxFallback(ex.cls);
       }
     }),
