@@ -6,13 +6,17 @@
 
 ```text
 CCTV 影片 (.mp4)
-    ↓  [TrafficLab：校正 + 推論]
+    ↓  [TrafficLab：校正 + 推論]（偵測品質由隊友主導）
 trafficlab-project/output/*.json.gz（所有車輛軌跡）
     ↓  [filter_and_enrich_output.py：篩選 + 補欄位]
-data/filtered_output.json（目標車輛，含 position_m / velocity_mps）
-    ↓  [Three.js 動畫 / Blender MCP]
-3D 碰撞動畫
+軌跡 JSON（含 position_m / velocity_mps）＋ satellite_pipeline 衛星地面圖
+    ↓  [tools/build_scene.py：半自動產生場景包]（實作中）
+scenes/<code>/（scene.json + ground.png + trajectory.json）
+    ↓  [Three.js 播放器：JS 碰撞物理 + 互動 UI]
+可分享的網頁 demo（Blender 高品質渲染供出版，第二階段）
 ```
+
+當前方向見 [docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md](docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md)。
 
 ## 資料夾結構
 
@@ -21,53 +25,47 @@ blender_crash_project/
 ├── CLAUDE.md                       ← Claude 行為指令
 ├── README.md
 ├── docs/
+│   ├── specs/                      ← 設計文件（含當前方向 spec）
+│   ├── papers/                     ← 外部參考文獻 PDF
 │   ├── PROJECT.md                  ← 專案總覽、競品分析、已知風險
 │   ├── todonext.md                 ← 待辦清單
 │   ├── reference.md                ← 座標轉換、車規、時間軸快速參考
 │   ├── blender_sat_plane.md        ← 衛星圖貼地板平面的完整步驟
 │   ├── blender_to_threejs.md       ← Blender → Three.js 遷移指南
 │   ├── filter_and_enrich_output.md ← filter_and_enrich_output.py 使用說明
-│   └── 行車事故影片重建3d模型.pdf
-├── data/
+│   ├── video-processing-commands.md ← yt-dlp / ffmpeg / RIFE 指令速查
+│   └── *.pdf
+├── scenes/                         ← [實作中] 場景包（scene.json + ground + trajectory）
+├── tools/                          ← [實作中] build_scene.py 場景包產生器
+├── data/                           ← [過渡] test1 軌跡，將遷入 scenes/test1/
 │   ├── filtered_output.json        ← 已篩選 + 補欄位的軌跡資料（含 sat_center）
 │   └── road_features.json
-├── images/
-│   ├── image.png                   ← 主要衛星圖（銳化版），1515×1038 px
-│   ├── sat_bw.png
-│   └── screenshots/
-├── paper/                          ← 學術參考論文
+├── images/                         ← [過渡] test1 衛星圖與驗證截圖
 ├── satellite_pipeline/            ← 衛星底圖自動化（lat/lon → 去車 → 貼 Blender）
 │   ├── pipeline.py                ← 一鍵流程
 │   ├── map_capture.py             ← Google Static API 擷取
-│   ├── image_enhance.py           ← Gemini 去車 + 銳化
-│   ├── blender_ground.py          ← 貼 Blender 地板（MCP）
-│   └── output/<code>/             ← sat_raw / sat_clean / meta.json
-├── blender_scripts/
+│   ├── image_enhance.py           ← Gemini 去車 + 銳化 / --genai HD
+│   ├── blender_ground.py          ← 產生 Blender 貼地腳本
+│   ├── models/FSRCNN_x4.pb        ← 超解析模型（gitignored）
+│   └── output/<code>/             ← sat_raw / sat_clean / sat_genai / meta.json
+├── blender_scripts/                ← 現役：模型匯入、縮放、貼地（出版渲染用）
 │   ├── vehicle_specs.py
 │   ├── import_vehicle.py
-│   ├── setup_crash.py
 │   └── snap_to_ground.py
+├── archive/blender_scripts/        ← 淘汰腳本（import_tesla、setup_crash rigid body 版）
+├── detection_tests/                ← VisDrone fine-tune vs COCO 驗收實驗
 ├── threejs/
 │   ├── index.html                  ← Three.js r165，播放控制 UI
 │   ├── main.js
 │   ├── car.glb
 │   └── moto.glb
-└── trafficlab-project/             ← 上游 Pipeline（CCTV → 軌跡）
-    ├── AGENTS.md
+└── trafficlab-project/             ← 上游 Pipeline（CCTV → 軌跡；偵測優化由隊友主導）
     ├── main.py                     ← GUI 入口
-    ├── location/test1/
-    │   ├── footage/                ← CCTV 原始影片
-    │   ├── G_projection_test1.json
-    │   ├── cctv_test1.png
-    │   └── sat_test1.png
-    ├── scripts/
-    │   ├── filter_and_enrich_output.py
-    │   ├── run_inference.py
-    │   └── trajectory_tools.py
+    ├── location/test1/             ← 校正資料（G_projection、cctv/sat 對照圖）
+    ├── scripts/                    ← filter_and_enrich_output.py、run_inference.py 等
     ├── output/                     ← 推論輸出 *.json.gz
-    ├── models/                     ← YOLO 模型權重
+    ├── models/                     ← YOLO 權重（yolo11l-visdrone-ft.pt 已就位）
     ├── trafficlab/                 ← 核心函式庫
-    ├── environment.yml
     └── inference_config.yaml
 ```
 
@@ -81,7 +79,6 @@ python3 -m http.server 8765
 # Blender MCP
 uvx blender-mcp --port 9876
 
-# TrafficLab GUI
-conda activate trafficlab
-PYTORCH_ENABLE_MPS_FALLBACK=1 python trafficlab-project/main.py
+# TrafficLab GUI（trafficlab conda env 不存在，用 littering_prediction 的 venv）
+PYTORCH_ENABLE_MPS_FALLBACK=1 /Users/weihong/Documents/littering_prediction/venv/bin/python trafficlab-project/main.py
 ```

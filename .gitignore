@@ -25,4 +25,4 @@ secrets.json
 *.pt
 
 # Large model weights (not needed for reading the project)
-models/*.pb
+*.pb
