@@ -123,15 +123,64 @@ function measureBodyBox(gltfScene) {
   return found ? box : new THREE.Box3().setFromObject(gltfScene);
 }
 
+// 排除 collider/零厚度平面，把每個 body mesh 的 8 個 local bbox 角點轉到 gltfScene
+// 座標系後逐一丟給 callback。前提：呼叫時 gltfScene 尚未套用任何 rotation/scale/position
+// （矩陣為單位矩陣），因此 child.matrixWorld 就等於「該 mesh 在 gltfScene 座標系底下」的
+// 變換，角點轉換後即為 gltfScene-local 座標，不必再手動反乘 gltfScene 的逆矩陣。
+function forEachBodyMeshCorners(gltfScene, callback) {
+  gltfScene.updateMatrixWorld(true);
+  const corner = new THREE.Vector3();
+  gltfScene.traverse(child => {
+    if (!child.isMesh || !child.geometry) return;
+    if (/collider/i.test(child.name)) return;
+    let bb = child.geometry.boundingBox;
+    if (!bb) {
+      child.geometry.computeBoundingBox();
+      bb = child.geometry.boundingBox;
+    }
+    const corners = [];
+    let minY = Infinity, maxY = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      corner.set(
+        (i & 1) ? bb.max.x : bb.min.x,
+        (i & 2) ? bb.max.y : bb.min.y,
+        (i & 4) ? bb.max.z : bb.min.z,
+      ).applyMatrix4(child.matrixWorld);
+      corners.push(corner.clone());
+      if (corner.y < minY) minY = corner.y;
+      if (corner.y > maxY) maxY = corner.y;
+    }
+    if (maxY - minY < 0.01) return; // 零厚度平面（如 moto.glb 的地面參考片）
+    callback(corners);
+  });
+}
+
+// 車體沿任意軸（單位向量 axisX/axisZ，僅用 XZ 平面分量）的精確投影長度
+// = max(projection) − min(projection)，取代軸對齊 bbox 對角線估計
+// （後者在非 0/90° 朝向時有 W·sin(2θ) 量級的系統誤差，量到的長度會偏短）。
+function measureBodyExtentAlongAxis(gltfScene, axisX, axisZ) {
+  let min = Infinity, max = -Infinity;
+  forEachBodyMeshCorners(gltfScene, corners => {
+    for (const c of corners) {
+      const proj = c.x * axisX + c.z * axisZ;
+      if (proj < min) min = proj;
+      if (proj > max) max = proj;
+    }
+  });
+  return max > min ? max - min : 0;
+}
+
 function wrapModel(gltfScene, flip, targetLengthM) {
   const pivot = new THREE.Group();
 
-  // 縮放前：排除 collider/零厚度平面，量測未旋轉車體的 local bbox，取其沿車頭方向
-  // （角度 = -flip）的投影長度，換算成等比縮放係數（scale-to-length）。
+  // 縮放前（此時 gltfScene 的 rotation/position/scale 皆為初始值，矩陣為單位矩陣）：
+  // 沿車頭方向（角度 = -flip）對車體 8 角點做精確投影量測，換算成等比縮放係數
+  // （scale-to-length）。順序是關鍵——縮放/旋轉/位移一旦套用，corners 就不再是
+  // gltfScene-local 座標，量測會錯。
   if (targetLengthM) {
-    const preSize = measureBodyBox(gltfScene).getSize(new THREE.Vector3());
     const noseAngle = -flip;
-    const modelLen = Math.abs(preSize.x * Math.sin(noseAngle)) + Math.abs(preSize.z * Math.cos(noseAngle));
+    const noseX = Math.sin(noseAngle), noseZ = Math.cos(noseAngle);
+    const modelLen = measureBodyExtentAlongAxis(gltfScene, noseX, noseZ);
     if (modelLen > 1e-6) {
       gltfScene.scale.setScalar(targetLengthM / modelLen);
     }
