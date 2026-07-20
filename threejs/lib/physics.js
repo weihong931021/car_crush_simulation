@@ -11,6 +11,7 @@ export function velocityAtEnd(wps, speedKmh) {
 }
 
 export function headingOf(wps) {
+  if (wps.length < 2) return 0;
   const a = wps[wps.length - 2], b = wps[wps.length - 1];
   return Math.atan2(b[1] - a[1], b[2] - a[2]);
 }

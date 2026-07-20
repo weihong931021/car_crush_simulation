@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { velocityAtEnd, frictionSlide, applyCollision, spinFromImpulse } from '../physics.js';
+import { velocityAtEnd, frictionSlide, applyCollision, spinFromImpulse, headingOf } from '../physics.js';
 
 const straight = [[1, 0, 0, null], [10, 0, 9, null]]; // 沿 +Z 前進
 
@@ -65,4 +65,9 @@ test('applyCollision: 斜撞後輕車 heading 有累積轉動、且終值凍結'
   const early = Math.abs(post[1][3] - post[0][3]);
   const late = Math.abs(post[post.length - 1][3] - post[post.length - 2][3]);
   assert.ok(late <= early + 1e-9, '自旋應隨時間衰減');
+});
+
+test('headingOf: 單點 waypoint 回傳 0 而非 throw', () => {
+  assert.equal(headingOf([[1, 0, 0, null]]), 0);
+  assert.equal(headingOf([]), 0);
 });
