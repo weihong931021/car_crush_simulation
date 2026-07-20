@@ -20,14 +20,14 @@ SCHEMA_VERSION = 1
 REQUIRED_KEYS = ["code", "ground", "origin_offset_m", "frames", "vehicles", "collision"]
 SAT_VARIANTS = ["sat_genai.png", "sat_clean.png", "sat_raw.png"]
 
-# 車種預設（model / 質量 kg / 車長 m / 預設車速 km/h / pre_samples）
+# 車種預設（model / 質量 kg / 車長 m / 車寬 m / 預設車速 km/h / pre_samples）
 CLASS_DEFAULTS = {
-    "Car":         ("car.glb", 1500, 3.8, 20, 15),
-    "SUV":         ("car.glb", 1800, 4.6, 20, 15),
-    "Van":         ("car.glb", 2000, 4.8, 20, 15),
-    "Truck":       ("car.glb", 5000, 7.0, 20, 15),
-    "Bus":         ("car.glb", 11000, 11.0, 20, 15),
-    "Two_Wheeler": ("moto.glb", 200, 1.7, 40, 4),
+    "Car":         ("car.glb",  1500, 4.69, 1.85, 20, 15),
+    "SUV":         ("car.glb",  1800, 4.60, 1.90, 20, 15),
+    "Van":         ("car.glb",  2000, 4.80, 2.00, 20, 15),
+    "Truck":       ("car.glb",  5000, 7.00, 2.50, 20, 15),
+    "Bus":         ("car.glb", 11000, 11.00, 2.55, 20, 15),
+    "Two_Wheeler": ("moto.glb",  200, 1.85, 0.70, 40, 4),
 }
 
 
@@ -78,11 +78,11 @@ def build(trajectory, code, ground_image, px_per_meter, size_m, colliders,
             raise SceneBuildError(f"collider track_id {tid} 不存在於軌跡（有：{sorted(tracks)}）")
         if cls not in CLASS_DEFAULTS:
             raise SceneBuildError(f"未知車種 {cls}（支援：{sorted(CLASS_DEFAULTS)}）")
-        model, mass, length, speed, samples = CLASS_DEFAULTS[cls]
+        model, mass, length, width, speed, samples = CLASS_DEFAULTS[cls]
         label = "汽車" if model == "car.glb" else "機車"
         vehicles.append({"track_id": tid, "class": cls, "label": label, "model": model,
-                         "mass_kg": mass, "length_m": length, "role": "collider",
-                         "default_speed_kmh": speed, "pre_samples": samples})
+                         "mass_kg": mass, "length_m": length, "width_m": width,
+                         "role": "collider", "default_speed_kmh": speed, "pre_samples": samples})
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -108,7 +108,7 @@ def validate_scene(cfg):
     if n_col != 2:
         errs.append(f"需要恰好 2 台 role=collider，目前 {n_col}")
     for v in vehicles:
-        for k in ("track_id", "class", "model", "mass_kg", "length_m"):
+        for k in ("track_id", "class", "model", "mass_kg", "length_m", "width_m"):
             if k not in v:
                 errs.append(f"vehicle {v.get('track_id', '?')} 缺 {k}")
     f = cfg.get("frames", {})

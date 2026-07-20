@@ -102,6 +102,25 @@ class BuildSceneTest(unittest.TestCase):
         with self.assertRaises(build_scene.SceneBuildError):
             build_scene.png_size(not_png)
 
+    def test_vehicle_has_real_dimensions(self):
+        cfg = build_scene.build(
+            trajectory=json.loads(self.traj.read_text()), code="synth",
+            ground_image="ground.png", px_per_meter=30.0, size_m=[25.0, 25.0],
+            colliders=[(1, "Car"), (2, "Two_Wheeler")], source_collision=40)
+        car, moto = cfg["vehicles"]
+        self.assertAlmostEqual(car["length_m"], 4.69)
+        self.assertAlmostEqual(car["width_m"], 1.85)
+        self.assertAlmostEqual(moto["length_m"], 1.85)
+        self.assertAlmostEqual(moto["width_m"], 0.70)
+
+    def test_validate_requires_width(self):
+        cfg = build_scene.build(
+            trajectory=json.loads(self.traj.read_text()), code="synth",
+            ground_image="ground.png", px_per_meter=30.0, size_m=[25.0, 25.0],
+            colliders=[(1, "Car"), (2, "Two_Wheeler")], source_collision=40)
+        del cfg["vehicles"][0]["width_m"]
+        self.assertTrue(any("width_m" in e for e in build_scene.validate_scene(cfg)))
+
     def test_pick_sat_recomputes_px(self):
         """pick_sat 應根據實際 PNG 寬度重新計算 px_per_meter。"""
         sat_dir = self.tmp / "sat_output"

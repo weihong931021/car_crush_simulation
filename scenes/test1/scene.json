@@ -8,9 +8,9 @@
               "anim_start": 1, "anim_collision": 32, "anim_end": 89, "fps": 30 },
   "vehicles": [
     { "track_id": 7, "class": "Car", "label": "汽車", "model": "car.glb", "mass_kg": 1500,
-      "length_m": 3.8, "role": "collider", "default_speed_kmh": 20, "pre_samples": 15 },
+      "length_m": 4.69, "width_m": 1.85, "role": "collider", "default_speed_kmh": 20, "pre_samples": 15 },
     { "track_id": 373, "class": "Two_Wheeler", "label": "機車", "model": "moto.glb", "mass_kg": 200,
-      "length_m": 1.7, "role": "collider", "default_speed_kmh": 40, "pre_samples": 4 }
+      "length_m": 1.85, "width_m": 0.70, "role": "collider", "default_speed_kmh": 40, "pre_samples": 4 }
   ],
   "extras": "auto",
   "collision": { "restitution": 0.15, "friction": 0.7 },

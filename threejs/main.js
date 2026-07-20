@@ -94,9 +94,51 @@ function loadModel(file) {
   return modelCache.get(file).then(base => base.clone(true));
 }
 
-function wrapModel(gltfScene, flip) {
+// class → [length_m, width_m] 預設值（與 tools/build_scene.py 的 CLASS_DEFAULTS 對齊），
+// 用於 extras（無 scene.json vehicle 記錄）與 boxFallback 未帶明確尺寸時的保底。
+const CLASS_DIM_DEFAULTS = {
+  Car: [4.69, 1.85], SUV: [4.60, 1.90], Van: [4.80, 2.00],
+  Truck: [7.00, 2.50], Bus: [11.00, 2.55], Two_Wheeler: [1.85, 0.70],
+};
+function defaultDims(cls) {
+  return CLASS_DIM_DEFAULTS[cls] ?? (/wheel|motor/i.test(cls) ? [1.85, 0.70] : [4.69, 1.85]);
+}
+
+// 排除 Collider 命名 mesh 與零厚度平面（如 moto.glb 的地面參考片 Object_4），
+// 量測「車體」本身的世界座標 bbox；沒有殘留該類 mesh 就退回整個物件的 bbox。
+function measureBodyBox(gltfScene) {
+  const box = new THREE.Box3();
+  const tmp = new THREE.Box3();
+  const size = new THREE.Vector3();
+  let found = false;
+  gltfScene.traverse(child => {
+    if (!child.isMesh || !child.geometry) return;
+    if (/collider/i.test(child.name)) return;
+    tmp.setFromObject(child);
+    tmp.getSize(size);
+    if (size.y < 0.01) return; // 零厚度平面
+    box.union(tmp);
+    found = true;
+  });
+  return found ? box : new THREE.Box3().setFromObject(gltfScene);
+}
+
+function wrapModel(gltfScene, flip, targetLengthM) {
   const pivot = new THREE.Group();
-  const box = new THREE.Box3().setFromObject(gltfScene);
+
+  // 縮放前：排除 collider/零厚度平面，量測未旋轉車體的 local bbox，取其沿車頭方向
+  // （角度 = -flip）的投影長度，換算成等比縮放係數（scale-to-length）。
+  if (targetLengthM) {
+    const preSize = measureBodyBox(gltfScene).getSize(new THREE.Vector3());
+    const noseAngle = -flip;
+    const modelLen = Math.abs(preSize.x * Math.sin(noseAngle)) + Math.abs(preSize.z * Math.cos(noseAngle));
+    if (modelLen > 1e-6) {
+      gltfScene.scale.setScalar(targetLengthM / modelLen);
+    }
+  }
+
+  // 縮放後重新量 bbox 做置中與貼地（現有置中邏輯必須在縮放後執行，否則偏移量錯誤）。
+  const box = measureBodyBox(gltfScene);
   const cx = (box.min.x + box.max.x) / 2;
   const cz = (box.min.z + box.max.z) / 2;
   const minY = box.min.y;
@@ -117,9 +159,12 @@ function wrapModel(gltfScene, flip) {
   return pivot;
 }
 
-function boxFallback(cls) {
-  const isTwoWheeler = /wheel|motor/i.test(cls);
-  const geo = isTwoWheeler ? new THREE.BoxGeometry(0.7, 1.2, 1.8) : new THREE.BoxGeometry(1.8, 1.4, 4.2);
+function boxFallback(cls, lengthM, widthM) {
+  const [defLen, defWidth] = defaultDims(cls);
+  const length = lengthM ?? defLen;
+  const width = widthM ?? defWidth;
+  const height = /wheel|motor/i.test(cls) ? 1.2 : 1.4;
+  const geo = new THREE.BoxGeometry(width, height, length);
   const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x999999 }));
   mesh.position.y = geo.parameters.height / 2;
   mesh.castShadow = true;
@@ -382,30 +427,31 @@ async function boot() {
       const m = modelFor(st.vehicle, registry);
       if (!m) {
         console.warn(`車輛 track_id=${st.vehicle.track_id} class=${st.vehicle.class} 無對應模型，改用色塊`);
-        st.pivot = boxFallback(st.vehicle.class);
+        st.pivot = boxFallback(st.vehicle.class, st.vehicle.length_m, st.vehicle.width_m);
         return;
       }
       try {
-        st.pivot = wrapModel(await loadModel(m.file), m.flip);
+        st.pivot = wrapModel(await loadModel(m.file), m.flip, st.vehicle.length_m);
       } catch (e) {
         console.error(`模型 ${m.file} 載入失敗，改用色塊`, e);
-        st.pivot = boxFallback(st.vehicle.class);
+        st.pivot = boxFallback(st.vehicle.class, st.vehicle.length_m, st.vehicle.width_m);
       }
     }),
     ...extras.map(async ex => {
       const st = { ...ex, pivot: null };
       extraStates.push(st);
       const m = modelFor(ex.cls, registry);
+      const [exLength, exWidth] = defaultDims(ex.cls);
       if (!m) {
         console.warn(`車輛 track_id=${ex.track_id} class=${ex.cls} 無對應模型，改用色塊`);
-        st.pivot = boxFallback(ex.cls);
+        st.pivot = boxFallback(ex.cls, exLength, exWidth);
         return;
       }
       try {
-        st.pivot = wrapModel(await loadModel(m.file), m.flip);
+        st.pivot = wrapModel(await loadModel(m.file), m.flip, exLength);
       } catch (e) {
         console.error(`模型 ${m.file} 載入失敗，改用色塊`, e);
-        st.pivot = boxFallback(ex.cls);
+        st.pivot = boxFallback(ex.cls, exLength, exWidth);
       }
     }),
   ]);
