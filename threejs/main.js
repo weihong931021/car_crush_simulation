@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
+import { makeFrameMapper } from './lib/frames.js';
+import { velocityAtEnd, applyCollision } from './lib/physics.js';
+import { getState, segHeading } from './lib/interp.js';
 
 const MAP_WIDTH       = 48.71;
 const MAP_HEIGHT      = 33.36;
@@ -54,15 +57,10 @@ const GOGORO_WPS_FALLBACK = [
 ];
 
 // ── Frame-mapping helpers ─────────────────────────────────────────────────────
-function origToAnim(origFrame) {
-  if (origFrame <= ORIG_COLLISION) {
-    const t = (origFrame - ORIG_START) / (ORIG_COLLISION - ORIG_START);
-    return ANIM_START + t * (ANIM_COLLISION - ANIM_START);
-  } else {
-    const t = (origFrame - ORIG_COLLISION) / (ORIG_END - ORIG_COLLISION);
-    return ANIM_COLLISION + t * (ANIM_END - ANIM_COLLISION);
-  }
-}
+const origToAnim = makeFrameMapper({
+  source_start: ORIG_START, source_collision: ORIG_COLLISION, source_end: ORIG_END,
+  anim_start: ANIM_START, anim_collision: ANIM_COLLISION, anim_end: ANIM_END,
+});
 
 // ── Waypoint generation from JSON data ───────────────────────────────────────
 function buildWaypoints(jsonData) {
@@ -225,75 +223,6 @@ let teslaPreWps   = null;
 let gogoroPreWps  = null;
 let pathLines     = [];
 
-// Velocity vector at end of pre-collision waypoints.
-// Direction: from last segment of wps. Magnitude: from speedKmh.
-function velocityAtEnd(wps, speedKmh) {
-  if (wps.length < 2) return { vx: 0, vz: 0 };
-  const a = wps[wps.length - 2], b = wps[wps.length - 1];
-  const dx = b[1] - a[1], dz = b[2] - a[2];
-  const len = Math.sqrt(dx * dx + dz * dz);
-  const speedMs = speedKmh / 3.6;
-  if (len < 1e-6) return { vx: 0, vz: speedMs };
-  return { vx: dx / len * speedMs, vz: dz / len * speedMs };
-}
-
-// Generate post-collision waypoints by integrating friction deceleration
-function frictionWaypoints(x0, z0, vx, vz, startFrame) {
-  const dt   = 1 / 30;
-  const g    = 9.80665;
-  const STEP = 3;
-  const result = [[startFrame, x0, z0]];
-  let cx = x0, cz = z0, cvx = vx, cvz = vz;
-
-  for (let f = STEP; startFrame + f <= LAST_FRAME; f += STEP) {
-    for (let s = 0; s < STEP; s++) {
-      const spd = Math.sqrt(cvx * cvx + cvz * cvz);
-      if (spd < 1e-3) break;
-      const decel = Math.min(MU * g * dt, spd);
-      cvx -= (cvx / spd) * decel;
-      cvz -= (cvz / spd) * decel;
-      cx  += cvx * dt;
-      cz  += cvz * dt;
-    }
-    result.push([startFrame + f, cx, cz]);
-  }
-  return result;
-}
-
-// Impulse-based collision physics → returns full waypoint arrays (pre + post)
-function applyPhysics(tPreWps, gPreWps) {
-  const tV = velocityAtEnd(tPreWps, teslaSpeedKmh);
-  const gV = velocityAtEnd(gPreWps, gogoroSpeedKmh);
-
-  let tvx = tV.vx, tvz = tV.vz;
-  let gvx = gV.vx, gvz = gV.vz;
-
-  const tLast = tPreWps[tPreWps.length - 1];
-  const gLast = gPreWps[gPreWps.length - 1];
-
-  // Collision normal: unit vector from Gogoro → Tesla
-  const nx_r = tLast[1] - gLast[1], nz_r = tLast[2] - gLast[2];
-  const nLen  = Math.sqrt(nx_r * nx_r + nz_r * nz_r) || 1;
-  const nx = nx_r / nLen, nz = nz_r / nLen;
-
-  // Impulse (only if vehicles are approaching along the normal)
-  const vr_n = (tvx - gvx) * nx + (tvz - gvz) * nz;
-  const j = vr_n < 0
-    ? -(1 + RESTITUTION) * vr_n / (1 / TESLA_MASS + 1 / GOGORO_MASS)
-    : 0;
-
-  tvx += j * nx / TESLA_MASS;   tvz += j * nz / TESLA_MASS;
-  gvx -= j * nx / GOGORO_MASS;  gvz -= j * nz / GOGORO_MASS;
-
-  const teslaPost  = frictionWaypoints(tLast[1], tLast[2], tvx, tvz, ANIM_COLLISION);
-  const gogoroPost = frictionWaypoints(gLast[1], gLast[2], gvx, gvz, ANIM_COLLISION);
-
-  return {
-    teslaWps:  [...tPreWps,  ...teslaPost.slice(1)],
-    gogoroWps: [...gPreWps, ...gogoroPost.slice(1)],
-  };
-}
-
 // Remove and re-draw path lines after physics update
 function rebuildPaths() {
   for (const l of pathLines) scene.remove(l);
@@ -315,9 +244,14 @@ function rebuildPaths() {
 // Called when speed sliders change — recompute physics and refresh scene
 function rebuildPhysics() {
   if (!teslaPreWps || !gogoroPreWps) return;
-  const { teslaWps, gogoroWps } = applyPhysics(teslaPreWps, gogoroPreWps);
-  TESLA_WPS  = teslaWps;
-  GOGORO_WPS = gogoroWps;
+  const { aWps, bWps } = applyCollision({
+    aPre: teslaPreWps, bPre: gogoroPreWps,
+    a: { mass_kg: TESLA_MASS, length_m: 3.8, speed_kmh: teslaSpeedKmh },
+    b: { mass_kg: GOGORO_MASS, length_m: 1.7, speed_kmh: gogoroSpeedKmh },
+    restitution: RESTITUTION, mu: MU, animCollision: ANIM_COLLISION, animEnd: LAST_FRAME,
+  });
+  TESLA_WPS  = aWps;
+  GOGORO_WPS = bWps;
   rebuildPaths();
   updateScene(currentFrame);
 }
@@ -331,34 +265,6 @@ let accumulator  = 0;
 let lastTS       = 0;
 
 // ── Interpolation ─────────────────────────────────────────────────────────────
-function segHeading(wps, i) {
-  const n = Math.min(i + 1, wps.length - 1);
-  const p = Math.max(i - 1, 0);
-  const dx = wps[n][1] - wps[p][1];
-  const dz = wps[n][2] - wps[p][2];
-  if (Math.abs(dx) < 1e-6 && Math.abs(dz) < 1e-6) return 0;
-  return Math.atan2(dx, dz);
-}
-
-function getState(wps, frame) {
-  if (frame <= wps[0][0]) return { x: wps[0][1], z: wps[0][2], h: segHeading(wps, 0) };
-  const last = wps[wps.length - 1];
-  if (frame >= last[0])   return { x: last[1],   z: last[2],   h: segHeading(wps, wps.length - 1) };
-  for (let i = 0; i < wps.length - 1; i++) {
-    const a = wps[i], b = wps[i + 1];
-    if (frame >= a[0] && frame <= b[0]) {
-      const t = (frame - a[0]) / (b[0] - a[0]);
-      const dx = b[1] - a[1], dz = b[2] - a[2];
-      return {
-        x: THREE.MathUtils.lerp(a[1], b[1], t),
-        z: THREE.MathUtils.lerp(a[2], b[2], t),
-        h: (Math.abs(dx) < 1e-6 && Math.abs(dz) < 1e-6) ? segHeading(wps, i) : Math.atan2(dx, dz),
-      };
-    }
-  }
-  return { x: last[1], z: last[2], h: segHeading(wps, wps.length - 1) };
-}
-
 function applyState(pivot, wps, frame, showFrom) {
   if (!pivot) return;
   pivot.visible = frame >= showFrom;
@@ -512,9 +418,14 @@ loadWaypoints().then(({ teslaWps, gogoroWps }) => {
   gogoroPreWps = gogoroWps;
 
   // Apply initial physics with default speed scales (1.0)
-  const physics = applyPhysics(teslaPreWps, gogoroPreWps);
-  TESLA_WPS  = physics.teslaWps;
-  GOGORO_WPS = physics.gogoroWps;
+  const { aWps, bWps } = applyCollision({
+    aPre: teslaPreWps, bPre: gogoroPreWps,
+    a: { mass_kg: TESLA_MASS, length_m: 3.8, speed_kmh: teslaSpeedKmh },
+    b: { mass_kg: GOGORO_MASS, length_m: 1.7, speed_kmh: gogoroSpeedKmh },
+    restitution: RESTITUTION, mu: MU, animCollision: ANIM_COLLISION, animEnd: LAST_FRAME,
+  });
+  TESLA_WPS  = aWps;
+  GOGORO_WPS = bWps;
   rebuildPaths();
 
   console.log('[physics] Collision impulse applied.',
