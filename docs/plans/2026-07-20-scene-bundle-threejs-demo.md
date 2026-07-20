@@ -480,7 +480,9 @@ git add threejs/vendor threejs/index.html
 git commit -m "three.js 0.165.0 改本地 vendor，脫離 CDN"
 ```
 
----### Task 4: 抽純邏輯模組 `threejs/lib/`（行為不變 + node 測試）
+---
+
+### Task 4: 抽純邏輯模組 `threejs/lib/`（行為不變 + node 測試）
 
 **Files:**
 - Create: `threejs/lib/frames.js`, `threejs/lib/waypoints.js`, `threejs/lib/physics.js`, `threejs/lib/interp.js`
