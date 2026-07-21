@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeFrameMapper } from '../frames.js';
-import { buildPreWaypoints } from '../waypoints.js';
+import { buildPreWaypoints, buildPaths } from '../waypoints.js';
 import { getState } from '../interp.js';
 
 const framesCfg = { source_start: 1, source_collision: 40, source_end: 60,
@@ -104,4 +104,49 @@ test('getState: heading 欄位優先於 segment 方向，且走最短弧', () =>
   const wrap = [[1, 0, 0, 3.0], [11, 0, 10, -3.0]];  // 跨 ±π
   const w = getState(wrap, 6);
   assert.ok(Math.abs(w.h) > 2.9, '跨 π 要走短弧（≈±π），不是掃過 0');
+});
+
+test('buildPaths: 每台 collider 回傳碰前全部原始點，t=frame/fps，已扣 offset', () => {
+  const traj = synthTrajectory();
+  traj.meta = { fps: 50 };
+  const paths = buildPaths(traj, sceneCfg);
+  assert.equal(paths.length, 2);
+  const car = paths.find(p => p.vehicle.track_id === 1);
+  const moto = paths.find(p => p.vehicle.track_id === 2);
+  assert.equal(car.points.length, 40, '未降採樣，應保留碰前全部 40 個原始點');
+  assert.equal(moto.points.length, 21);
+  assert.ok(Math.abs(car.points[0].x - (10 - 12.5)) < 1e-9, 'x 已扣 offset');
+  assert.ok(Math.abs(car.points[0].t - 1 / 50) < 1e-9, 't = frame_index / fps');
+  assert.ok(Math.abs(car.points[39].t - 40 / 50) < 1e-9);
+  for (let i = 1; i < car.points.length; i++) {
+    assert.ok(car.points[i].t > car.points[i - 1].t, 't 應嚴格遞增');
+  }
+});
+
+test('buildPaths: 缺 trajectory.meta.fps 時回退 cfg.frames.fps 並警告', () => {
+  const traj = synthTrajectory(); // 無 meta
+  const originalWarn = console.warn;
+  let warned = null;
+  console.warn = (msg) => { warned = msg; };
+  try {
+    const paths = buildPaths(traj, sceneCfg);
+    const car = paths.find(p => p.vehicle.track_id === 1);
+    assert.ok(Math.abs(car.points[0].t - 1 / 30) < 1e-9, '應退回 cfg.frames.fps=30');
+    assert.ok(warned && /fps/.test(warned), '應警告 fps 回退');
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('buildPaths: 缺 collider track 直接 throw（沿用 buildPreWaypoints 的檢查）', () => {
+  const bad = { ...sceneCfg, vehicles: [{ track_id: 777, class: 'Car', role: 'collider', pre_samples: 5 },
+                                        sceneCfg.vehicles[1]] };
+  assert.throws(() => buildPaths(synthTrajectory(), bad), /777/);
+});
+
+test('buildPaths: collider 軌跡在碰撞前中斷要 throw', () => {
+  const traj = synthTrajectory();
+  traj.frames = traj.frames.map(f => f.frame_index > 25
+    ? { ...f, objects: f.objects.filter(o => o.tracked_id !== 2) } : f);
+  assert.throws(() => buildPaths(traj, sceneCfg), /中斷/);
 });
