@@ -18,6 +18,19 @@ scenes/<code>/（scene.json + ground.png + trajectory.json）
 
 當前方向見 [docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md](docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md)。
 
+## 線上 Demo（單頁打包版）
+
+**<https://claude.ai/code/artifact/1fec3a43-8ccf-4bbb-bcaa-55ac1e9f044f>**（私人連結，可從頁面分享）
+
+- test1 實錄軌跡 + `threejs/lib/` 純物理模組（path/obb/simulate/solve）直接打包成單一 HTML
+  （489KB 含衛星底圖），2D 俯視 canvas 渲染，無 three.js 相依、離線可用
+- 功能與完整版一致：車速倍率滑桿（即時重模擬）、碰撞/未碰撞結論、求安全車速區間、
+  最近間距標註；依會議決定呈現至碰撞瞬間為止
+- 產生方式：`scenes/test1/` 資料 + lib bundle 組頁（來源：session scratchpad，
+  之後可整理成 `tools/build_demo_page.py`）
+- 完整互動 3D 版仍在 `threejs/index.html`（本地 `python3 -m http.server` 開啟；
+  GitHub Pages 待 repo 管理者於 Settings → Pages 啟用 main / root）
+
 ## 資料夾結構
 
 ```text

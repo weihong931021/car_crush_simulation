@@ -13,6 +13,9 @@
 - [x] `lib/solve.js` 安全速度區間（交會事故是 false→true→false 安全窗，無單一門檻）
 - [x] `main.js` 接線：結論面板、求安全車速、間距標註、呈現至碰撞瞬間（會議決定）
 - [x] 模型前方軸向 Blender 實測修正（car 偏 11°、moto 偏 234°）
+- [x] 單頁打包 demo（2026-07-21）：lib 純模組 + test1 資料 → 489KB 單一 HTML，
+      發佈於 <https://claude.ai/code/artifact/1fec3a43-8ccf-4bbb-bcaa-55ac1e9f044f>
+      （2D canvas 版；候選收尾工作：把組頁流程固化成 `tools/build_demo_page.py`）
 - 遺留：`solve.js` 兩處防禦性死碼（reviewer 確認不可達，留有註解）；碰後彈開播放
   已實作但依會議決定關閉
 
