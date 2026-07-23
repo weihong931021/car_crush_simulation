@@ -53,12 +53,16 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 scene.background = new THREE.Color(0x87a5c4);
 scene.fog = new THREE.Fog(0x87a5c4, 90, 260);
 
-scene.add(new THREE.HemisphereLight(0xcfe5ff, 0x8a8f7a, 1.1));
-scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-const sun = new THREE.DirectionalLight(0xfff2dd, 2.4);
-sun.position.set(20, 35, 12);
+// 打光策略（使用者定調）：單一主光源＋清楚的影子。環境光只留提亮暗部的最低量
+// （太高會把影子洗掉），太陽當絕對主角；影子解析度拉到 4096 讓輪廓乾淨。
+scene.add(new THREE.HemisphereLight(0xcfe5ff, 0x8a8f7a, 0.55));
+scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+const sun = new THREE.DirectionalLight(0xfff2dd, 3.2);
+sun.position.set(24, 40, 14);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(4096, 4096);
+sun.shadow.bias = -0.0001;      // 消陰影痤瘡
+sun.shadow.normalBias = 0.02;   // 斜面漏光
 scene.add(sun);
 
 // ── 碰撞瞬間標記 ─────────────────────────────────────────────────────────────
