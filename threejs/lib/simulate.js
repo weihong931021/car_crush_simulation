@@ -17,6 +17,36 @@ const RESTITUTION = 0.15;
 const MU = 0.7;
 
 const STOP_SPEED_MPS = 0.05; // 自由體階段視為「已停止」的速度門檻
+
+// 轉向率上限（單車模型的寬鬆版）：車輛的 yaw 速率物理上受 v/L·tan(δmax) 限制——
+// 幾乎不動的車不可能原地擺頭。路徑切線在蠕行段被殘噪主導，若直接把切線當車身朝向，
+// 車會邊滑邊擺（「飄」）。對「輸出樣本與碰撞 OBB 用的 heading」施加此限制：
+// maxYawRate = YAW_RATE_PER_SPEED · v + YAW_RATE_FLOOR。
+// 5 m/s 時上限 ≈ 3.15 rad/s（真轉彎 ~0.1 rad/s，完全不受影響）；
+// 0.2 m/s 蠕行時上限 ≈ 0.27 rad/s（噪音要求的 >1 rad/s 擺頭被壓掉）。
+const YAW_RATE_PER_SPEED = 0.6; // (rad/s) / (m/s)
+const YAW_RATE_FLOOR = 0.15;    // rad/s：保留極慢的修正能力，避免完全鎖死
+const A_LAT_MAX = 7.0;          // m/s²：側向抓地極限（≈0.7g）。yaw rate 同時受 a_lat/v
+                                 // 限制——高速過彎時車身「跟不上」急彎（物理上滑出），
+                                 // 而不是像軌道車一樣貼著曲線甩。低速時此項寬鬆、不生效。
+
+function angDiff(a, b) {
+  let d = (a - b) % (2 * Math.PI);
+  if (d > Math.PI) d -= 2 * Math.PI;
+  if (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+}
+
+// 以轉向率上限把 heading 從 prev 朝 target 靠近（dt 秒、速度 v m/s）。
+// 上限取「轉向機構」與「側向抓地」兩者中較嚴者：min(K·v + floor, a_lat/v)。
+function limitYaw(prev, target, v, dt) {
+  const steerLimit = YAW_RATE_PER_SPEED * v + YAW_RATE_FLOOR;
+  const gripLimit = A_LAT_MAX / Math.max(v, 0.1);
+  const maxDelta = Math.min(steerLimit, gripLimit) * dt;
+  const d = angDiff(target, prev);
+  if (Math.abs(d) <= maxDelta) return target;
+  return prev + Math.sign(d) * maxDelta;
+}
 const MIN_POST_IMPACT_FRAMES = 2; // 碰撞後至少多輸出幾幀，讓呼叫端能畫出碰後效果
 const BISECT_DT_DIVISOR = 16; // 撞擊時刻二分細化至 dt/16 以內
 const MAX_REAPPLY = 40; // 同一接觸 episode 最多重新套用衝量幾次（約 2/3 秒 @60fps），
@@ -47,7 +77,7 @@ function contactVelocity(vx, vz, omega, rx, rz) {
 // 回傳 bracket 內較晚那一端（仍重疊）的完整狀態，視為撞擊時刻。
 // 兩車此時都還在路徑上，任意時刻的狀態可由 advance(s0, t-t0) 這個純函數直接算出，
 // 不需要真的逐步微推進即可二分查找。
-function bisectImpact(vehA, kA, sA0, vehB, kB, sB0, t0, t1, dt, startTA, startTB) {
+function bisectImpact(vehA, kA, sA0, vehB, kB, sB0, t0, t1, dt, startTA, startTB, hA0, hB0) {
   function stateAt(tt) {
     // 車輛在自己的 startT 之前不會移動——bracket 可能跨過其中一台的出現時刻，
     // 前進時間要從 max(t0, startT) 起算（sA0/sB0 即該時刻的位置）。
@@ -55,8 +85,12 @@ function bisectImpact(vehA, kA, sA0, vehB, kB, sB0, t0, t1, dt, startTA, startTB
     const dtB = Math.max(0, tt - Math.max(t0, startTB));
     const sA = advance(vehA.path, vehA.profile, sA0, dtA, kA);
     const sB = advance(vehB.path, vehB.profile, sB0, dtB, kB);
-    const pA = sampleAt(vehA.path, sA);
-    const pB = sampleAt(vehB.path, sB);
+    const pA0 = sampleAt(vehA.path, sA);
+    const pB0 = sampleAt(vehB.path, sB);
+    // heading 套用與主迴圈一致的轉向率上限（從 bracket 起點的 hA0/hB0 出發），
+    // 否則 OBB 朝向與主迴圈不同，可能出現「主迴圈判定重疊、二分卻找不到」的矛盾。
+    const pA = { ...pA0, heading: limitYaw(hA0, pA0.heading, speedAt(vehA.profile, sA, kA), Math.max(dtA, 1e-9)) };
+    const pB = { ...pB0, heading: limitYaw(hB0, pB0.heading, speedAt(vehB.profile, sB, kB), Math.max(dtB, 1e-9)) };
     const ov = overlap(obbAt(vehA, pA.x, pA.z, pA.heading), obbAt(vehB, pB.x, pB.z, pB.heading));
     return { sA, sB, pA, pB, ov };
   }
@@ -253,6 +287,9 @@ export function simulate({ vehicles, kA, kB, dt = 1 / 60, maxTime = 12 }) {
     }
 
     // Phase 1：兩車各自在（出現後）沿路徑前進，兩車都在場時每步偵測重疊。
+    // hA/hB：施加轉向率上限後的車身朝向（輸出樣本與碰撞 OBB 一律用它，不直接用路徑切線）。
+    let hA = p0A.heading;
+    let hB = p0B.heading;
     while (t < maxTime) {
       const dtStep = Math.min(dt, maxTime - t);
       if (dtStep <= 1e-12) break;
@@ -265,14 +302,16 @@ export function simulate({ vehicles, kA, kB, dt = 1 / 60, maxTime = 12 }) {
       const sBNext = dtB > 0 ? advance(vehB.path, vehB.profile, sB, dtB, kB) : sB;
       const pANext = sampleAt(vehA.path, sANext);
       const pBNext = sampleAt(vehB.path, sBNext);
+      if (dtA > 0) hA = limitYaw(hA, pANext.heading, speedAt(vehA.profile, sANext, kA), dtA);
+      if (dtB > 0) hB = limitYaw(hB, pBNext.heading, speedAt(vehB.profile, sBNext, kB), dtB);
 
       if (bothPresent(tNext)) {
-        const obbANext = obbAt(vehA, pANext.x, pANext.z, pANext.heading);
-        const obbBNext = obbAt(vehB, pBNext.x, pBNext.z, pBNext.heading);
+        const obbANext = obbAt(vehA, pANext.x, pANext.z, hA);
+        const obbBNext = obbAt(vehB, pBNext.x, pBNext.z, hB);
         const ov = overlap(obbANext, obbBNext);
 
         if (ov) {
-          const impact = bisectImpact(vehA, kA, sA, vehB, kB, sB, t, tNext, dt, startTA, startTB);
+          const impact = bisectImpact(vehA, kA, sA, vehB, kB, sB, t, tNext, dt, startTA, startTB, hA, hB);
           collided = true;
           impactTime = impact.t;
           contact = finalizeCollision({ vehA, kA, vehB, kB, dt, maxTime, impactTime,
@@ -286,8 +325,8 @@ export function simulate({ vehicles, kA, kB, dt = 1 / 60, maxTime = 12 }) {
       }
 
       sA = sANext; sB = sBNext; t = tNext;
-      if (tNext >= startTA) samplesA.push({ t, x: pANext.x, z: pANext.z, heading: pANext.heading });
-      if (tNext >= startTB) samplesB.push({ t, x: pBNext.x, z: pBNext.z, heading: pBNext.heading });
+      if (tNext >= startTA) samplesA.push({ t, x: pANext.x, z: pANext.z, heading: hA });
+      if (tNext >= startTB) samplesB.push({ t, x: pBNext.x, z: pBNext.z, heading: hB });
 
       // 兩車都已出現且走完路徑（advance 會把 s 夾在 path.length）→ 之後不會再變化，提早結束。
       if (bothPresent(tNext)

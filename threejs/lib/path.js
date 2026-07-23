@@ -97,6 +97,40 @@ export function splineResample(points, { stepSec = 1 / 60 } = {}) {
   return out;
 }
 
+// 縱向慣性約束（前向-後向兩趟掃描，運動規劃的標準做法）：真車的加減速有物理極限
+// （加速 ≲0.3g、煞車 ≲0.8g），偵測噪音卻常產生 10g 級的假速度尖峰——蠕行段忽快忽慢
+// 的「湧動感」就是它。位置（證據）完全不動，只把「每段耗時」重新分配成可行的
+// 速度歷程：前向趟限制加速度、後向趟限制減速度，再由段速重積分時間戳。
+// t[0] 錨定（startT 不受影響）；乾淨資料（原本就可行）幾乎不變。
+export function limitAcceleration(points, { aMaxMps2 = 3.0, bMaxMps2 = 7.5, minSpeedMps = 0.05 } = {}) {
+  if (!points || points.length < 3) return points ? points.map(p => ({ ...p })) : [];
+  const n = points.length;
+  const ds = new Array(n - 1);
+  const v = new Array(n - 1);
+  for (let i = 0; i < n - 1; i++) {
+    ds[i] = Math.hypot(points[i + 1].x - points[i].x, points[i + 1].z - points[i].z);
+    const dt = points[i + 1].t - points[i].t;
+    v[i] = Math.max(minSpeedMps, dt > 1e-9 ? ds[i] / dt : minSpeedMps);
+  }
+  // 前向：v[i]² ≤ v[i-1]² + 2·a·ds（加速上限）
+  for (let i = 1; i < n - 1; i++) {
+    const cap = Math.sqrt(v[i - 1] * v[i - 1] + 2 * aMaxMps2 * Math.max(ds[i], 1e-9));
+    if (v[i] > cap) v[i] = cap;
+  }
+  // 後向：v[i]² ≤ v[i+1]² + 2·b·ds（煞車上限，倒著看就是加速）
+  for (let i = n - 3; i >= 0; i--) {
+    const cap = Math.sqrt(v[i + 1] * v[i + 1] + 2 * bMaxMps2 * Math.max(ds[i], 1e-9));
+    if (v[i] > cap) v[i] = cap;
+  }
+  const out = [{ ...points[0] }];
+  let t = points[0].t;
+  for (let i = 0; i < n - 1; i++) {
+    t += ds[i] > 1e-9 ? ds[i] / v[i] : (points[i + 1].t - points[i].t);
+    out.push({ t, x: points[i + 1].x, z: points[i + 1].z });
+  }
+  return out;
+}
+
 // 追蹤器在碰撞前 ~0.5s 會因 bbox 重疊+平滑而「凍結」（test1 實測：位移回推 <1 km/h，
 // 同時段資料 speed_kmh 欄位 14–21 km/h）。凍結尾若不切除，速度剖面尾端被污染成近 0，
 // 模擬會呈現「滑行到定點停著等撞」的假象。

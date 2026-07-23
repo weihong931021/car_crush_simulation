@@ -115,3 +115,43 @@ test('startT: 兩車皆從 0 開始時行為與未指定完全相同', () => {
   assert.equal(a.collided, b.collided);
   assert.equal(a.impactTime, b.impactTime);
 });
+
+// ── 轉向率上限（車身朝向不「飄」）───────────────────────────────────────────
+test('yaw limit: 蠕行時輸出 heading 的變化率被限制', () => {
+  // 0.3 m/s 蠕行 + 高頻側向噪音：路徑切線劇烈擺動，但車身朝向必須平穩
+  const creep = Array.from({ length: 120 }, (_, i) => ({
+    t: i * 0.05, x: 0.05 * ((i % 2) * 2 - 1), z: i * 0.015,
+  }));
+  const far = Array.from({ length: 40 }, (_, i) => ({ x: 200, z: 200 + i, t: i * 0.1 }));
+  const r = simulate({ vehicles: [veh(creep, 4.69, 1.85, 1500), veh(far, 1.85, 0.7, 200)], kA: 1, kB: 1 });
+  const s = r.tracks[0].samples;
+  for (let i = 1; i < s.length; i++) {
+    const dt = s[i].t - s[i - 1].t;
+    let d = Math.abs(s[i].heading - s[i - 1].heading);
+    if (d > Math.PI) d = 2 * Math.PI - d;
+    // 不變量本體：yaw rate ≤ 0.6·v + 0.15（v 用該步實際位移速度，含 40% 裕度容納
+    // 剖面速度與位移速度的積分差）——蠕行時遠小於切線噪音要求的擺頭速率
+    const v = Math.hypot(s[i].x - s[i - 1].x, s[i].z - s[i - 1].z) / dt;
+    assert.ok(d <= (0.6 * v * 1.4 + 0.15) * dt + 1e-6,
+      `第 ${i} 步 yaw ${(d / dt).toFixed(3)} rad/s 超過 v=${v.toFixed(2)} 的上限`);
+  }
+});
+
+test('yaw limit: 正常速度轉彎完全跟得上切線', () => {
+  // 半徑 20m 圓弧、5 m/s → 切線角速度 0.25 rad/s，遠低於上限 3.15 rad/s
+  const arc = Array.from({ length: 63 }, (_, i) => {
+    const th = i * 0.025; // 每步 0.5m / r=20
+    return { t: i * 0.1, x: 20 * Math.sin(th), z: 20 * (1 - Math.cos(th)) };
+  });
+  const far = Array.from({ length: 40 }, (_, i) => ({ x: 300, z: 300 + i, t: i * 0.1 }));
+  const r = simulate({ vehicles: [veh(arc, 4.69, 1.85, 1500), veh(far, 1.85, 0.7, 200)], kA: 1, kB: 1 });
+  const s = r.tracks[0].samples;
+  const mid = s[Math.floor(s.length / 2)];
+  const path = buildPath(arc.map(p => ({ ...p })));
+  // 對照：同時刻的路徑切線（用鄰近樣本位置差近似）
+  const j = s.indexOf(mid);
+  const tangent = Math.atan2(s[j + 1].x - s[j - 1].x, s[j + 1].z - s[j - 1].z);
+  let d = Math.abs(mid.heading - tangent);
+  if (d > Math.PI) d = 2 * Math.PI - d;
+  assert.ok(d < 0.06, `轉彎中車身朝向應貼合行進方向，偏差 ${(d * 180 / Math.PI).toFixed(2)}°`);
+});

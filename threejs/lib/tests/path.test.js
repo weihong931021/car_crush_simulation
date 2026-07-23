@@ -193,3 +193,35 @@ test('decimate+spline: 帶噪節點的 heading worst-case 大幅下降', () => {
   const viaKnots = worst(splineResample(decimatePoints(pts, { knotSec: 0.25 })));
   assert.ok(viaKnots < direct * 0.5, `抽稀後應大減：${(direct*180/Math.PI).toFixed(1)}° → ${(viaKnots*180/Math.PI).toFixed(1)}°`);
 });
+
+// ── limitAcceleration（縱向慣性）──────────────────────────────────────────────
+import { limitAcceleration } from '../path.js';
+
+test('limitAcceleration: 假加速尖峰被壓平、位置不變、t0 錨定', () => {
+  // 0.5 m/s 蠕行中突然一步跳到 5 m/s（≈90 m/s²，物理不可能）再回落
+  const pts = [];
+  let z = 0, t = 0;
+  for (let i = 0; i < 20; i++) { pts.push({ t, x: 0, z }); z += 0.025; t += 0.05; } // 0.5 m/s
+  pts.push({ t: t, x: 0, z: z + 0.25 });  // 一步 0.25m/0.05s = 5 m/s
+  z += 0.25; t += 0.05;
+  for (let i = 0; i < 20; i++) { z += 0.025; t += 0.05; pts.push({ t, x: 0, z }); }
+  const out = limitAcceleration(pts, { aMaxMps2: 3.0, bMaxMps2: 7.5 });
+  assert.equal(out.length, pts.length);
+  assert.equal(out[0].t, pts[0].t, 't0 錨定');
+  out.forEach((p, i) => { assert.equal(p.x, pts[i].x); assert.equal(p.z, pts[i].z); }); // 位置=證據，不動
+  // 重算加速度：任何相鄰段的 dv/dt 不得超過上限（含些許數值裕度）
+  for (let i = 2; i < out.length; i++) {
+    const v1 = Math.hypot(out[i-1].x-out[i-2].x, out[i-1].z-out[i-2].z) / (out[i-1].t-out[i-2].t);
+    const v2 = Math.hypot(out[i].x-out[i-1].x, out[i].z-out[i-1].z) / (out[i].t-out[i-1].t);
+    const a = (v2 - v1) / (out[i].t - out[i-1].t);
+    assert.ok(a < 3.0 * 1.5 + 0.5, `第 ${i} 段加速度 ${a.toFixed(1)} m/s² 仍超標`);
+  }
+});
+
+test('limitAcceleration: 本來就可行的等速資料不被改動', () => {
+  const pts = Array.from({ length: 30 }, (_, i) => ({ t: i * 0.1, x: 0, z: i * 0.5 })); // 5 m/s 等速
+  const out = limitAcceleration(pts);
+  for (let i = 0; i < pts.length; i++) {
+    assert.ok(Math.abs(out[i].t - pts[i].t) < 1e-9, `等速資料 t 不得漂移（第 ${i} 點）`);
+  }
+});
