@@ -36,6 +36,67 @@ export function smoothPoints(points, { windowSec = 0.5, anchorEnd = true } = {})
   return out;
 }
 
+// 節點抽稀：每 knotSec 取一個錨點（首尾必留）。搭配 splineResample 使用——樣條是
+// 「插值」曲線，會忠實通過每個帶噪節點；先抽稀讓殘餘噪音失去節點可依附，樣條再把
+// 稀疏錨點連成平滑曲線。代價是比 knotSec 更快的真實小動作會被圓滑掉（demo 可接受，
+// 方法卡需註明）。
+// minDistM：距離門檻——近乎靜止的路段不下錨（時間制會在原地擠出一團空間重合的錨點，
+// 樣條被迫在毫米尺度繞小圈、局部 heading 反而暴衝）。靜止段塌成前後兩個錨點之間的
+// 「原地停留」，樣條在該段位置幾乎不動，符合實際。
+export function decimatePoints(points, { knotSec = 0.25, minDistM = 0.08 } = {}) {
+  if (!points || points.length < 3) return points ? points.map(p => ({ ...p })) : [];
+  const out = [{ ...points[0] }];
+  let lastT = points[0].t;
+  let last = points[0];
+  for (let i = 1; i < points.length - 1; i++) {
+    const p = points[i];
+    if (p.t - lastT >= knotSec && Math.hypot(p.x - last.x, p.z - last.z) >= minDistM) {
+      out.push({ ...p });
+      lastT = p.t;
+      last = p;
+    }
+  }
+  // 終點必留；但它若與最後幾個錨點在空間上擠在一起，樣條會在末端擺尾
+  // （尾向也是 extendPoints 的外插方向，敏感）→ 先彈掉距終點 < minDistM 的錨點。
+  const finalPt = points[points.length - 1];
+  while (out.length > 1
+    && Math.hypot(out[out.length - 1].x - finalPt.x, out[out.length - 1].z - finalPt.z) < minDistM) {
+    out.pop();
+  }
+  out.push({ ...finalPt });
+  return out;
+}
+
+// Catmull-Rom（Barry–Goldman 非均勻節點版）樣條重取樣：以 t 為參數、通過每一個輸入點、
+// 切線連續（C¹）。折線的「每個節點一個小轉角」在此消失——路線視覺平順、heading（取自
+// 相鄰取樣點切線）連續變化不再逐格跳動。放在 smoothPoints（去噪）之後、extendPoints 之前。
+// 邊界用幻影節點（鏡射）避免端點段參數退化；stepSec 取 1/60 讓折線逼近曲線到視覺無感。
+export function splineResample(points, { stepSec = 1 / 60 } = {}) {
+  if (!points || points.length < 3) return points ? points.map(p => ({ ...p })) : [];
+  const n = points.length;
+  const mirror = (a, b) => ({ t: a.t - (b.t - a.t), x: a.x - (b.x - a.x), z: a.z - (b.z - a.z) });
+  const knots = [mirror(points[0], points[1]), ...points, mirror(points[n - 1], points[n - 2])];
+  const lerp2 = (a, b, u, tt) => ({ t: tt, x: a.x + (b.x - a.x) * u, z: a.z + (b.z - a.z) * u });
+
+  const out = [];
+  let seg = 1; // knots 索引：目前落在 [knots[seg], knots[seg+1]]
+  const tEnd = points[n - 1].t;
+  for (let t = points[0].t; t < tEnd - 1e-9; t += stepSec) {
+    while (seg < knots.length - 3 && knots[seg + 1].t <= t) seg++;
+    const p0 = knots[seg - 1], p1 = knots[seg], p2 = knots[seg + 1], p3 = knots[seg + 2];
+    const d10 = (p1.t - p0.t) || 1e-9, d21 = (p2.t - p1.t) || 1e-9, d32 = (p3.t - p2.t) || 1e-9;
+    const d20 = (p2.t - p0.t) || 1e-9, d31 = (p3.t - p1.t) || 1e-9;
+    const A1 = lerp2(p0, p1, (t - p0.t) / d10, t);
+    const A2 = lerp2(p1, p2, (t - p1.t) / d21, t);
+    const A3 = lerp2(p2, p3, (t - p2.t) / d32, t);
+    const B1 = lerp2(A1, A2, (t - p0.t) / d20, t);
+    const B2 = lerp2(A2, A3, (t - p1.t) / d31, t);
+    out.push(lerp2(B1, B2, (t - p1.t) / d21, t));
+  }
+  out.push({ ...points[n - 1] });
+  return out;
+}
+
 // 追蹤器在碰撞前 ~0.5s 會因 bbox 重疊+平滑而「凍結」（test1 實測：位移回推 <1 km/h，
 // 同時段資料 speed_kmh 欄位 14–21 km/h）。凍結尾若不切除，速度剖面尾端被污染成近 0，
 // 模擬會呈現「滑行到定點停著等撞」的假象。

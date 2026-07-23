@@ -116,3 +116,80 @@ test('extendPoints: 沿末向直線外插、等速、標記證據終點', () => 
   assert.ok(Math.abs(tail.x) < 1e-9 && Math.abs(tail.z - (10 + 10)) < 1e-9, '沿 +Z 外插 10 m');
   assert.ok(Math.abs((tail.t - pts.at(-1).t) - 2) < 1e-6, '5 m/s 走 10 m 應費時 2 s');
 });
+
+// ── splineResample ────────────────────────────────────────────────────────────
+import { splineResample } from '../path.js';
+
+test('splineResample: 通過每個原始節點（插值而非逼近）', () => {
+  const pts = [{t:0,x:0,z:0},{t:1,x:1,z:2},{t:2,x:3,z:2.5},{t:3,x:4,z:4}];
+  const rs = splineResample(pts, { stepSec: 0.05 });
+  for (const k of pts) {
+    const near = rs.reduce((best, p) => Math.abs(p.t - k.t) < Math.abs(best.t - k.t) ? p : best);
+    assert.ok(Math.hypot(near.x - k.x, near.z - k.z) < 0.03, `節點 t=${k.t} 應被通過`);
+  }
+  assert.deepEqual([rs.at(-1).x, rs.at(-1).z], [4, 4], '終點精確保留');
+});
+
+test('splineResample: 折線轉角的 heading 跳動被抹平', () => {
+  // 直角折線：+Z 然後 +X
+  const pts = [];
+  for (let i = 0; i <= 10; i++) pts.push({ t: i * 0.1, x: 0, z: i * 0.5 });
+  for (let i = 1; i <= 10; i++) pts.push({ t: 1 + i * 0.1, x: i * 0.5, z: 5 });
+  const maxTurn = arr => {
+    const path = buildPath(arr);
+    let prev = null, worst = 0;
+    for (let s = 0.1; s < path.length; s += 0.1) {
+      const h = sampleAt(path, s).heading;
+      if (prev != null) {
+        let d = Math.abs(h - prev); if (d > Math.PI) d = 2 * Math.PI - d;
+        if (d > worst) worst = d;
+      }
+      prev = h;
+    }
+    return worst;
+  };
+  const before = maxTurn(pts);
+  const after = maxTurn(splineResample(pts, { stepSec: 1 / 60 }));
+  // 90° 直角是極端情形：總轉角不變（幾何事實），樣條的貢獻是把它攤開成連續彎。
+  // 實測 90°→約 56°；真實軌跡的殘餘轉角在個位數度，攤開效果比例更高。
+  assert.ok(after < before * 0.7, `單步最大轉角應明顯下降：${(before*180/Math.PI).toFixed(1)}° → ${(after*180/Math.PI).toFixed(1)}°`);
+});
+
+test('splineResample: t 單調遞增、取樣密度正確', () => {
+  const pts = Array.from({ length: 20 }, (_, i) => ({ t: i * 0.1, x: Math.sin(i * 0.4), z: i * 0.3 }));
+  const rs = splineResample(pts, { stepSec: 1 / 60 });
+  for (let i = 1; i < rs.length; i++) assert.ok(rs[i].t > rs[i - 1].t);
+  assert.ok(rs.length > pts.length * 2, '取樣應比原始點密');
+});
+
+// ── decimatePoints ────────────────────────────────────────────────────────────
+import { decimatePoints } from '../path.js';
+
+test('decimatePoints: 依 knotSec 抽稀、首尾必留', () => {
+  const pts = Array.from({ length: 101 }, (_, i) => ({ t: i * 0.02, x: i, z: 0 })); // 2s @50Hz
+  const d = decimatePoints(pts, { knotSec: 0.25 });
+  assert.ok(d.length >= 8 && d.length <= 11, `2s/0.25s 應約 9 個錨點，實得 ${d.length}`);
+  assert.deepEqual([d[0].t, d[0].x], [0, 0]);
+  assert.deepEqual([d.at(-1).t, d.at(-1).x], [2, 100]);
+  for (let i = 1; i < d.length; i++) assert.ok(d[i].t > d[i - 1].t);
+});
+
+test('decimate+spline: 帶噪節點的 heading worst-case 大幅下降', () => {
+  // 平滑後仍殘留的節點噪音（幅度 0.03m）
+  const pts = Array.from({ length: 100 }, (_, i) => ({
+    t: i * 0.02, x: 0.03 * Math.sin(i * 2.1), z: i * 0.06,  // ~3 m/s 直行 + 殘噪
+  }));
+  const worst = arr => {
+    const path = buildPath(arr);
+    let prev = null, w = 0;
+    for (let s = 0.1; s < path.length; s += 0.1) {
+      const h = sampleAt(path, s).heading;
+      if (prev != null) { let d = Math.abs(h - prev); if (d > Math.PI) d = 2 * Math.PI - d; if (d > w) w = d; }
+      prev = h;
+    }
+    return w;
+  };
+  const direct = worst(splineResample(pts));
+  const viaKnots = worst(splineResample(decimatePoints(pts, { knotSec: 0.25 })));
+  assert.ok(viaKnots < direct * 0.5, `抽稀後應大減：${(direct*180/Math.PI).toFixed(1)}° → ${(viaKnots*180/Math.PI).toFixed(1)}°`);
+});

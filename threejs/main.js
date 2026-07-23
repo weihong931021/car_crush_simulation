@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { loadScene, sceneCodeFromURL, modelFor } from './scene-loader.js';
 import { buildPaths } from './lib/waypoints.js';
-import { buildPath, speedProfile, smoothPoints, trimFrozenTail, extendPoints } from './lib/path.js';
+import { buildPath, speedProfile, smoothPoints, trimFrozenTail, decimatePoints, splineResample, extendPoints } from './lib/path.js';
 import { simulate } from './lib/simulate.js';
 import { solveSafeSpeeds } from './lib/solve.js';
 import { getState } from './lib/interp.js';
@@ -693,7 +693,9 @@ async function boot() {
     // （碰前 bbox 重疊假象）→ 沿末向外插（證據終點後車輛才不會被 advance 夾住原地罰站）。
     // 順序固定，見 lib/path.js 註解。startT = 該車第一筆證據時刻（晚出現的車不得提早出發）。
     const shifted = p.points.map(q => ({ x: q.x, z: q.z, t: q.t - t0 }));
-    const { points } = extendPoints(trimFrozenTail(smoothPoints(shifted, { anchorEnd: false })));
+    // 平滑（去噪）→ 切凍結尾 → 抽稀錨點（殘噪失去依附）→ 樣條（C¹ 連續曲線）→ 外插
+    const { points } = extendPoints(splineResample(decimatePoints(
+      trimFrozenTail(smoothPoints(shifted, { anchorEnd: false })))));
     return {
       vehicle: p.vehicle,
       simVehicle: {
