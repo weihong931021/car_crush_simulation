@@ -101,6 +101,21 @@
       color: #88aaff;
       font-weight: bold;
     }
+    #ref-speeds { font-size: 11px; color: #999; }
+    #verdict { font-size: 12px; line-height: 1.5; min-height: 18px; }
+    #btn-solve {
+      background: #445a44;
+      color: #dfe;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: monospace;
+      align-self: flex-start;
+    }
+    #btn-solve:hover { background: #567056; }
+    #solve-result { font-size: 12px; line-height: 1.7; color: #cfe8cf; }
 
     @media (max-width: 640px) {
       #speed-panel { top: auto; bottom: 150px; left: 8px; right: 8px; min-width: 0; }
@@ -131,17 +146,21 @@
   </div>
 
   <div id="speed-panel">
-    <div class="panel-title">碰撞前車速調整</div>
+    <div class="panel-title">碰撞前車速調整（實錄剖面倍率）</div>
     <div class="speed-row">
       <span id="collider0-name">—</span>
-      <input id="collider0-speed" type="range" min="5" max="80" step="1" value="20" />
-      <span id="collider0-speed-label" class="speed-val">20 km/h</span>
+      <input id="collider0-speed" type="range" min="0.25" max="2.5" step="0.05" value="1" />
+      <span id="collider0-speed-label" class="speed-val">×1.00</span>
     </div>
     <div class="speed-row">
       <span id="collider1-name">—</span>
-      <input id="collider1-speed" type="range" min="5" max="80" step="1" value="40" />
-      <span id="collider1-speed-label" class="speed-val">40 km/h</span>
+      <input id="collider1-speed" type="range" min="0.25" max="2.5" step="0.05" value="1" />
+      <span id="collider1-speed-label" class="speed-val">×1.00</span>
     </div>
+    <div id="ref-speeds"></div>
+    <div id="verdict"></div>
+    <button id="btn-solve">⚖ 求安全車速</button>
+    <div id="solve-result"></div>
   </div>
 
   <div id="legend"></div>

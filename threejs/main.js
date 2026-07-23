@@ -2,15 +2,21 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { loadScene, sceneCodeFromURL, modelFor } from './scene-loader.js';
-import { buildPreWaypoints } from './lib/waypoints.js';
-import { applyCollision } from './lib/physics.js';
+import { buildPaths } from './lib/waypoints.js';
+import { buildPath, speedProfile } from './lib/path.js';
+import { simulate } from './lib/simulate.js';
+import { solveSafeSpeeds } from './lib/solve.js';
 import { getState } from './lib/interp.js';
 
 // ── 全域狀態 ──────────────────────────────────────────────────────────────────
-let CFG = null;                 // scene.json
-let FRAME_DURATION = 1 / 30;
-let colliderStates = [];        // [{vehicle, preWps, wps, pivot, speedKmh}]
-let extraStates = [];           // [{track_id, cls, wps, pivot}]
+const DISPLAY_FPS = 30;                 // 顯示幀率（模擬輸出重採樣到這個節奏）
+const FRAME_DURATION = 1 / DISPLAY_FPS;
+let CFG = null;                         // scene.json
+let colliderStates = [];                // [{vehicle, simVehicle, refSpeedKmh, k, wps, pivot}]
+let extraStates = [];                   // [{track_id, cls, wps, pivot}]
+let simResult = null;                   // 最近一次 simulate() 的結果
+let animStart = 1;
+let animEnd = 2;                        // 每次 resimulate() 後更新
 let pathLines = [];
 let currentFrame = 1;
 let isPlaying = false;
@@ -35,8 +41,6 @@ controls.minDistance = 3;
 controls.maxDistance = 200;
 
 // ── Debug hooks（scratchpad smoke test 依賴這些存在）─────────────────────────
-// scene/camera/controls/renderer 建立後不再變動，指定一次即可，不必每幀重指。
-// colliderStates 會在 boot() 內被整包換掉，那裡完成後會再指一次。
 window.__scene = scene;
 window.__camera = camera;
 window.__controls = controls;
@@ -68,6 +72,83 @@ function ensureCrashRing() {
   crashRing.visible = false;
   scene.add(crashRing);
   return crashRing;
+}
+
+// ── 最近間距標註（未碰撞時）──────────────────────────────────────────────────
+let gapLine = null;
+let gapLabel = null;
+let gapMid = new THREE.Vector3();
+function ensureGapMarker() {
+  if (gapLine) return;
+  gapLine = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+    new THREE.LineDashedMaterial({ color: 0x7fdc9a, dashSize: 0.3, gapSize: 0.15 }));
+  gapLine.visible = false;
+  scene.add(gapLine);
+  gapLabel = document.createElement('div');
+  Object.assign(gapLabel.style, {
+    position: 'fixed', color: '#7fdc9a', background: 'rgba(0,0,0,0.65)',
+    padding: '2px 8px', borderRadius: '4px', fontSize: '12px',
+    fontFamily: 'monospace', pointerEvents: 'none', zIndex: '11', display: 'none',
+    transform: 'translate(-50%, -140%)',
+  });
+  document.body.appendChild(gapLabel);
+}
+
+// 車輛 OBB 沿任意方向的半投影長（畫間距線時把中心連線縮到車身表面附近用；
+// 端點是近似值，標示的距離數字本身用 simulate() 回報的真實 OBB 最短距離）。
+function halfExtentAlong(vehicle, heading, dirX, dirZ) {
+  const fx = Math.sin(heading), fz = Math.cos(heading);
+  const px = fz, pz = -fx;
+  return (vehicle.length_m / 2) * Math.abs(dirX * fx + dirZ * fz)
+       + (vehicle.width_m / 2) * Math.abs(dirX * px + dirZ * pz);
+}
+
+function sampleAtTime(samples, t) {
+  if (t <= samples[0].t) return samples[0];
+  for (let i = 1; i < samples.length; i++) {
+    if (samples[i].t >= t) {
+      const a = samples[i - 1], b = samples[i];
+      const u = (t - a.t) / ((b.t - a.t) || 1e-9);
+      return { t, x: a.x + (b.x - a.x) * u, z: a.z + (b.z - a.z) * u, heading: b.heading };
+    }
+  }
+  return samples[samples.length - 1];
+}
+
+function updateGapMarker(frame) {
+  ensureGapMarker();
+  const show = simResult && !simResult.collided && Number.isFinite(simResult.minGapTime);
+  const gapFrame = show ? Math.round(simResult.minGapTime * DISPLAY_FPS) + 1 : -1;
+  if (!show || Math.abs(frame - gapFrame) > 6) {
+    gapLine.visible = false;
+    gapLabel.style.display = 'none';
+    return;
+  }
+  const [A, B] = colliderStates;
+  const p0 = sampleAtTime(simResult.tracks[0].samples, simResult.minGapTime);
+  const p1 = sampleAtTime(simResult.tracks[1].samples, simResult.minGapTime);
+  let dx = p1.x - p0.x, dz = p1.z - p0.z;
+  const len = Math.hypot(dx, dz) || 1;
+  dx /= len; dz /= len;
+  const h0 = halfExtentAlong(A.vehicle, p0.heading, dx, dz);
+  const h1 = halfExtentAlong(B.vehicle, p1.heading, dx, dz);
+  const e0 = new THREE.Vector3(p0.x + dx * h0, 0.4, p0.z + dz * h0);
+  const e1 = new THREE.Vector3(p1.x - dx * h1, 0.4, p1.z - dz * h1);
+  gapLine.geometry.setFromPoints([e0, e1]);
+  gapLine.computeLineDistances();
+  gapLine.visible = true;
+  gapMid.copy(e0).add(e1).multiplyScalar(0.5);
+  gapLabel.textContent = `${simResult.minGap.toFixed(2)} m`;
+  gapLabel.style.display = 'block';
+  positionGapLabel();
+}
+
+function positionGapLabel() {
+  if (!gapLabel || gapLabel.style.display === 'none') return;
+  const v = gapMid.clone().project(camera);
+  gapLabel.style.left = `${(v.x * 0.5 + 0.5) * window.innerWidth}px`;
+  gapLabel.style.top = `${(-v.y * 0.5 + 0.5) * window.innerHeight}px`;
 }
 
 // ── 錯誤 overlay（scene 包壞掉時唯一的出口）─────────────────────────────────
@@ -232,27 +313,96 @@ function boxFallback(cls, lengthM, widthM) {
   return pivot;
 }
 
-// ── 物理重算（車速滑桿觸發）──────────────────────────────────────────────────
-function rebuildPhysics() {
+// ── 模擬 → 播放資料 ──────────────────────────────────────────────────────────
+
+// 參考車速（僅供顯示）：碰撞前最後 2 秒的位移平均速率（km/h）。
+// 注意：test1 實測顯示追蹤器位置在碰撞前 0.5s 幾乎凍結（bbox 重疊+平滑假象，
+// 位移回推 <1 km/h，而資料的 speed_kmh 欄位同時段為 14–21 km/h），絕對速度不可靠。
+// 因此滑桿語意是「倍率 k」直接縮放實錄剖面（誠實），km/h 只是約略參考值。
+function referenceSpeedKmh(points) {
+  const tEnd = points[points.length - 1].t;
+  const from = tEnd - 2.0;
+  let dist = 0, tSpan = 0, prev = null;
+  for (const p of points) {
+    if (prev && p.t >= from) {
+      dist += Math.hypot(p.x - prev.x, p.z - prev.z);
+      tSpan += p.t - prev.t;
+    }
+    prev = p;
+  }
+  if (tSpan < 1e-6) return 0;
+  return (dist / tSpan) * 3.6;
+}
+
+// simulate() 的樣本（秒）→ 播放 waypoint [frame, x, z, heading]，30fps 重採樣。
+// cutT：會議決定 demo 呈現到碰撞瞬間為止——碰撞時把時間軸截在 impactTime，
+// 撞後的滑行/旋轉樣本不進播放資料（物理照算，只是不播；未碰撞時 cutT=Infinity 播全程）。
+function samplesToWps(samples, cutT) {
+  const map = new Map();
+  for (const s of samples) {
+    if (s.t > cutT) break;
+    const f = Math.round(s.t * DISPLAY_FPS) + 1;
+    map.set(f, [f, s.x, s.z, s.heading]);
+  }
+  const wps = [...map.values()].sort((a, b) => a[0] - b[0]);
+  if (wps.length < 2) {
+    throw new Error(`模擬輸出在截斷點前樣本不足（${wps.length} 點）`);
+  }
+  return wps;
+}
+
+function velocityBeforeTime(samples, t) {
+  // 取「跨越 t 之前」的兩個樣本做差分（避開衝量後的樣本，拿到碰前速度）
+  let idx = samples.findIndex(s => s.t >= t);
+  if (idx < 0) idx = samples.length - 1;
+  const b = samples[Math.max(1, idx - 1)];
+  const a = samples[Math.max(0, idx - 2)];
+  const dt = (b.t - a.t) || 1e-9;
+  return { vx: (b.x - a.x) / dt, vz: (b.z - a.z) / dt };
+}
+
+function updateVerdict() {
+  const el = document.getElementById('verdict');
+  if (!el || !simResult) return;
+  if (simResult.collided) {
+    const va = velocityBeforeTime(simResult.tracks[0].samples, simResult.impactTime);
+    const vb = velocityBeforeTime(simResult.tracks[1].samples, simResult.impactTime);
+    const rel = Math.hypot(va.vx - vb.vx, va.vz - vb.vz) * 3.6;
+    el.textContent = `碰撞於 t=${simResult.impactTime.toFixed(2)} s · 相對速度 ${rel.toFixed(1)} km/h（播放至碰撞瞬間）`;
+    el.style.color = '#ff9999';
+  } else {
+    el.textContent = `未發生碰撞 · 最近距離 ${simResult.minGap.toFixed(2)} m（t = ${simResult.minGapTime.toFixed(2)} s）`;
+    el.style.color = '#7fdc9a';
+  }
+}
+
+// 車速滑桿觸發：重新前向模擬（一次 ≈0.25ms，input 事件內同步跑沒問題）
+function resimulate() {
   const [A, B] = colliderStates;
-  if (!A?.preWps || !B?.preWps) return;
-  const { aWps, bWps } = applyCollision({
-    aPre: A.preWps, bPre: B.preWps,
-    a: { ...A.vehicle, speed_kmh: A.speedKmh },
-    b: { ...B.vehicle, speed_kmh: B.speedKmh },
-    restitution: CFG.collision.restitution, mu: CFG.collision.friction,
-    animCollision: CFG.frames.anim_collision, animEnd: CFG.frames.anim_end,
-    fps: CFG.frames.fps ?? 30,
+  if (!A?.simVehicle || !B?.simVehicle) return;
+  simResult = simulate({
+    vehicles: [A.simVehicle, B.simVehicle],
+    kA: A.k, kB: B.k,
   });
-  A.wps = aWps;
-  B.wps = bWps;
-  rebuildPaths();
+  const cutT = simResult.collided ? simResult.impactTime : Infinity;
+  colliderStates.forEach((st, i) => {
+    st.wps = samplesToWps(simResult.tracks[i].samples, cutT);
+  });
+  animEnd = Math.max(animStart + 1, ...colliderStates.map(st => st.wps[st.wps.length - 1][0]));
+  if (slider) {
+    slider.min = animStart;
+    slider.max = animEnd;
+  }
+  if (currentFrame > animEnd) currentFrame = animEnd;
+  window.__simResult = simResult;   // debug hook 與最新結果同步
+  rebuildPathLines();
+  updateVerdict();
   updateScene(currentFrame);
 }
 
 const PATH_COLORS = [0xffcc33, 0xff8833];
 
-function rebuildPaths() {
+function rebuildPathLines() {
   for (const l of pathLines) {
     scene.remove(l);
     l.geometry.dispose();
@@ -293,21 +443,24 @@ function updateScene(frame) {
   if (frameDisplay) frameDisplay.textContent = `${frame}`;
   if (slider) slider.value = `${frame}`;
 
-  const cf = CFG?.frames.anim_collision;
-  if (cf != null && colliderStates[0]?.wps) {
+  // 碰撞紅環：時間軸截在碰撞瞬間，紅環在最後幾幀淡入、停在接觸點
+  if (simResult?.collided && simResult.contact) {
     const ring = ensureCrashRing();
-    const dt = frame - cf;
-    if (dt >= 0 && dt <= 8) {
-      const s0 = getState(colliderStates[0].wps, cf);
-      const s1 = getState(colliderStates[1].wps, cf);
-      ring.position.set((s0.x + s1.x) / 2, 0.06, (s0.z + s1.z) / 2);
-      ring.scale.setScalar(1 + dt * 0.28);
-      ring.material.opacity = 0.75 * (1 - dt / 8);
+    const impactFrame = Math.round(simResult.impactTime * DISPLAY_FPS) + 1;
+    const dt = impactFrame - frame;           // 距碰撞尚餘幾幀（frame ≤ impactFrame）
+    if (dt <= 6) {
+      ring.position.set(simResult.contact.x, 0.06, simResult.contact.z);
+      ring.scale.setScalar(1 + Math.max(0, dt) * 0.15);
+      ring.material.opacity = 0.85 * (1 - Math.max(0, dt) / 7);
       ring.visible = true;
     } else {
       ring.visible = false;
     }
+  } else if (crashRing) {
+    crashRing.visible = false;
   }
+
+  updateGapMarker(frame);
 }
 
 // ── UI ───────────────────────────────────────────────────────────────────────
@@ -323,7 +476,7 @@ function setPlayLabel() {
   if (playBtn) playBtn.textContent = isPlaying ? '⏸ 暫停' : '▶ 播放';
 }
 function gotoFrame(f) {
-  currentFrame = Math.max(CFG.frames.anim_start, Math.min(CFG.frames.anim_end, Math.round(f)));
+  currentFrame = Math.max(animStart, Math.min(animEnd, Math.round(f)));
   updateScene(currentFrame);
 }
 function setTopDownView() {
@@ -344,7 +497,7 @@ function setPersp45View() {
 }
 
 if (playBtn) playBtn.addEventListener('click', () => { isPlaying = !isPlaying; accumulator = 0; setPlayLabel(); });
-if (resetBtn) resetBtn.addEventListener('click', () => { isPlaying = false; accumulator = 0; setPlayLabel(); gotoFrame(CFG.frames.anim_start); });
+if (resetBtn) resetBtn.addEventListener('click', () => { isPlaying = false; accumulator = 0; setPlayLabel(); gotoFrame(animStart); });
 if (topdownBtn) topdownBtn.addEventListener('click', setTopDownView);
 if (perspBtn) perspBtn.addEventListener('click', setPersp45View);
 if (chaseBtn) chaseBtn.addEventListener('click', () => { chaseMode = true; camera.up.set(0, 1, 0); });
@@ -353,6 +506,8 @@ if (slider) slider.addEventListener('input', () => { isPlaying = false; setPlayL
 const speedSelect = document.getElementById('playback-speed');
 if (speedSelect) speedSelect.addEventListener('change', () => { playbackSpeed = Number(speedSelect.value); });
 
+// 滑桿 = 速度剖面倍率 k（×0.25–×2.5），保留實錄的加減速特徵、只整體快慢。
+// 不用絕對 km/h 當滑桿語意——位置回推的絕對速度在碰撞近端不可靠（見 referenceSpeedKmh 註解）。
 function bindSpeedSlider(idx) {
   const input = document.getElementById(`collider${idx}-speed`);
   const label = document.getElementById(`collider${idx}-speed-label`);
@@ -360,12 +515,51 @@ function bindSpeedSlider(idx) {
   const st = colliderStates[idx];
   if (!input || !st) return;
   if (nameEl) nameEl.textContent = st.vehicle.label ?? st.vehicle.class;
-  input.value = st.speedKmh;
-  if (label) label.textContent = `${st.speedKmh} km/h`;
+  input.min = '0.25';
+  input.max = '2.5';
+  input.step = '0.05';
+  input.value = '1';
+  if (label) label.textContent = '×1.00';
   input.addEventListener('input', () => {
-    st.speedKmh = Number(input.value);
-    if (label) label.textContent = `${st.speedKmh} km/h`;
-    rebuildPhysics();
+    st.k = Number(input.value);
+    if (label) label.textContent = `×${st.k.toFixed(2)}`;
+    resimulate();
+  });
+}
+
+function fillRefSpeeds() {
+  const el = document.getElementById('ref-speeds');
+  if (!el) return;
+  el.textContent = '碰前 2s 位移均速（參考）：' + colliderStates
+    .map(st => `${st.vehicle.label ?? st.vehicle.class} ${st.refSpeedKmh.toFixed(1)} km/h`)
+    .join('、');
+}
+
+function formatSolveLine(st, r) {
+  const name = st.vehicle.label ?? st.vehicle.class;
+  const ref = st.refSpeedKmh;
+  if (!r.actualCollides) return `${name}：目前設定下已不會碰撞`;
+  const parts = [];
+  if (r.slowerK != null) parts.push(`×≤${r.slowerK.toFixed(2)}（≈${(r.slowerK * ref).toFixed(1)} km/h）`);
+  if (r.fasterK != null) parts.push(`×≥${r.fasterK.toFixed(2)}（≈${(r.fasterK * ref).toFixed(1)} km/h）`);
+  if (!parts.length) return `${name}：${r.note}`;
+  return `${name} ${parts.join(' 或 ')} 可避開`;
+}
+
+const solveBtn = document.getElementById('btn-solve');
+if (solveBtn) {
+  solveBtn.addEventListener('click', () => {
+    const el = document.getElementById('solve-result');
+    if (!el || colliderStates.length < 2) return;
+    const vehicles = [colliderStates[0].simVehicle, colliderStates[1].simVehicle];
+    // 對兩台各自求解；另一台固定在其目前滑桿設定（otherK）。
+    // 搜尋範圍對齊滑桿（×0.25–×2.5），steps 按比例加密維持 Δk 解析度。
+    const lines = colliderStates.map((st, i) =>
+      formatSolveLine(st, solveSafeSpeeds({
+        vehicles, which: i, otherK: colliderStates[1 - i].k,
+        kMin: 0.25, kMax: 2.5, steps: 68,
+      })));
+    el.innerHTML = lines.map(t => `<div>${t}</div>`).join('');
   });
 }
 
@@ -400,8 +594,8 @@ function animate(ts) {
     while (accumulator >= FRAME_DURATION) {
       accumulator -= FRAME_DURATION;
       currentFrame++;
-      if (currentFrame > CFG.frames.anim_end) {
-        currentFrame = CFG.frames.anim_end;
+      if (currentFrame > animEnd) {
+        currentFrame = animEnd;
         isPlaying = false;
         setPlayLabel();
         break;
@@ -416,8 +610,38 @@ function animate(ts) {
     camera.position.lerp(p.position.clone().add(back), 0.08);
     controls.target.lerp(p.position.clone().setY(1), 0.15);
   }
+  positionGapLabel();       // 相機移動時標籤要跟著投影位置
   controls.update();
   renderer.render(scene, camera);
+}
+
+// ── extras（背景車）────────────────────────────────────────────────────────────
+// collider 時間軸改為真實秒數後，extras 必須用同一個時鐘，否則背景車與主車完全對不上
+// 時間（舊的 1–89 壓縮幀映射已棄用）。fps 解析邏輯與 lib/waypoints.js 的
+// resolveTrajectoryFps 一致：trajectory.meta.fps 優先，缺失回退 cfg.frames.fps ?? 30。
+function buildExtrasRealtime(trajectory, cfg, fps, t0) {
+  if (cfg.extras !== 'auto') return [];
+  const [offX, offZ] = cfg.origin_offset_m;
+  const colliderIds = new Set(cfg.vehicles.filter(v => v.role === 'collider').map(v => v.track_id));
+  const byId = new Map();
+  for (const frame of trajectory.frames) {
+    for (const obj of frame.objects) {
+      if (!obj.position_m || colliderIds.has(obj.tracked_id)) continue;
+      if (!byId.has(obj.tracked_id)) {
+        byId.set(obj.tracked_id, { track_id: obj.tracked_id, cls: obj.class, wps: [] });
+      }
+      const f = Math.round((frame.frame_index / fps - t0) * DISPLAY_FPS) + 1;
+      byId.get(obj.tracked_id).wps.push([f, obj.position_m[0] - offX, obj.position_m[1] - offZ, null]);
+    }
+  }
+  const dedup = wps => {
+    const m = new Map();
+    for (const w of wps) m.set(w[0], w);
+    return [...m.values()].sort((a, b) => a[0] - b[0]);
+  };
+  return [...byId.values()]
+    .map(e => ({ ...e, wps: dedup(e.wps) }))
+    .filter(e => e.wps.length >= 2);
 }
 
 // ── Bootstrap ────────────────────────────────────────────────────────────────
@@ -434,9 +658,8 @@ async function boot() {
   const code = sceneCodeFromURL();
   const { cfg, trajectory, registry, basePath } = await loadScene(code);
   CFG = cfg;
-  FRAME_DURATION = 1 / (cfg.frames.fps ?? 30);
   document.title = cfg.name ?? cfg.code;
-  currentFrame = cfg.frames.anim_start;
+  currentFrame = animStart;
 
   // 地面
   const satTex = new THREE.TextureLoader().load(basePath + cfg.ground.image);
@@ -462,21 +685,39 @@ async function boot() {
     setPersp45View();
   }
 
-  // waypoints + 物理
-  const { colliders, extras } = buildPreWaypoints(trajectory, cfg);
-  colliderStates = colliders.map(c => ({
-    vehicle: c.vehicle, preWps: c.wps, wps: null, pivot: null,
-    speedKmh: c.vehicle.default_speed_kmh ?? 30,
-  }));
-  rebuildPhysics();
+  // 路徑 + 速度剖面（真實秒數；時間原點平移到最早的 collider 資料點）
+  const rawPaths = buildPaths(trajectory, cfg);
+  const t0 = Math.min(...rawPaths.map(p => p.points[0].t));
+  colliderStates = rawPaths.map(p => {
+    const points = p.points.map(q => ({ x: q.x, z: q.z, t: q.t - t0 }));
+    return {
+      vehicle: p.vehicle,
+      simVehicle: {
+        path: buildPath(points),
+        profile: speedProfile(points),
+        length_m: p.vehicle.length_m,
+        width_m: p.vehicle.width_m,
+        mass_kg: p.vehicle.mass_kg,
+      },
+      refSpeedKmh: referenceSpeedKmh(points),
+      k: 1,
+      wps: null,
+      pivot: null,
+    };
+  });
 
-  if (slider) {
-    slider.min = cfg.frames.anim_start;
-    slider.max = cfg.frames.anim_end;
-    slider.step = 1;
-  }
+  // extras 與 collider 用同一個時鐘（見 buildExtrasRealtime 註解）
+  const metaFps = trajectory.meta?.fps;
+  const fps = (typeof metaFps === 'number' && Number.isFinite(metaFps) && metaFps > 0)
+    ? metaFps : (cfg.frames.fps ?? 30);
+  const extras = buildExtrasRealtime(trajectory, cfg, fps, t0);
+
+  resimulate();
+
+  if (slider) slider.step = 1;
   bindSpeedSlider(0);
   bindSpeedSlider(1);
+  fillRefSpeeds();
   fillLegend();
 
   // 模型（collider 用 registry；extras 用 class fallback，失敗補 box）
@@ -518,9 +759,10 @@ async function boot() {
   // colliderStates 在上面被整包換掉了（不是原地 mutate），debug hook 要重指才會反映新陣列
   window.__colliders = colliderStates;
   window.__extras = extraStates;
+  window.__simResult = simResult;
 
   loadDiv.remove();
-  gotoFrame(cfg.frames.anim_start);
+  gotoFrame(animStart);
 }
 
 setPlayLabel();
