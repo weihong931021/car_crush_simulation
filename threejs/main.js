@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { loadScene, sceneCodeFromURL, modelFor } from './scene-loader.js';
 import { buildPaths } from './lib/waypoints.js';
 import { buildPath, speedProfile, smoothPoints, trimFrozenTail, decimatePoints, splineResample, limitAcceleration, extendPoints } from './lib/path.js';
@@ -51,25 +50,15 @@ window.__extras = extraStates;
 
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-// 質感關鍵一：ACES 色調映射——高光滾降自然、整體對比像攝影而非「數位平板」。
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.15;
 scene.background = new THREE.Color(0x87a5c4);
 scene.fog = new THREE.Fog(0x87a5c4, 90, 260);
 
-// 質感關鍵二：環境光照（IBL）。RoomEnvironment 程序生成、零外部資源（離線/CSP 安全），
-// 經 PMREM 預濾波後給所有 PBR 材質提供反射——車漆的層次感主要來自這裡。
-const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-pmrem.dispose();
-
-scene.add(new THREE.HemisphereLight(0xcfe5ff, 0x8a8f7a, 0.7));
-const sun = new THREE.DirectionalLight(0xfff2dd, 2.6);
+scene.add(new THREE.HemisphereLight(0xcfe5ff, 0x8a8f7a, 1.1));
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const sun = new THREE.DirectionalLight(0xfff2dd, 2.4);
 sun.position.set(20, 35, 12);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.bias = -0.0001;      // 消陰影痤瘡
-sun.shadow.normalBias = 0.02;   // 斜面漏光
 scene.add(sun);
 
 // ── 碰撞瞬間標記 ─────────────────────────────────────────────────────────────
@@ -702,10 +691,9 @@ async function boot() {
   const satTex = new THREE.TextureLoader().load(basePath + cfg.ground.image);
   satTex.colorSpace = THREE.SRGBColorSpace;
   satTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
-  // PBR 地面：與車輛同一套光照模型（Lambert 不吃 scene.environment，會顯得「貼上去的」）
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(cfg.ground.size_m[0], cfg.ground.size_m[1]),
-    new THREE.MeshStandardMaterial({ map: satTex, roughness: 0.96, metalness: 0 }));
+    new THREE.MeshLambertMaterial({ map: satTex }));
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.02;
   ground.receiveShadow = true;
