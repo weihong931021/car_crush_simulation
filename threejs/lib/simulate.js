@@ -47,11 +47,14 @@ function contactVelocity(vx, vz, omega, rx, rz) {
 // 回傳 bracket 內較晚那一端（仍重疊）的完整狀態，視為撞擊時刻。
 // 兩車此時都還在路徑上，任意時刻的狀態可由 advance(s0, t-t0) 這個純函數直接算出，
 // 不需要真的逐步微推進即可二分查找。
-function bisectImpact(vehA, kA, sA0, vehB, kB, sB0, t0, t1, dt) {
+function bisectImpact(vehA, kA, sA0, vehB, kB, sB0, t0, t1, dt, startTA, startTB) {
   function stateAt(tt) {
-    const dtA = tt - t0;
+    // 車輛在自己的 startT 之前不會移動——bracket 可能跨過其中一台的出現時刻，
+    // 前進時間要從 max(t0, startT) 起算（sA0/sB0 即該時刻的位置）。
+    const dtA = Math.max(0, tt - Math.max(t0, startTA));
+    const dtB = Math.max(0, tt - Math.max(t0, startTB));
     const sA = advance(vehA.path, vehA.profile, sA0, dtA, kA);
-    const sB = advance(vehB.path, vehB.profile, sB0, dtA, kB);
+    const sB = advance(vehB.path, vehB.profile, sB0, dtB, kB);
     const pA = sampleAt(vehA.path, sA);
     const pB = sampleAt(vehB.path, sB);
     const ov = overlap(obbAt(vehA, pA.x, pA.z, pA.heading), obbAt(vehB, pB.x, pB.z, pB.heading));
@@ -209,7 +212,10 @@ function finalizeCollision({ vehA, kA, vehB, kB, dt, maxTime, impactTime,
   return contact;
 }
 
-// vehicles: 兩台，各含 {path, profile, length_m, width_m, mass_kg}
+// vehicles: 兩台，各含 {path, profile, length_m, width_m, mass_kg, startT?}
+// startT：該車第一筆證據的時刻（秒）。在 startT 之前車輛尚未進場——不前進、不參與
+// 碰撞偵測與最近間距、不輸出樣本。忽略它會讓晚出現的車提早出發、先騎到衝突點
+// 「停著等撞」（test1 機車實際 t≈6.3s 才進場，未修正前被提早了 6.3 秒）。
 export function simulate({ vehicles, kA, kB, dt = 1 / 60, maxTime = 12 }) {
   const [vehA, vehB] = vehicles;
 
@@ -217,18 +223,22 @@ export function simulate({ vehicles, kA, kB, dt = 1 / 60, maxTime = 12 }) {
     throw new Error('simulate: 車輛路徑長度為 0，無法模擬（軌跡至少需要兩個不同的點）');
   }
 
+  const startTA = vehA.startT ?? 0;
+  const startTB = vehB.startT ?? 0;
+  const bothPresent = (tt) => tt >= startTA - 1e-12 && tt >= startTB - 1e-12;
+
   const p0A = sampleAt(vehA.path, 0);
   const p0B = sampleAt(vehB.path, 0);
-  const samplesA = [{ t: 0, x: p0A.x, z: p0A.z, heading: p0A.heading }];
-  const samplesB = [{ t: 0, x: p0B.x, z: p0B.z, heading: p0B.heading }];
+  const samplesA = [{ t: startTA, x: p0A.x, z: p0A.z, heading: p0A.heading }];
+  const samplesB = [{ t: startTB, x: p0B.x, z: p0B.z, heading: p0B.heading }];
 
   let sA = 0, sB = 0, t = 0;
   let collided = false, impactTime = null, contact = null;
   let minGap = Infinity, minGapTime = 0;
 
-  const obbA0 = obbAt(vehA, p0A.x, p0A.z, p0A.heading);
-  const obbB0 = obbAt(vehB, p0B.x, p0B.z, p0B.heading);
-  const ov0 = overlap(obbA0, obbB0);
+  const ov0 = bothPresent(0)
+    ? overlap(obbAt(vehA, p0A.x, p0A.z, p0A.heading), obbAt(vehB, p0B.x, p0B.z, p0B.heading))
+    : null;
 
   if (ov0) {
     // 起點就重疊（極端情境）：沒有「前一步無重疊」可供二分，撞擊時刻直接視為 0。
@@ -237,42 +247,51 @@ export function simulate({ vehicles, kA, kB, dt = 1 / 60, maxTime = 12 }) {
     contact = finalizeCollision({ vehA, kA, vehB, kB, dt, maxTime, impactTime,
       pA: p0A, pB: p0B, ovResult: ov0, sA: 0, sB: 0, samplesA, samplesB });
   } else {
-    minGap = gap(obbA0, obbB0);
-    minGapTime = 0;
+    if (bothPresent(0)) {
+      minGap = gap(obbAt(vehA, p0A.x, p0A.z, p0A.heading), obbAt(vehB, p0B.x, p0B.z, p0B.heading));
+      minGapTime = 0;
+    }
 
-    // Phase 1：兩車都在路徑上，逐步前進、每步偵測重疊。
+    // Phase 1：兩車各自在（出現後）沿路徑前進，兩車都在場時每步偵測重疊。
     while (t < maxTime) {
       const dtStep = Math.min(dt, maxTime - t);
       if (dtStep <= 1e-12) break;
       const tNext = t + dtStep;
 
-      const sANext = advance(vehA.path, vehA.profile, sA, dtStep, kA);
-      const sBNext = advance(vehB.path, vehB.profile, sB, dtStep, kB);
+      // 各車只在自己的 startT 之後前進（跨過出現時刻的那一步只前進超出的部分）
+      const dtA = Math.max(0, tNext - Math.max(t, startTA));
+      const dtB = Math.max(0, tNext - Math.max(t, startTB));
+      const sANext = dtA > 0 ? advance(vehA.path, vehA.profile, sA, dtA, kA) : sA;
+      const sBNext = dtB > 0 ? advance(vehB.path, vehB.profile, sB, dtB, kB) : sB;
       const pANext = sampleAt(vehA.path, sANext);
       const pBNext = sampleAt(vehB.path, sBNext);
-      const obbANext = obbAt(vehA, pANext.x, pANext.z, pANext.heading);
-      const obbBNext = obbAt(vehB, pBNext.x, pBNext.z, pBNext.heading);
-      const ov = overlap(obbANext, obbBNext);
 
-      if (ov) {
-        const impact = bisectImpact(vehA, kA, sA, vehB, kB, sB, t, tNext, dt);
-        collided = true;
-        impactTime = impact.t;
-        contact = finalizeCollision({ vehA, kA, vehB, kB, dt, maxTime, impactTime,
-          pA: impact.pA, pB: impact.pB, ovResult: impact.ov, sA: impact.sA, sB: impact.sB,
-          samplesA, samplesB });
-        break;
+      if (bothPresent(tNext)) {
+        const obbANext = obbAt(vehA, pANext.x, pANext.z, pANext.heading);
+        const obbBNext = obbAt(vehB, pBNext.x, pBNext.z, pBNext.heading);
+        const ov = overlap(obbANext, obbBNext);
+
+        if (ov) {
+          const impact = bisectImpact(vehA, kA, sA, vehB, kB, sB, t, tNext, dt, startTA, startTB);
+          collided = true;
+          impactTime = impact.t;
+          contact = finalizeCollision({ vehA, kA, vehB, kB, dt, maxTime, impactTime,
+            pA: impact.pA, pB: impact.pB, ovResult: impact.ov, sA: impact.sA, sB: impact.sB,
+            samplesA, samplesB });
+          break;
+        }
+
+        const g = gap(obbANext, obbBNext);
+        if (g < minGap) { minGap = g; minGapTime = tNext; }
       }
 
-      const g = gap(obbANext, obbBNext);
-      if (g < minGap) { minGap = g; minGapTime = tNext; }
-
       sA = sANext; sB = sBNext; t = tNext;
-      samplesA.push({ t, x: pANext.x, z: pANext.z, heading: pANext.heading });
-      samplesB.push({ t, x: pBNext.x, z: pBNext.z, heading: pBNext.heading });
+      if (tNext >= startTA) samplesA.push({ t, x: pANext.x, z: pANext.z, heading: pANext.heading });
+      if (tNext >= startTB) samplesB.push({ t, x: pBNext.x, z: pBNext.z, heading: pBNext.heading });
 
-      // 兩車都已走完路徑（advance 會把 s 夾在 path.length）→ 之後不會再變化，提早結束。
-      if (sA >= vehA.path.length - 1e-9 && sB >= vehB.path.length - 1e-9) break;
+      // 兩車都已出現且走完路徑（advance 會把 s 夾在 path.length）→ 之後不會再變化，提早結束。
+      if (bothPresent(tNext)
+        && sA >= vehA.path.length - 1e-9 && sB >= vehB.path.length - 1e-9) break;
     }
   }
 

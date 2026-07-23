@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { loadScene, sceneCodeFromURL, modelFor } from './scene-loader.js';
 import { buildPaths } from './lib/waypoints.js';
-import { buildPath, speedProfile } from './lib/path.js';
+import { buildPath, speedProfile, smoothPoints, trimFrozenTail, extendPoints } from './lib/path.js';
 import { simulate } from './lib/simulate.js';
 import { solveSafeSpeeds } from './lib/solve.js';
 import { getState } from './lib/interp.js';
@@ -689,7 +689,11 @@ async function boot() {
   const rawPaths = buildPaths(trajectory, cfg);
   const t0 = Math.min(...rawPaths.map(p => p.points[0].t));
   colliderStates = rawPaths.map(p => {
-    const points = p.points.map(q => ({ x: q.x, z: q.z, t: q.t - t0 }));
+    // 資料淨化管線：平滑（消偵測抖動；不錨定尾端，讓 trim 能判斷）→ 切凍結尾
+    // （碰前 bbox 重疊假象）→ 沿末向外插（證據終點後車輛才不會被 advance 夾住原地罰站）。
+    // 順序固定，見 lib/path.js 註解。startT = 該車第一筆證據時刻（晚出現的車不得提早出發）。
+    const shifted = p.points.map(q => ({ x: q.x, z: q.z, t: q.t - t0 }));
+    const { points } = extendPoints(trimFrozenTail(smoothPoints(shifted, { anchorEnd: false })));
     return {
       vehicle: p.vehicle,
       simVehicle: {
@@ -698,6 +702,7 @@ async function boot() {
         length_m: p.vehicle.length_m,
         width_m: p.vehicle.width_m,
         mass_kg: p.vehicle.mass_kg,
+        startT: points[0].t,
       },
       refSpeedKmh: referenceSpeedKmh(points),
       k: 1,

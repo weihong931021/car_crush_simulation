@@ -8,6 +8,87 @@
 
 const MIN_SPEED_MPS = 0.01; // speedAt 的下限；0 會讓 advance 卡死（ds 永遠是 0）。
 
+// 偵測點位的逐幀噪音會讓車輛位置與 heading（取自相鄰線段切線）明顯抖動，
+// 也會虛增路徑長（鋸齒比直線長）進而污染速度剖面。播放器與單頁 demo 都應在
+// buildPath/speedProfile 之前先過這一步。
+//
+// 時間窗置中移動平均：每點取 [t-window/2, t+window/2] 內所有點的平均位置。
+// 端點錨定不動——首點是出現位置、末點決定碰撞幾何（衝量方向、接觸點），
+// 被平均往內拉會直接改變碰撞結果。
+// anchorEnd=false 用於「後面接 trimFrozenTail」的管線：凍結尾本來就是要被切掉的假象，
+// 錨定它反而在平滑尾端與原始末點之間製造一個瞬間跳躍（假高速），讓 trim 的視窗均速
+// 誤判「已回到可信速度」而提前停手。
+export function smoothPoints(points, { windowSec = 0.5, anchorEnd = true } = {}) {
+  if (!points || points.length < 3) return points ? points.map(p => ({ ...p })) : [];
+  const half = windowSec / 2;
+  const out = new Array(points.length);
+  let lo = 0, hi = 0;
+  for (let i = 0; i < points.length; i++) {
+    const t = points[i].t;
+    while (points[lo].t < t - half) lo++;
+    while (hi < points.length - 1 && points[hi + 1].t <= t + half) hi++;
+    let sx = 0, sz = 0, n = 0;
+    for (let j = lo; j <= hi; j++) { sx += points[j].x; sz += points[j].z; n++; }
+    out[i] = { t, x: sx / n, z: sz / n };
+  }
+  out[0] = { ...points[0] };
+  if (anchorEnd) out[out.length - 1] = { ...points[points.length - 1] };
+  return out;
+}
+
+// 追蹤器在碰撞前 ~0.5s 會因 bbox 重疊+平滑而「凍結」（test1 實測：位移回推 <1 km/h，
+// 同時段資料 speed_kmh 欄位 14–21 km/h）。凍結尾若不切除，速度剖面尾端被污染成近 0，
+// 模擬會呈現「滑行到定點停著等撞」的假象。
+// 從尾端往回走，丟棄「windowSec 視窗均速 < minSpeedMps」的點；最多切 maxTrimSec
+// （凍結假象很短，切更多就會吃掉真實的減速行為）。只切尾不切頭——頭部靜止是真實
+// 行為（路口等待），尾部靜止緊貼碰撞才是假象。
+// windowSec 刻意取短（0.15s）：視窗一跨到凍結前的快段，均速就會被拉高而提前停止修剪，
+// 殘留最多一個視窗長的凍結尾。代價是對原始噪音敏感——管線約定「先 smoothPoints 再 trim」。
+export function trimFrozenTail(points, { minSpeedMps = 0.5, windowSec = 0.15, maxTrimSec = 1.2 } = {}) {
+  if (!points || points.length < 3) return points ? points.map(p => ({ ...p })) : [];
+  const tEnd = points[points.length - 1].t;
+  let cut = points.length; // 保留 [0, cut)
+  for (let i = points.length - 1; i >= 2; i--) {
+    if (tEnd - points[i].t > maxTrimSec) break;
+    // i 往前 windowSec 的視窗均速
+    let j = i;
+    while (j > 0 && points[i].t - points[j - 1].t <= windowSec) j--;
+    const dt = points[i].t - points[j].t;
+    if (dt <= 1e-9) break;
+    let d = 0;
+    for (let m = j + 1; m <= i; m++) d += Math.hypot(points[m].x - points[m - 1].x, points[m].z - points[m - 1].z);
+    if (d / dt >= minSpeedMps) break; // 已回到可信速度，停止修剪
+    cut = i;
+  }
+  const kept = points.slice(0, Math.max(cut, 2));
+  return kept.map(p => ({ ...p }));
+}
+
+// 證據路徑在最後一個偵測點就斷了：模擬中車輛走到終點會被 advance() 夾住原地停住
+// （視覺上像「停著等撞」或「停在路口不走了」）。沿「終點前 headingWindowSec 的平均方向」
+// 直線外插 extendM 公尺、以終端速度等速前進——這段是外插不是證據，呼叫端顯示時應與
+// 實錄段區分（demo 以虛線表示）。回傳 {points, evidenceEndIndex}。
+export function extendPoints(points, { extendM = 10, headingWindowSec = 0.5, minTailSpeedMps = 0.5 } = {}) {
+  if (!points || points.length < 2) {
+    return { points: points ? points.map(p => ({ ...p })) : [], evidenceEndIndex: (points?.length ?? 1) - 1 };
+  }
+  const out = points.map(p => ({ ...p }));
+  const last = out[out.length - 1];
+  // 終點方向與速度：取終點往回 headingWindowSec 的位移
+  let j = out.length - 1;
+  while (j > 0 && last.t - out[j - 1].t <= headingWindowSec) j--;
+  const ref = out[j];
+  const dx = last.x - ref.x, dz = last.z - ref.z;
+  const dist = Math.hypot(dx, dz);
+  const dt = last.t - ref.t;
+  if (dist < 1e-6 || dt <= 1e-9) return { points: out, evidenceEndIndex: out.length - 1 }; // 無方向可依，不外插
+  const v = Math.max(minTailSpeedMps, dist / dt);
+  const ux = dx / dist, uz = dz / dist;
+  const evidenceEndIndex = out.length - 1;
+  out.push({ t: last.t + extendM / v, x: last.x + ux * extendM, z: last.z + uz * extendM });
+  return { points: out, evidenceEndIndex };
+}
+
 // points: [{x, z, t}]（依時間先後排列）→ {pts: [{x, z, s}], length}
 // s 為從第一點開始的累積弧長。相鄰重複位置（零長度線段）會被丟棄以避免後續除以零，
 // 但一定保留第一點與最後一點。

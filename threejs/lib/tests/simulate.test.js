@@ -82,3 +82,36 @@ test('輸出樣本時間單調遞增且無 NaN', () => {
     assert.ok(trk.samples.every(s => Number.isFinite(s.x) && Number.isFinite(s.z) && Number.isFinite(s.heading)));
   }
 });
+
+// ── 出現時間（startT）─────────────────────────────────────────────────────────
+test('startT: 晚出現的車不會提早出發到衝突點等撞', () => {
+  // 機車 6 秒後才出現；若忽略 startT，它 t=0 就出發、2 秒內走完路徑並停在路口，
+  // 汽車撞上的是「提早出發後停著等」的幽靈；正確行為是它 6 秒後才進場。
+  const moto = veh(motoPts, 1.85, 0.7, 200);
+  moto.startT = 6.0;
+  const r = simulate({ vehicles: [veh(carPts, 4.69, 1.85, 1500), moto], kA: 1, kB: 1 });
+  // 機車樣本必須從 startT 才開始
+  assert.ok(Math.abs(r.tracks[1].samples[0].t - 6.0) < 1e-9);
+  // t < 6 期間不得有機車樣本
+  assert.ok(r.tracks[1].samples.every(s => s.t >= 6.0 - 1e-9));
+});
+
+test('startT: 出現前不參與碰撞偵測與最近間距', () => {
+  // 汽車路徑 4 秒內通過原點；機車 6 秒後才出現在原點附近的路徑上 → 不可能碰撞，
+  // 且 minGapTime 不得早於機車出現時刻。
+  const fastCar = Array.from({ length: 41 }, (_, i) => ({ x: 0, z: -20 + i, t: i * 0.1 }));
+  const lateMoto = veh(motoPts, 1.85, 0.7, 200);
+  lateMoto.startT = 6.0;
+  const r = simulate({ vehicles: [veh(fastCar, 4.69, 1.85, 1500), lateMoto], kA: 1, kB: 1 });
+  assert.equal(r.collided, false);
+  assert.ok(r.minGapTime >= 6.0 - 1e-9, `minGapTime=${r.minGapTime} 不得早於出現時刻`);
+});
+
+test('startT: 兩車皆從 0 開始時行為與未指定完全相同', () => {
+  const a = simulate({ vehicles: [veh(carPts, 4.69, 1.85, 1500), veh(motoPts, 1.85, 0.7, 200)], kA: 1, kB: 1 });
+  const withZero = [veh(carPts, 4.69, 1.85, 1500), veh(motoPts, 1.85, 0.7, 200)];
+  withZero[0].startT = 0; withZero[1].startT = 0;
+  const b = simulate({ vehicles: withZero, kA: 1, kB: 1 });
+  assert.equal(a.collided, b.collided);
+  assert.equal(a.impactTime, b.impactTime);
+});

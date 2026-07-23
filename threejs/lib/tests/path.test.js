@@ -52,3 +52,67 @@ test('轉彎路徑: heading 隨切線變化', () => {
   assert.ok(Math.abs(h0) < 1e-6, '起段朝 +Z');
   assert.ok(Math.abs(h1 - Math.PI / 2) < 0.2, '末段朝 +X');
 });
+
+// ── 資料淨化管線：smoothPoints / trimFrozenTail / extendPoints ────────────────
+import { smoothPoints, trimFrozenTail, extendPoints } from '../path.js';
+
+function noisyLine(n = 60, dt = 0.02, noise = 0.12) {
+  // 沿 +Z 等速 5 m/s，x 疊上確定性鋸齒噪音（模擬偵測抖動）
+  return Array.from({ length: n }, (_, i) => ({
+    t: i * dt,
+    x: noise * ((i % 2) * 2 - 1),
+    z: i * dt * 5,
+  }));
+}
+
+test('smoothPoints: 側向噪音大幅降低、首尾錨定、t 不變', () => {
+  const raw = noisyLine();
+  const sm = smoothPoints(raw, { windowSec: 0.3 });
+  const dev = pts => pts.slice(1, -1).reduce((s, p) => s + p.x * p.x, 0) / (pts.length - 2);
+  assert.ok(dev(sm) < dev(raw) * 0.05, `噪音應大減：${dev(raw)} → ${dev(sm)}`);
+  assert.deepEqual([sm[0].x, sm[0].z], [raw[0].x, raw[0].z]);
+  assert.deepEqual([sm.at(-1).x, sm.at(-1).z], [raw.at(-1).x, raw.at(-1).z]);
+  assert.ok(sm.every((p, i) => p.t === raw[i].t));
+});
+
+test('smoothPoints: 平滑後 heading 抖動下降', () => {
+  const raw = noisyLine();
+  const headings = pts => {
+    const path = buildPath(pts);
+    const hs = [];
+    for (let s = 0.3; s < path.length; s += 0.3) hs.push(sampleAt(path, s).heading);
+    let sum = 0;
+    for (let i = 1; i < hs.length; i++) sum += Math.abs(hs[i] - hs[i - 1]);
+    return sum / (hs.length - 1);
+  };
+  assert.ok(headings(smoothPoints(raw, { windowSec: 0.3 })) < headings(raw) * 0.3);
+});
+
+test('trimFrozenTail: 切掉凍結尾、保留可信段；乾淨資料不動', () => {
+  // 前 2s 等速 5 m/s，最後 0.6s 凍結（幾乎不動）
+  const pts = [];
+  for (let t = 0; t <= 2.0; t += 0.05) pts.push({ t, x: 0, z: t * 5 });
+  const zEnd = pts.at(-1).z;
+  for (let t = 2.05; t <= 2.6; t += 0.05) pts.push({ t, x: 0, z: zEnd + (t - 2.0) * 0.05 });
+  const trimmed = trimFrozenTail(pts);
+  assert.ok(trimmed.at(-1).t <= 2.05 + 1e-9, `凍結尾應被切除，實際尾端 t=${trimmed.at(-1).t}`);
+  const clean = Array.from({ length: 40 }, (_, i) => ({ t: i * 0.05, x: 0, z: i * 0.25 }));
+  assert.equal(trimFrozenTail(clean).length, clean.length, '乾淨資料不得被修剪');
+});
+
+test('trimFrozenTail: 最多切 maxTrimSec，不吃掉真實減速', () => {
+  // 全程慢速（0.3 m/s < 門檻）——若無上限會被切到剩 2 點
+  const slow = Array.from({ length: 100 }, (_, i) => ({ t: i * 0.05, x: 0, z: i * 0.015 }));
+  const trimmed = trimFrozenTail(slow, { maxTrimSec: 1.2 });
+  assert.ok(slow.at(-1).t - trimmed.at(-1).t <= 1.2 + 0.05 + 1e-9);
+});
+
+test('extendPoints: 沿末向直線外插、等速、標記證據終點', () => {
+  const pts = Array.from({ length: 21 }, (_, i) => ({ t: i * 0.1, x: 0, z: i * 0.5 })); // +Z 5 m/s
+  const { points: ext, evidenceEndIndex } = extendPoints(pts, { extendM: 10 });
+  assert.equal(evidenceEndIndex, 20);
+  assert.equal(ext.length, 22);
+  const tail = ext.at(-1);
+  assert.ok(Math.abs(tail.x) < 1e-9 && Math.abs(tail.z - (10 + 10)) < 1e-9, '沿 +Z 外插 10 m');
+  assert.ok(Math.abs((tail.t - pts.at(-1).t) - 2) < 1e-6, '5 m/s 走 10 m 應費時 2 s');
+});

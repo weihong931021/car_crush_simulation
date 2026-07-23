@@ -23,7 +23,9 @@ scenes/<code>/（scene.json + ground.png + trajectory.json）
 **<https://claude.ai/code/artifact/1fec3a43-8ccf-4bbb-bcaa-55ac1e9f044f>**（私人連結，可從頁面分享）
 
 - test1 實錄軌跡 + `threejs/lib/` 純物理模組（path/obb/simulate/solve）直接打包成單一 HTML
-  （489KB 含衛星底圖），2D 俯視 canvas 渲染，無 three.js 相依、離線可用
+  （~500KB 含衛星底圖），2D 俯視 canvas 渲染，無 three.js 相依、離線可用
+- 軌跡經淨化管線：時間窗平滑（heading 抖動 32°→1.7°/步）→ 切除碰前凍結尾 → 證據終點
+  沿末向外插（畫面虛線標示）；各車依實際出現時刻進場（`simulate` 的 `startT`）
 - 功能與完整版一致：車速倍率滑桿（即時重模擬）、碰撞/未碰撞結論、求安全車速區間、
   最近間距標註；依會議決定呈現至碰撞瞬間為止
 - 產生方式：`scenes/test1/` 資料 + lib bundle 組頁（來源：session scratchpad，
