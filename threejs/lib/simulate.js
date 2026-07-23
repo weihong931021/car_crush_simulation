@@ -96,7 +96,7 @@ function bisectImpact(vehA, kA, sA0, vehB, kB, sB0, t0, t1, dt, startTA, startTB
   }
 
   let lo = t0, hi = t1;
-  let hiState = stateAt(hi); // 呼叫端保證 t1 時重疊
+  let hiState = stateAt(hi); // 呼叫端在 t1 偵測到重疊
   while (hi - lo > dt / BISECT_DT_DIVISOR) {
     const mid = (lo + hi) / 2;
     const midState = stateAt(mid);
@@ -108,6 +108,17 @@ function bisectImpact(vehA, kA, sA0, vehB, kB, sB0, t0, t1, dt, startTA, startTB
     }
   }
   return { t: hi, ...hiState };
+}
+
+// bisectImpact 的 stateAt 對「轉向率上限後的 heading」只能用單步近似（外層是逐步積分），
+// 兩者離散化不同——極端幾何下外層判定重疊、bisect 在 t1 卻算不出重疊（ov=null），
+// 下游 finalizeCollision 會拿 null 解參考而炸掉。此包裝函式在該情況退回外層偵測到的
+// 狀態（撞擊時刻取 t1、重疊資訊用外層的），保證回傳的 ov 永不為 null。
+function bisectImpactSafe(vehA, kA, sA0, vehB, kB, sB0, t0, t1, dt, startTA, startTB,
+                          hA0, hB0, outer) {
+  const impact = bisectImpact(vehA, kA, sA0, vehB, kB, sB0, t0, t1, dt, startTA, startTB, hA0, hB0);
+  if (impact.ov) return impact;
+  return { t: t1, sA: outer.sA, sB: outer.sB, pA: outer.pA, pB: outer.pB, ov: outer.ov };
 }
 
 // 碰撞後自由體：逐步（每個 dt）套用摩擦減速＋自旋比例衰減（frictionStep，沿用 physics.js
@@ -311,7 +322,8 @@ export function simulate({ vehicles, kA, kB, dt = 1 / 60, maxTime = 12 }) {
         const ov = overlap(obbANext, obbBNext);
 
         if (ov) {
-          const impact = bisectImpact(vehA, kA, sA, vehB, kB, sB, t, tNext, dt, startTA, startTB, hA, hB);
+          const impact = bisectImpactSafe(vehA, kA, sA, vehB, kB, sB, t, tNext, dt, startTA, startTB, hA, hB,
+            { sA: sANext, sB: sBNext, pA: { ...pANext, heading: hA }, pB: { ...pBNext, heading: hB }, ov });
           collided = true;
           impactTime = impact.t;
           contact = finalizeCollision({ vehA, kA, vehB, kB, dt, maxTime, impactTime,

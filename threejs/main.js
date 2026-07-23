@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { loadScene, sceneCodeFromURL, modelFor } from './scene-loader.js';
 import { buildPaths } from './lib/waypoints.js';
-import { buildPath, speedProfile, smoothPoints, trimFrozenTail, decimatePoints, splineResample, limitAcceleration, extendPoints } from './lib/path.js';
+import { buildPath, speedProfile, smoothPoints, trimFrozenTail, rdpSimplify, refineAnchors, projectToPath, limitAcceleration, extendPoints } from './lib/path.js';
 import { simulate } from './lib/simulate.js';
 import { solveSafeSpeeds } from './lib/solve.js';
 import { getState } from './lib/interp.js';
@@ -729,9 +729,12 @@ async function boot() {
     // （碰前 bbox 重疊假象）→ 沿末向外插（證據終點後車輛才不會被 advance 夾住原地罰站）。
     // 順序固定，見 lib/path.js 註解。startT = 該車第一筆證據時刻（晚出現的車不得提早出發）。
     const shifted = p.points.map(q => ({ x: q.x, z: q.z, t: q.t - t0 }));
-    // 平滑（去噪）→ 切凍結尾 → 抽稀錨點 → 樣條（C¹ 曲線）→ 縱向慣性（壓假加速尖峰）→ 外插
-    const { points } = extendPoints(limitAcceleration(splineResample(decimatePoints(
-      trimFrozenTail(smoothPoints(shifted, { anchorEnd: false }))))));
+    // 平滑（去噪）→ 切凍結尾 → RDP 錨點（直線化的幾何中心線）→ 投影（每點保留自己的 t，
+    // 橫向蛇行貼回中心線；幾何與時序分離，速度剖面＝證據不被粗化）→ 縱向慣性 → 外插
+    const trimmed = trimFrozenTail(smoothPoints(shifted, { anchorEnd: false }));
+    // RDP 錨點 → 轉角細分（頂點角 ≤12°）→ 投影：折線幾何、逐點時序（證據）保留
+    const anchors = refineAnchors(trimmed, rdpSimplify(trimmed));
+    const { points } = extendPoints(limitAcceleration(projectToPath(trimmed, anchors)));
     return {
       vehicle: p.vehicle,
       simVehicle: {

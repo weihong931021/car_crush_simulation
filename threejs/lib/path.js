@@ -67,6 +67,118 @@ export function decimatePoints(points, { knotSec = 0.25, minDistM = 0.08 } = {})
   return out;
 }
 
+// RDP（Ramer–Douglas–Peucker）直線化：垂距小於 epsilonM 的點一律收掉。
+// 幾何意義：資料在雜訊尺度內「本來就是直線」的路段塌成單一直線段（畫出來筆直），
+// 真實轉彎因垂距超過門檻而保留錨點——比加大平滑窗聰明：不會把真彎磨圓。
+// epsilonM 必須取「平滑後殘噪」的尺度（實測 ~3-5cm → 預設 0.06m）。曾試 0.15m：
+// test1 兩台車的真實彎道 sagitta 只有 ~0.2m，整條被攤成直線，碰撞結論跟著漂移
+// （fasterK 消失、minGap 0.66→0.20m）——直線化只能吃掉雜訊，不能吃掉證據。
+// t 保留在倖存錨點上；尾端與 decimatePoints 同款 tail-pop，避免樣條末端擺尾。
+export function rdpSimplify(points, { epsilonM = 0.06, minTailDistM = 0.08 } = {}) {
+  if (!points || points.length < 3) return points ? points.map(p => ({ ...p })) : [];
+  const keep = new Array(points.length).fill(false);
+  keep[0] = keep[points.length - 1] = true;
+  const stack = [[0, points.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    if (b - a < 2) continue;
+    const ax = points[a].x, az = points[a].z;
+    const dx = points[b].x - ax, dz = points[b].z - az;
+    const len = Math.hypot(dx, dz);
+    let worst = -1, worstD = 0;
+    for (let i = a + 1; i < b; i++) {
+      // 點到弦線的垂距（弦退化成點時取點距）
+      const d = len < 1e-9
+        ? Math.hypot(points[i].x - ax, points[i].z - az)
+        : Math.abs((points[i].x - ax) * dz - (points[i].z - az) * dx) / len;
+      if (d > worstD) { worstD = d; worst = i; }
+    }
+    if (worstD > epsilonM) {
+      keep[worst] = true;
+      stack.push([a, worst], [worst, b]);
+    }
+  }
+  const out = points.filter((_, i) => keep[i]).map(p => ({ ...p }));
+  const finalPt = out[out.length - 1];
+  while (out.length > 2
+    && Math.hypot(out[out.length - 2].x - finalPt.x, out[out.length - 2].z - finalPt.z) < minTailDistM) {
+    out.splice(out.length - 2, 1);
+  }
+  return out;
+}
+
+// 轉角細分：RDP 會把整段真實彎道擠進單一頂點（角度可達數十度），與「線段間只能有
+// 些微角度變動」的呈現要求衝突。對頂點角 > maxTurnDeg 的錨點，從原始資料在較長的
+// 鄰段中點插入新錨點，反覆直到每個頂點角都 ≤ 門檻（或無法再細分）。
+// 直線段不受影響（頂點角本來就 ~0），彎道被攤成多段小角度直線——正是要的樣子。
+export function refineAnchors(points, anchors, { maxTurnDeg = 12, maxIter = 40 } = {}) {
+  if (!points || points.length < 3 || !anchors || anchors.length < 3) {
+    return anchors ? anchors.map(a => ({ ...a })) : [];
+  }
+  // 錨點以「原始索引」表示（錨點是 points 的子集合，用 t 對回）
+  const idxByT = new Map(points.map((p, i) => [p.t, i]));
+  let idx = anchors.map(a => idxByT.get(a.t)).filter(i => i !== undefined);
+  const turnAt = (a, b, c) => {
+    const h1 = Math.atan2(points[b].x - points[a].x, points[b].z - points[a].z);
+    const h2 = Math.atan2(points[c].x - points[b].x, points[c].z - points[b].z);
+    let d = Math.abs(h2 - h1);
+    if (d > Math.PI) d = 2 * Math.PI - d;
+    return d * 180 / Math.PI;
+  };
+  for (let iter = 0; iter < maxIter; iter++) {
+    let worst = -1, worstDeg = maxTurnDeg;
+    for (let k = 1; k < idx.length - 1; k++) {
+      const d = turnAt(idx[k - 1], idx[k], idx[k + 1]);
+      if (d > worstDeg) { worstDeg = d; worst = k; }
+    }
+    if (worst < 0) break;
+    // 在較長（原始點數較多）的鄰段中點插入新錨點
+    const leftSpan = idx[worst] - idx[worst - 1];
+    const rightSpan = idx[worst + 1] - idx[worst];
+    const [a, b] = leftSpan >= rightSpan ? [idx[worst - 1], idx[worst]] : [idx[worst], idx[worst + 1]];
+    const mid = (a + b) >> 1;
+    if (mid === a || mid === b || idx.includes(mid)) break;   // 無法再細分
+    idx.push(mid);
+    idx.sort((x, y) => x - y);
+  }
+  return idx.map(i => ({ ...points[i] }));
+}
+
+// 幾何/時序分離的直線化：把每個（平滑後的）樣本點投影到「RDP 錨點樣條」上。
+// - 幾何：橫向蛇行貼回直線化中心線（畫出來筆直、真彎保留——錨點來自 rdpSimplify）
+// - 時序：每點保留自己的 t，速度剖面（證據）不被粗化。
+//   ↑ 純 RDP 的教訓：只留錨點的 t 會把速度剖面壓成幾段等速，kA=0.6 的 minGap
+//     從 0.66 漂到 1.48m——時序也是證據，動不得。
+// 投影以「沿曲線單調前進」約束（搜尋起點只進不退），避免蛇行點來回黏到同一段。
+// 投影目標＝錨點「折線」而非樣條：RDP 的 ≤ε 幾何偏差保證只對折線成立，稀疏錨點的
+// 樣條會外凸超過 ε（實測讓碰撞時刻漂 0.4s）。直線段正是直線化要的樣子；折線轉角
+// 對車身朝向的影響由 simulate 的轉向率上限自然平滑。
+export function projectToPath(points, anchors) {
+  if (!points || points.length === 0) return [];
+  if (!anchors || anchors.length < 2) return points.map(p => ({ ...p }));
+  const curve = anchors;
+  const out = new Array(points.length);
+  let segStart = 0;   // 單調前進的搜尋起點
+  for (let k = 0; k < points.length; k++) {
+    const p = points[k];
+    let best = Infinity, bx = curve[segStart].x, bz = curve[segStart].z, bi = segStart;
+    for (let i = segStart; i < curve.length - 1; i++) {
+      const a = curve[i], b = curve[i + 1];
+      const dx = b.x - a.x, dz = b.z - a.z;
+      const L2 = dx * dx + dz * dz;
+      const u = L2 > 1e-12
+        ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.z - a.z) * dz) / L2))
+        : 0;
+      const qx = a.x + dx * u, qz = a.z + dz * u;
+      const d = (p.x - qx) * (p.x - qx) + (p.z - qz) * (p.z - qz);
+      if (d < best) { best = d; bx = qx; bz = qz; bi = i; }
+    }
+    segStart = bi;
+    out[k] = { t: p.t, x: bx, z: bz };
+  }
+  return out;
+}
+
 // Catmull-Rom（Barry–Goldman 非均勻節點版）樣條重取樣：以 t 為參數、通過每一個輸入點、
 // 切線連續（C¹）。折線的「每個節點一個小轉角」在此消失——路線視覺平順、heading（取自
 // 相鄰取樣點切線）連續變化不再逐格跳動。放在 smoothPoints（去噪）之後、extendPoints 之前。

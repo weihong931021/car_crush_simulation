@@ -225,3 +225,101 @@ test('limitAcceleration: 本來就可行的等速資料不被改動', () => {
     assert.ok(Math.abs(out[i].t - pts[i].t) < 1e-9, `等速資料 t 不得漂移（第 ${i} 點）`);
   }
 });
+
+// ── rdpSimplify（路徑直線化）─────────────────────────────────────────────────
+import { rdpSimplify } from '../path.js';
+
+test('rdpSimplify: 帶噪直線塌成兩個端點（真正的直線段）', () => {
+  const pts = Array.from({ length: 80 }, (_, i) => ({
+    t: i * 0.05, x: 0.05 * Math.sin(i * 1.7), z: i * 0.1,   // 8m 直行 + 5cm 殘噪
+  }));
+  const out = rdpSimplify(pts, { epsilonM: 0.15 });
+  assert.ok(out.length <= 4, `噪音尺度內的直線應收成極少錨點，實得 ${out.length}`);
+  assert.deepEqual([out[0].t, out.at(-1).z], [0, pts.at(-1).z], '端點精確保留');
+});
+
+test('rdpSimplify: 真實轉角保留（偏差超過門檻的點不會被收掉）', () => {
+  const pts = [];
+  for (let i = 0; i <= 20; i++) pts.push({ t: i * 0.1, x: 0, z: i * 0.4 });       // 直行 8m
+  for (let i = 1; i <= 20; i++) pts.push({ t: 2 + i * 0.1, x: i * 0.4, z: 8 });   // 右轉直行
+  const out = rdpSimplify(pts, { epsilonM: 0.15 });
+  // 轉角點 (0,8) 必須存活
+  assert.ok(out.some(p => Math.hypot(p.x - 0, p.z - 8) < 0.05), '轉角錨點應保留');
+  assert.ok(out.length <= 6, `L 形路徑應約 3 個錨點，實得 ${out.length}`);
+});
+
+test('rdpSimplify: t 單調且為原始子集合', () => {
+  const pts = Array.from({ length: 50 }, (_, i) => ({ t: i * 0.1, x: Math.sin(i * 0.3) * 2, z: i * 0.3 }));
+  const out = rdpSimplify(pts, { epsilonM: 0.1 });
+  for (let i = 1; i < out.length; i++) assert.ok(out[i].t > out[i - 1].t);
+  for (const p of out) assert.ok(pts.some(q => q.t === p.t && q.x === p.x), '錨點必須來自原始點');
+});
+
+// ── projectToPath（幾何/時序分離）────────────────────────────────────────────
+import { projectToPath } from '../path.js';
+
+test('projectToPath: 橫向蛇行貼回中心線、每點 t 與縱向速度保留', () => {
+  const noisy = Array.from({ length: 80 }, (_, i) => ({
+    t: i * 0.05, x: 0.05 * Math.sin(i * 1.7), z: i * 0.1 + 0.02 * Math.sin(i * 0.9),
+  }));
+  // 鏡射真實管線：RDP 的輸入一定是平滑後的資料（殘噪 1-3cm）；
+  // 生噪 5cm 直餵會超過 ε=6cm，每個噪音峰都變錨點（見 rdpSimplify 註解）。
+  const base = smoothPoints(noisy, { anchorEnd: false });
+  const anchors = rdpSimplify(base, { epsilonM: 0.06 });
+  assert.ok(anchors.length <= 5, `平滑後的直線應收成極少錨點，實得 ${anchors.length}`);
+  const proj = projectToPath(base, anchors);
+  assert.equal(proj.length, base.length, '點數不變');
+  proj.forEach((p, i) => assert.equal(p.t, base[i].t, 't 逐點保留'));
+  // 指標＝局部鋸齒度（點對相鄰兩點中點的偏差）：投影後應近乎共線。
+  // 不用絕對 |x|——RDP 錨點含帶噪端點，中心線可微傾，但那不是「蛇行」。
+  const zigzag = pts => {
+    let s = 0;
+    for (let i = 1; i < pts.length - 1; i++) {
+      s += Math.abs(pts[i].x - (pts[i - 1].x + pts[i + 1].x) / 2);
+    }
+    return s / (pts.length - 2);
+  };
+  assert.ok(zigzag(proj) < zigzag(noisy) * 0.1,
+    `鋸齒度應降 90%+：${zigzag(noisy).toFixed(4)} → ${zigzag(proj).toFixed(4)}`);
+  // 縱向速度剖面保留：對應時段的前進距離差異 < 10%
+  const dist = pts => pts.slice(40, 60).reduce((s, p, i, a) => i ? s + Math.hypot(p.x-a[i-1].x, p.z-a[i-1].z) : 0, 0);
+  const d0 = dist(base), d1 = dist(proj);
+  assert.ok(Math.abs(d1 - d0) / d0 < 0.15, `區段里程應相近：${d0.toFixed(3)} vs ${d1.toFixed(3)}`);
+});
+
+test('projectToPath: 沿曲線單調前進（不回頭黏段）', () => {
+  const pts = [];
+  for (let i = 0; i <= 30; i++) pts.push({ t: i * 0.1, x: 0.04 * ((i % 2) * 2 - 1), z: i * 0.3 });
+  const proj = projectToPath(pts, rdpSimplify(pts, { epsilonM: 0.06 }));
+  for (let i = 1; i < proj.length; i++) {
+    assert.ok(proj[i].z >= proj[i - 1].z - 1e-6, `第 ${i} 點沿路徑倒退`);
+  }
+});
+
+// ── refineAnchors（轉角細分）──────────────────────────────────────────────────
+import { refineAnchors } from '../path.js';
+
+test('refineAnchors: 大轉角被攤成多段小角度，直段不受影響', () => {
+  // 90° 急彎（半徑 1.8m——RDP 在 ε=6cm 下弦間轉角 ~28°，必須靠細分攤平）+ 前後直段
+  const pts = [];
+  let t = 0;
+  for (let i = 0; i < 20; i++) { pts.push({ t, x: 0, z: i * 0.5 }); t += 0.1; }
+  for (let i = 1; i <= 30; i++) {
+    const th = i * (Math.PI / 2) / 30;
+    pts.push({ t, x: 1.8 * (1 - Math.cos(th)), z: 9.5 + 1.8 * Math.sin(th) });
+    t += 0.1;
+  }
+  for (let i = 1; i < 20; i++) { pts.push({ t, x: 1.8 + i * 0.5, z: 11.3 }); t += 0.1; }
+  const rough = rdpSimplify(pts, { epsilonM: 0.06 });
+  const refined = refineAnchors(pts, rough, { maxTurnDeg: 12 });
+  assert.ok(refined.length > rough.length, '彎道應被補入錨點');
+  // 每個頂點角 ≤ 門檻（含餘裕）
+  for (let k = 1; k < refined.length - 1; k++) {
+    const h1 = Math.atan2(refined[k].x - refined[k-1].x, refined[k].z - refined[k-1].z);
+    const h2 = Math.atan2(refined[k+1].x - refined[k].x, refined[k+1].z - refined[k].z);
+    let d = Math.abs(h2 - h1); if (d > Math.PI) d = 2*Math.PI - d;
+    assert.ok(d * 180/Math.PI <= 14, `頂點 ${k} 轉角 ${(d*180/Math.PI).toFixed(1)}° 超標`);
+  }
+  // 錨點仍是原始子集合
+  for (const a of refined) assert.ok(pts.some(p => p.t === a.t));
+});
