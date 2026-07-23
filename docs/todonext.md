@@ -1,5 +1,21 @@
 # 下一步
 
+## 碰撞模擬重構（2026-07-21 完成）
+
+> spec：`docs/specs/2026-07-20-collision-simulation-design.md`
+> plan：`docs/plans/2026-07-20-collision-simulation.md`
+
+- [x] 車輛真實尺寸 + GLB scale-to-length（精確投影量測，誤差 0%）
+- [x] `lib/path.js` 弧長參數化與速度剖面
+- [x] `lib/obb.js` SAT 碰撞偵測與最短距離
+- [x] `lib/physics.js` 真實接觸點、完整力臂、切向摩擦、接觸點速度 closing guard
+- [x] `lib/simulate.js` 前向模擬 + 迭代接觸解算
+- [x] `lib/solve.js` 安全速度區間（交會事故是 false→true→false 安全窗，無單一門檻）
+- [x] `main.js` 接線：結論面板、求安全車速、間距標註、呈現至碰撞瞬間（會議決定）
+- [x] 模型前方軸向 Blender 實測修正（car 偏 11°、moto 偏 234°）
+- 遺留：`solve.js` 兩處防禦性死碼（reviewer 確認不可達，留有註解）；碰後彈開播放
+  已實作但依會議決定關閉
+
 ## 主線：場景包驅動的 Three.js Demo（2026-07-20 起）
 
 > 設計文件：`docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md`

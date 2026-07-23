@@ -16,21 +16,21 @@
    播放速度、本地 vendor + 靜態部署
 4. **Blender 退居出版渲染**（第二階段：讀同一份 scene.json 自動搭渲染場景）
 
-### 碰撞物理公式（JS 內實作，每次用到直接查這裡）
+### 碰撞物理（已模組化在 `threejs/lib/`，不要重新推導）
 
-```python
-# 動量守恆（斜角碰撞）
-# m1, m2: 質量(kg), v1x/v1y, v2x/v2y: 碰前速度(m/s), e: 恢復係數(0=完全非彈, 1=完全彈)
-# 正面撞（e≈0.1）: 大部分動能轉形變熱
-v1_after = (m1 * v1 + m2 * v2 - m2 * e * (v1 - v2)) / (m1 + m2)
-v2_after = (m1 * v1 + m2 * v2 + m1 * e * (v1 - v2)) / (m1 + m2)
+spec：`docs/specs/2026-07-20-collision-simulation-design.md`。前向模擬 + OBB SAT 偵測 +
+衝量（含切向摩擦、真實接觸點、完整力臂 `(r×J)_y = r_z·J_x − r_x·J_z`、`I=mL²/12`）。
 
-# 旋轉（斜角碰撞有力臂時）
-# I ≈ 1/12 * m * L²（長方體繞中心）
-# α = torque / I, torque = F_perp * arm_length
-```
+- `path.js` 弧長參數化／速度剖面、`obb.js` SAT、`simulate.js` 迭代接觸解算、
+  `solve.js` 安全速度區間（交會事故無單一門檻，回傳 slowerK/fasterK 區間）
+- 座標約定：`heading = atan2(dx, dz)`、前向 `(sin h, cos h)`、rotation.y 右手系
+- 測試：`node --test threejs/lib/tests/*.test.js`（目錄形式會失敗，必用 glob）
 
-**碰前速度換算**：`velocity_mps` 已在 `filtered_output.json`，直接用。
+**產品決定（2026-07 內部會議）**：demo 呈現到碰撞瞬間為止，碰後彈開不播
+（`main.js` 以 impactTime 截斷；物理照算，要恢復播放拿掉 cutT 即可）。
+
+**資料陷阱**：追蹤器位置在碰撞前 0.5s 會凍結（bbox 重疊+平滑假象），位移回推的
+絕對速度不可靠——UI 滑桿因此用「實錄剖面倍率 ×k」語意，km/h 僅供參考顯示。
 
 ---
 
