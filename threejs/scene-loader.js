@@ -64,5 +64,9 @@ export function modelFor(vehicleOrClass, registry) {
     ? registry.class_fallback[vehicleOrClass]
     : (vehicleOrClass.model ?? registry.class_fallback[vehicleOrClass.class]);
   if (!name) return null;
-  return { file: name, flip: registry.models[name]?.flip ?? Math.PI };
+  return {
+    file: name,
+    flip: registry.models[name]?.flip ?? Math.PI,
+    hide: registry.models[name]?.hide ?? [],   // 模型自帶參考幾何（如地面圓片）的名稱前綴
+  };
 }

@@ -251,7 +251,13 @@ function measureBodyExtentAlongAxis(gltfScene, axisX, axisZ) {
   return max > min ? max - min : 0;
 }
 
-function wrapModel(gltfScene, flip, targetLengthM) {
+function wrapModel(gltfScene, flip, targetLengthM, hideNames = []) {
+  // 模型自帶的參考幾何（碰撞盒、地面圓片）依名稱前綴隱藏——資料來源是 registry.json
+  // 的 hide 清單。用 visible=false 而非拆除，維持模型檔原樣。
+  gltfScene.traverse(child => {
+    if (!child.isMesh) return;
+    if (hideNames.some(p => (child.name || '').startsWith(p))) child.visible = false;
+  });
   const pivot = new THREE.Group();
 
   // 縮放前（此時 gltfScene 的 rotation/position/scale 皆為初始值，矩陣為單位矩陣）：
@@ -767,7 +773,7 @@ async function boot() {
         return;
       }
       try {
-        st.pivot = wrapModel(await loadModel(m.file), m.flip, st.vehicle.length_m);
+        st.pivot = wrapModel(await loadModel(m.file), m.flip, st.vehicle.length_m, m.hide);
       } catch (e) {
         console.error(`模型 ${m.file} 載入失敗，改用色塊`, e);
         st.pivot = boxFallback(st.vehicle.class, st.vehicle.length_m, st.vehicle.width_m);
@@ -785,7 +791,7 @@ async function boot() {
       try {
         // extras 沒有 scene.json vehicle 記錄、沒有經驗證的 length_m，故不傳
         // targetLengthM——wrapModel 視為「刻意不縮放」，直接用 GLB 原始比例。
-        st.pivot = wrapModel(await loadModel(m.file), m.flip);
+        st.pivot = wrapModel(await loadModel(m.file), m.flip, undefined, m.hide);
       } catch (e) {
         console.error(`模型 ${m.file} 載入失敗，改用色塊`, e);
         st.pivot = boxFallback(ex.cls);
