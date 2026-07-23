@@ -471,6 +471,15 @@ const perspBtn = document.getElementById('btn-persp');
 const chaseBtn = document.getElementById('btn-chase');
 
 let chaseMode = false;
+let chaseTarget = 0;   // colliderStates 的索引；跟車鈕再按一次就換下一台
+
+function chaseLabel() {
+  const st = colliderStates[chaseTarget];
+  return `🚗 跟車：${st?.vehicle.label ?? st?.vehicle.class ?? '—'}`;
+}
+function updateChaseBtn() {
+  if (chaseBtn) chaseBtn.textContent = chaseMode ? chaseLabel() : '🚗 跟車';
+}
 
 function setPlayLabel() {
   if (playBtn) playBtn.textContent = isPlaying ? '⏸ 暫停' : '▶ 播放';
@@ -481,6 +490,7 @@ function gotoFrame(f) {
 }
 function setTopDownView() {
   chaseMode = false;
+  updateChaseBtn();
   const h = Math.max(...CFG.ground.size_m) * 1.15;
   camera.position.set(0, h, 0.001);
   camera.up.set(0, 0, -1);
@@ -489,6 +499,7 @@ function setTopDownView() {
 }
 function setPersp45View() {
   chaseMode = false;
+  updateChaseBtn();
   const span = Math.max(...CFG.ground.size_m);
   camera.up.set(0, 1, 0);
   camera.position.set(-span * 0.06, span * 0.57, span * 0.45);
@@ -500,7 +511,17 @@ if (playBtn) playBtn.addEventListener('click', () => { isPlaying = !isPlaying; a
 if (resetBtn) resetBtn.addEventListener('click', () => { isPlaying = false; accumulator = 0; setPlayLabel(); gotoFrame(animStart); });
 if (topdownBtn) topdownBtn.addEventListener('click', setTopDownView);
 if (perspBtn) perspBtn.addEventListener('click', setPersp45View);
-if (chaseBtn) chaseBtn.addEventListener('click', () => { chaseMode = true; camera.up.set(0, 1, 0); });
+if (chaseBtn) {
+  chaseBtn.addEventListener('click', () => {
+    if (chaseMode) {
+      chaseTarget = (chaseTarget + 1) % Math.max(1, colliderStates.length); // 已在跟車 → 換下一台
+    } else {
+      chaseMode = true;
+      camera.up.set(0, 1, 0);
+    }
+    updateChaseBtn();
+  });
+}
 if (slider) slider.addEventListener('input', () => { isPlaying = false; setPlayLabel(); gotoFrame(Number(slider.value)); });
 
 const speedSelect = document.getElementById('playback-speed');
@@ -603,10 +624,15 @@ function animate(ts) {
     }
     updateScene(currentFrame);
   }
-  if (chaseMode && colliderStates[0]?.pivot) {
-    const p = colliderStates[0].pivot;
+  if (chaseMode && colliderStates[chaseTarget]?.pivot) {
+    const st = colliderStates[chaseTarget];
+    const p = st.pivot;
     const h = p.rotation.y;
-    const back = new THREE.Vector3(-Math.sin(h) * 9, 5, -Math.cos(h) * 9);
+    // 跟車距離隨車身尺寸縮放：機車貼近一點、汽車拉遠一點
+    const L = st.vehicle.length_m ?? 4.5;
+    const dist = Math.max(5, L * 2.2);
+    const height = Math.max(2.5, L * 1.1);
+    const back = new THREE.Vector3(-Math.sin(h) * dist, height, -Math.cos(h) * dist);
     camera.position.lerp(p.position.clone().add(back), 0.08);
     controls.target.lerp(p.position.clone().setY(1), 0.15);
   }
