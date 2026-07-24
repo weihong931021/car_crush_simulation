@@ -13,9 +13,26 @@
 - [x] `lib/solve.js` 安全速度區間（交會事故是 false→true→false 安全窗，無單一門檻）
 - [x] `main.js` 接線：結論面板、求安全車速、間距標註、呈現至碰撞瞬間（會議決定）
 - [x] 模型前方軸向 Blender 實測修正（car 偏 11°、moto 偏 234°）
-- [x] 單頁打包 demo（2026-07-21）：lib 純模組 + test1 資料 → 489KB 單一 HTML，
-      發佈於 <https://claude.ai/code/artifact/1fec3a43-8ccf-4bbb-bcaa-55ac1e9f044f>
-      （2D canvas 版；候選收尾工作：把組頁流程固化成 `tools/build_demo_page.py`）
+- [x] 單頁打包 demo：**完整 three.js 3D 版**（~6.4MB 單一 HTML，three 內聯無 importmap、
+      GLB meshopt 壓縮 base64 內嵌、atob 解碼避開 CSP），發佈於
+      <https://claude.ai/code/artifact/1fec3a43-8ccf-4bbb-bcaa-55ac1e9f044f>
+      （候選收尾工作：把組頁流程固化成 `tools/build_demo_page.py`，
+      目前 assembler 在 session scratchpad）
+
+### 續作（2026-07-21〜24，呈現品質與資料淨化）
+
+- [x] 軌跡淨化管線定案：平滑 → 切凍結尾 → RDP 直線化（ε=6cm）→ 轉角細分（≤12°）→
+      投影（幾何/時序分離，速度剖面＝證據不粗化）→ 縱向慣性 → 外插；
+      test1 結果＝每台 2 段直線＋單一 ~7° 微角，impact 8.39s（對照組不動幾何 8.42s、
+      人工標記 ~8.5s；舊抽稀+樣條管線 7.90s 反而漂移）
+- [x] `simulate` 車輛出現時間 `startT`（機車 6.3s 進場，修「提早出發停著等撞」）
+- [x] 運動學約束：轉向率上限 min(0.6v+0.15, a_lat/v)（消「飄」）、
+      縱向加減速上限 a≤3.0/b≤7.5 m/s²（壓假加速尖峰）
+- [x] 跟車鏡頭：可切換目標（再按循環下一台）、距離隨車身尺寸縮放
+- [x] 渲染定調：明亮＋單一主光源＋4096 影子（ACES/IBL 試過否決，revert d917786）
+- [x] 模型清理：MotoCollider 是模型父節點（不可砍子樹）；demo 資產拔 mesh 引用、
+      播放器走 registry.json per-model `hide` 清單（碰撞盒＋地面圓片）
+- [x] `simulate` bisect 潛在 crash 修復（受限 heading 離散化不一致 → bisectImpactSafe 回退）
 - 遺留：`solve.js` 兩處防禦性死碼（reviewer 確認不可達，留有註解）；碰後彈開播放
   已實作但依會議決定關閉
 
@@ -80,6 +97,13 @@
 
 ## 之後
 
+- [ ] 主動煞車（AEB）模擬＋煞車參數自動求解（最晚煞車點／時機×力度 2D 掃描），
+      設計見 `docs/specs/2026-07-20-collision-simulation-design.md`「未來擴充：主動煞車」節
+- [ ] （實驗性）Asset Harvester 3D 資產生成：保留 YOLO／tracker，依 `tracked_id`
+      挑選 1、2、4 張最佳車輛裁圖，在雲端 GPU 生成 `.ply`，評估幾何品質、成本、
+      快取策略與 Three.js Gaussian Splat loader；技術評估見 `docs/PROJECT.md`
+- [ ] 紅綠燈拆成獨立流程：detector 定位燈體／燈桿、classifier 判斷紅黃綠狀態，
+      固定式 3D 燈桿資產只生成或建模一次
 - [ ] 寫 `blender-scene-setup` skill（清場、下載模型、複製 hierarchy 標準流程）
 - [ ] 寫 `blender-vehicle-motion` skill（沿軌跡移動、啟動/停止曲線）
 - [ ] 多車、行人、障礙物複雜場景測試

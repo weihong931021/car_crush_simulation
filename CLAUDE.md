@@ -21,16 +21,36 @@
 spec：`docs/specs/2026-07-20-collision-simulation-design.md`。前向模擬 + OBB SAT 偵測 +
 衝量（含切向摩擦、真實接觸點、完整力臂 `(r×J)_y = r_z·J_x − r_x·J_z`、`I=mL²/12`）。
 
-- `path.js` 弧長參數化／速度剖面、`obb.js` SAT、`simulate.js` 迭代接觸解算、
+- `path.js` 弧長參數化／速度剖面／軌跡淨化、`obb.js` SAT、`simulate.js` 迭代接觸解算、
   `solve.js` 安全速度區間（交會事故無單一門檻，回傳 slowerK/fasterK 區間）
 - 座標約定：`heading = atan2(dx, dz)`、前向 `(sin h, cos h)`、rotation.y 右手系
 - 測試：`node --test threejs/lib/tests/*.test.js`（目錄形式會失敗，必用 glob）
+
+**軌跡淨化管線（順序固定，播放器與單頁 demo 共用）**：
+`smoothPoints(anchorEnd:false)` → `trimFrozenTail` → `rdpSimplify(ε=0.06m)` →
+`refineAnchors(頂點角≤12°)` → `projectToPath` → `limitAcceleration` → `extendPoints`。
+核心原則＝**幾何/時序分離**：RDP 折線只定直線化中心線（呈現要求：兩點連線、線段間僅
+些微角度），每個樣本點投影上去、自己的 t 保留——速度剖面是證據，粗化它會改變碰撞結論
+（教訓：純 RDP 讓 minGap 0.66→1.48m；ε=0.15 會吃掉真彎）。對照組驗證：投影版 impact
+8.39s ≈ 不動幾何 8.42s，且比舊抽稀+樣條管線（7.90s）更貼近人工標記 ~8.5s。
+
+**運動學約束（simulate 內）**：
+- `startT` 出現時間：晚出現的車不得提早出發（漏掉會提早 6.3s 到路口「停著等撞」）
+- 轉向率上限 `min(0.6v+0.15, a_lat/v)`：蠕行不原地擺頭（消「飄」）、高速不無視抓地力
+- 縱向 `limitAcceleration`（a≤3.0/b≤7.5 m/s²）：壓掉偵測噪音的假加速尖峰
 
 **產品決定（2026-07 內部會議）**：demo 呈現到碰撞瞬間為止，碰後彈開不播
 （`main.js` 以 impactTime 截斷；物理照算，要恢復播放拿掉 cutT 即可）。
 
 **資料陷阱**：追蹤器位置在碰撞前 0.5s 會凍結（bbox 重疊+平滑假象），位移回推的
 絕對速度不可靠——UI 滑桿因此用「實錄剖面倍率 ×k」語意，km/h 僅供參考顯示。
+
+**渲染定調（使用者拍板）**：明亮基調＋單一主光源＋清楚影子（hemi 0.55/ambient 0.25/
+sun 3.2/shadow 4096）。ACES+IBL 電影感已試過並否決（revert d917786），勿再往暗沉推。
+
+**模型坑**：`MotoCollider`/`CarCollider` 是整個模型層級的**父節點**（砍子樹＝全滅，
+只能拔 mesh 引用或隱藏）；moto.glb 另帶零厚度地面圓片 `Object_4`。播放器由
+`threejs/models/registry.json` 的 per-model `hide` 名稱前綴清單隱藏這類參考幾何。
 
 ---
 

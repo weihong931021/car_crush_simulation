@@ -25,8 +25,10 @@ scenes/<code>/（scene.json + ground.png + trajectory.json）
 - **完整 three.js 3D 版**單頁打包（~6.9MB）：three r165 以 data:URI importmap 內嵌、
   車輛 GLB 經 meshopt 壓縮（car 18.5→3.2MB）base64 內嵌、`threejs/lib/` 物理 bundle、
   衛星地面、光影/三種視角（頂視/45°/跟車）/OrbitControls，離線可用
-- 軌跡經淨化管線：時間窗平滑（heading 抖動 32°→1.7°/步）→ 切除碰前凍結尾 → 證據終點
-  沿末向外插（畫面虛線標示）；各車依實際出現時刻進場（`simulate` 的 `startT`）
+- 軌跡經淨化管線：時間窗平滑 → 切除碰前凍結尾 → RDP 直線化＋轉角細分（路徑＝兩點
+  連線、線段間僅些微角度）→ 投影（幾何/時序分離：每點時刻與速度剖面原樣保留）→
+  縱向慣性上限 → 證據終點外插（畫面虛線標示）；各車依實際出現時刻進場（`startT`）、
+  車身朝向受轉向率上限（單車模型＋側向抓地）約束
 - 打包腳本化候選：`tools/build_demo_page.py`（目前組頁流程在 session scratchpad）
 - 功能與完整版一致：車速倍率滑桿（即時重模擬）、碰撞/未碰撞結論、求安全車速區間、
   最近間距標註；依會議決定呈現至碰撞瞬間為止
