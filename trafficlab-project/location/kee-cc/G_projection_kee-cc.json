@@ -1,0 +1,154 @@
+{
+    "meta": {
+        "location_code": "kee-cc",
+        "timestamp": "2026-07-23T16:48:50"
+    },
+    "inputs": {
+        "cctv_path": "cctv_kee-cc.png",
+        "sat_path": "sat_kee-cc.png",
+        "layout_path": "layout_kee-cc.svg",
+        "roi_path": "roi_kee-cc.png",
+        "note": "Input paths are relative to this json file"
+    },
+    "undistort": {
+        "resolution": [
+            1920,
+            1080
+        ],
+        "K": [
+            [
+                1920.0,
+                0.0,
+                960.0
+            ],
+            [
+                0.0,
+                1920.0,
+                540.0
+            ],
+            [
+                0.0,
+                0.0,
+                1.0
+            ]
+        ],
+        "D": [
+            -0.5112,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+        ],
+        "model": "radial_tangential"
+    },
+    "homography": {
+        "H": [
+            [
+                -2.560139712985959,
+                -15.729497753972808,
+                3156.63103396705
+            ],
+            [
+                -0.34070609534260893,
+                -14.890697543777302,
+                3358.3009377505823
+            ],
+            [
+                -0.0005111254353539439,
+                -0.013057883129854477,
+                1.0
+            ]
+        ],
+        "fov_polygon": [
+            [
+                -913.0,
+                -1264.0
+            ],
+            [
+                1056.0,
+                971.0
+            ],
+            [
+                1332.0,
+                948.0
+            ],
+            [
+                2800.0,
+                -1263.0
+            ]
+        ],
+        "anchors_list": [
+            {
+                "id": 0,
+                "name": "Pair 0",
+                "coords_cctv": [
+                    105.07835284210526,
+                    445.03772968421055
+                ],
+                "coords_sat": [
+                    845.3522945848375,
+                    679.2291812274368
+                ]
+            },
+            {
+                "id": 1,
+                "name": "Pair 1",
+                "coords_cctv": [
+                    1040.2977684210525,
+                    429.0883368421052
+                ],
+                "coords_sat": [
+                    1218.3790662238255,
+                    659.3479957256311
+                ]
+            },
+            {
+                "id": 2,
+                "name": "Pair 2",
+                "coords_cctv": [
+                    167.0736842105263,
+                    900.0421052631577
+                ],
+                "coords_sat": [
+                    1054.4629252214288,
+                    931.9836762052845
+                ]
+            },
+            {
+                "id": 3,
+                "name": "Pair 3",
+                "coords_cctv": [
+                    663.9831578947367,
+                    1070.9962105263155
+                ],
+                "coords_sat": [
+                    1154.9924880339631,
+                    961.8352494421943
+                ]
+            }
+        ]
+    },
+    "parallax": {
+        "x_cam_coords_sat": 1207.6219482421875,
+        "y_cam_coords_sat": 1162.2264404296875,
+        "z_cam_meters": 7.419212637651251,
+        "scale": {
+            "measured_px": 104.86805721475854,
+            "real_m": 3.63,
+            "reference_anchors": [
+                "Pair 3",
+                "Pair 2"
+            ]
+        },
+        "px_per_meter": 28.88927195998858
+    },
+    "use_svg": false,
+    "layout_svg": {
+        "A": [],
+        "association_pairs": []
+    },
+    "use_roi": false,
+    "roi_method": "partial",
+    "ref_method": "center_box",
+    "proj_method": "down_h_2"
+}

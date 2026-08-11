@@ -2,20 +2,16 @@
 
 ## 座標轉換
 
-```python
-# sat_test1.png pixel → Blender 世界座標（px_per_meter=34.41）
-world_x = sat_x / 34.41 - 24.35
-world_y = -(sat_y / 34.41 - 16.68)
-```
+軌跡 `position_m` → Three.js 世界座標，扣掉場景中心位移（`scene.json` 的 `origin_offset_m`）：
 
 ```js
-// scenes/test1/trajectory.json pos_m → Three.js
-three_x = pos_m[0] - 24.35
-three_z = pos_m[1] - 16.68   // 不取負號，south = +Z
+// scenes/<code>/trajectory.json pos_m → Three.js（見 waypoints.js / main.js）
+three_x = pos_m[0] - origin_offset_m[0]
+three_z = pos_m[1] - origin_offset_m[1]   // 不取負號，south = +Z
 ```
 
-衛星圖：`scenes/test1/ground.png`，1515×1038 px，px_per_meter=31.10（銳化版）
-test1 G-projection：px_per_meter=34.41
+test1：`origin_offset_m = [24.355, 16.68]`；`ground.png` 1515×1038 px、px_per_meter=31.10
+（銳化版；G-projection 原圖 px_per_meter=34.41）。
 
 ## 動畫時間軸
 
@@ -26,31 +22,34 @@ test1 G-projection：px_per_meter=34.41
 
 ## 車輛尺寸規格
 
-`length_m` 是縮放基準；完整 `get_spec()` 見 `blender_scripts/vehicle_specs.py`。
+尺寸真相只有一份：`tools/build_scene.py` 的 `CLASS_DEFAULTS` → 寫進 `scenes/*/scene.json`
+的 `length_m`/`width_m`，播放器（`scene-loader.js` 驗證、`main.js` OBB 與 scale-to-length）
+就讀這份。`length_m` 是模型縮放基準。
 
-| 車種 | 長 (m) | 寬 (m) | 高 (m) | 質量 (kg) |
-|---|---|---|---|---|
-| Car（轎車） | 3.8 | 1.8 | 1.55 | 1500 |
-| Two_Wheeler（機車） | 1.7 | 0.6 | 1.6 | 200 |
-| SUV | 4.7 | 1.9 | 1.65 | 2000 |
-| Van（廂型車） | 5.2 | 2.0 | 2.0 | 2500 |
-| Truck（大卡車） | 12.0 | 2.5 | 4.0 | 15000 |
-| Bus（巴士） | 12.0 | 2.5 | 3.5 | 12000 |
+| 車種 | 長 (m) | 寬 (m) | 質量 (kg) |
+|---|---|---|---|
+| Car（轎車） | 4.69 | 1.85 | 1500 |
+| Two_Wheeler（機車） | 1.85 | 0.70 | 200 |
 
-## 常用 Sketchfab UID
+> SUV/Van/Truck/Bus 目前都 fallback 到 car.glb（見 `registry.json` `class_fallback`），
+> 尺寸沿用 Car；要細分再於 `CLASS_DEFAULTS` 補列。
 
-- Tesla 2018 Model 3：`5ef9b845aaf44203b6d04e2c677e444f`（684K faces，CC Attribution）
+## 模型資產來源
+
+- car.glb = Tesla 2018 Model 3，Sketchfab UID `5ef9b845aaf44203b6d04e2c677e444f`
+  （CC Attribution）。此類 provenance 記在 `threejs/models/registry.json` 的 `_comment_provenance`。
 
 ## TrafficLab 常用指令
 
 ```bash
 # 推論（從 trafficlab-project/ 內執行）
-conda activate trafficlab
-PYTORCH_ENABLE_MPS_FALLBACK=1 python scripts/run_inference.py \
+# trafficlab conda env 不存在，用 littering_prediction 的 venv（有 ultralytics/supervision/opencv）
+PY=/Users/weihong/Documents/littering_prediction/venv/bin/python
+PYTORCH_ENABLE_MPS_FALLBACK=1 $PY scripts/run_inference.py \
   --config-name car_heading_smooth --location test1
 
 # 篩選 + 補欄位 → 輸出到 scenes/test1/
-python scripts/filter_and_enrich_output.py \
+$PY scripts/filter_and_enrich_output.py \
   output/model-*/car_heading_smooth/test1/*.json.gz \
   ../scenes/test1/trajectory.json \
   --ids 7 373 \
@@ -58,6 +57,6 @@ python scripts/filter_and_enrich_output.py \
   --prior-dimensions prior_dimensions.json
 
 # 軌跡平滑 + 繪圖
-python scripts/trajectory_tools.py smooth-and-plot \
+$PY scripts/trajectory_tools.py smooth-and-plot \
   output/example.json.gz --ids 7,373 --zoom-to-fit
 ```

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { loadScene, sceneCodeFromURL, modelFor } from './scene-loader.js';
+import { loadScene, sceneCodeFromURL, modelFor, shouldHideNode } from './scene-loader.js';
 import { buildPaths } from './lib/waypoints.js';
 import { buildPath, speedProfile, smoothPoints, trimFrozenTail, rdpSimplify, refineAnchors, projectToPath, limitAcceleration, extendPoints } from './lib/path.js';
 import { simulate } from './lib/simulate.js';
@@ -252,11 +252,15 @@ function measureBodyExtentAlongAxis(gltfScene, axisX, axisZ) {
 }
 
 function wrapModel(gltfScene, flip, targetLengthM, hideNames = []) {
-  // 模型自帶的參考幾何（碰撞盒、地面圓片）依名稱前綴隱藏——資料來源是 registry.json
-  // 的 hide 清單。用 visible=false 而非拆除，維持模型檔原樣。
+  // 模型自帶的參考幾何（地面圓片等）依 registry.json 的 hide 清單隱藏，比對是**精確名稱**
+  // （前綴語意會誤殺 Object_41/43/… 這類同前綴的真實零件，見 scene-loader.shouldHideNode）。
+  // 不限定 isMesh：hide 可以列空節點（如 moto.glb 的 floor_0），visible=false 會連同
+  // 後代一起不繪製，正好對應「隱藏這團參考幾何」。用 visible 而非拆除，維持模型檔原樣。
+  // 唯一禁區是 gltfScene 自己——它是整個模型的根（moto.glb 是 MotoCollider），
+  // 一旦被列進 hide 就是整台車消失。
   gltfScene.traverse(child => {
-    if (!child.isMesh) return;
-    if (hideNames.some(p => (child.name || '').startsWith(p))) child.visible = false;
+    if (child === gltfScene) return;
+    if (shouldHideNode(child.name, hideNames)) child.visible = false;
   });
   const pivot = new THREE.Group();
 

@@ -8,17 +8,21 @@
 偵測／軌跡品質由隊友主導（他們的結果更好），本 repo 的價值在**把既有組件縫起來**：
 軌跡 JSON、衛星圖 pipeline、車輛模型、Three.js 播放器 → 一條可重複、可換場景的 demo 產線。
 
-出版素材已足夠，缺的是可展示的 demo。最終呈現以 **Three.js 網頁**為主，Blender 高品質渲染留給出版（第二階段）。
+出版素材已足夠，缺的是可展示的 demo。最終呈現以 **Three.js 網頁**為主。
+
+> **2026-08-05 更新**：原「第二階段 Blender 出版渲染」已取消，全面轉 Three.js、移除 Blender
+> 工具鏈。下表與下方架構中的「Blender 消費端／第二階段」段落均作廢，出版級畫面由 Three.js
+> 負責。見 `docs/decisions/2026-07-24-blender-threejs-contract-split.md`。
 
 ## 已確認的決策
 
 | 問題 | 決定 |
 | --- | --- |
-| Demo 形式 | 網頁互動 demo 為主 + Blender 渲染供出版 |
+| Demo 形式 | 網頁互動 demo（渲染全在瀏覽器） |
 | 場景範圍 | 換場景也能跑（scene-agnostic），test1 為第一個驗收場景 |
 | 優化面向 | 視覺品質、動畫真實度、互動 UI、部署分享——四者皆要 |
 | 架構 | **方案 A：Three.js 自足**。物理留在 JS（保住「調碰前車速→即時重算」的招牌互動），場景描述抽成 scene.json |
-| 物理不進 Blender bake | bake 進 GLB 會殺死互動調速功能；Blender 消費端（讀同一份 scene.json 搭渲染場景）列為第二階段 |
+| ~~物理不進 Blender bake~~ | （已取消）物理留在 JS 保互動；Blender 消費端第二階段取消 |
 
 ## 架構
 
@@ -96,8 +100,6 @@ blender_crash_project/
 ├── tools/                     ← [實作] build_scene.py
 ├── threejs/                   ← 播放器 + vendor/ + models/
 ├── satellite_pipeline/        ← 衛星圖產線（含 models/FSRCNN_x4.pb）
-├── blender_scripts/           ← 現役腳本（出版渲染用）
-├── archive/blender_scripts/   ← 淘汰腳本（import_tesla.py、setup_crash.py）
 ├── detection_tests/           ← VisDrone 驗收實驗（已收錄）
 ├── data/、images/             ← [過渡] 遷入 scenes/test1 後移除
 └── trafficlab-project/        ← 上游偵測（隊友主導，本 repo 僅參考）
@@ -112,7 +114,7 @@ blender_crash_project/
 
 ## 本階段不做
 
-- Blender 消費端（讀 scene.json 自動搭渲染場景）——第二階段
+- ~~Blender 消費端（讀 scene.json 自動搭渲染場景）——第二階段~~（2026-08-05 取消，改全 Three.js）
 - TrafficLab 偵測／Kalman／inference config 優化——隊友主導
 - 三車以上碰撞物理（extras 僅軌跡播放）
 - RIFE 補幀（已證實有害於偵測）

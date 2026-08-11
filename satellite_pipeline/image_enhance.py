@@ -23,6 +23,9 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = SCRIPTS_DIR / "output"
 
+sys.path.insert(0, str(SCRIPTS_DIR))
+from common import validate_code  # noqa: E402
+
 GEMINI_MODEL = "gemini-2.5-flash"   # 視覺偵測用；2.0 已停用
 DETECT_PROMPT = (
     "This is an aerial satellite top-down view of a road intersection. "
@@ -117,6 +120,7 @@ def genai_enhance(code: str, key: str | None = None,
     from google.genai import types
     from PIL import Image
 
+    validate_code(code)   # code 會變成 output/<code> 路徑
     out_dir = OUTPUT_DIR / code
     src = out_dir / src_name
     if not src.exists():
@@ -162,26 +166,43 @@ def genai_enhance(code: str, key: str | None = None,
     sys.exit("ERROR: Gemini 沒回傳圖片")
 
 
-def enhance(code: str, key: str | None = None, upscale: int = 2) -> Path:
+def enhance_file(src, dst, key: str | None = None, upscale: int = 2) -> dict:
+    """對**任意一張圖**去車 + 銳化 + 等比放大，回傳增強資訊 dict。
+
+    **座標安全保證（這是本函式存在的理由）**：輸出必然是輸入的精確整數倍等比放大——
+    去車是局部 inpaint、放大是 LANCZOS 整數倍、UnsharpMask 不動幾何。所以呼叫端只要
+    把 px_per_meter 乘上 `px_per_meter_factor`（＝upscale），座標就仍然正確。
+
+    這個保證讓它可以直接套在 **G-projection 校正參考圖**（`location/<code>/sat_<code>.png`）
+    上——真實影片的 position_m 活在那張圖的平面，換一張取景不同的圖就整個錯位，
+    所以「原地變好看」是唯一安全的做法。
+
+    ⚠ `genai_enhance()` **不能**用於此用途：它讓 Gemini 重畫整張，長寬比與內容都可能改變。
+
+    key=None 會去讀環境變數／.env；key="" 則明確跳過去車（只銳化），測試與離線時用。
+    """
     import cv2
     import numpy as np
     from PIL import Image, ImageFilter
 
-    out_dir = OUTPUT_DIR / code
-    raw_path = out_dir / "sat_raw.png"
-    if not raw_path.exists():
-        sys.exit(f"ERROR: 找不到 {raw_path}（先跑 map_capture.py）")
+    src, dst = Path(src), Path(dst)
+    if not src.exists():
+        raise FileNotFoundError(f"找不到輸入圖 {src}")
+    if not isinstance(upscale, int) or isinstance(upscale, bool) or upscale < 1:
+        raise ValueError(f"upscale 必須是 >=1 的整數（目前 {upscale!r}）——"
+                         f"非整數倍放大會破壞 px_per_meter 的換算")
 
-    key = key or load_gemini_key()
-    pil = Image.open(raw_path).convert("RGB")
+    if key is None:
+        key = load_gemini_key()
+    pil = Image.open(src).convert("RGB")
     w, h = pil.size
     bgr = cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
 
-    # --- Step 1+2: Gemini 偵測 + cv2 inpaint 去車 ---
+    # --- Step 1+2: Gemini 偵測 + cv2 inpaint 去車（只動局部像素，不動幾何）---
     n_removed = 0
     if key:
         try:
-            boxes = detect_vehicles(raw_path.read_bytes(), w, h, key)
+            boxes = detect_vehicles(src.read_bytes(), w, h, key)
             if boxes:
                 mask = np.zeros((h, w), dtype=np.uint8)
                 pad = 8
@@ -199,41 +220,79 @@ def enhance(code: str, key: str | None = None, upscale: int = 2) -> Path:
         except Exception as e:
             print(f"  Gemini 去車失敗（{type(e).__name__}），fallback 只銳化：{e}")
     else:
-        print("  無 GEMINI_API_KEY，fallback 只銳化（不去車）")
+        print("  未提供 GEMINI_API_KEY，只銳化不去車")
 
-    # --- Step 3: 銳化 + 高清化 ---
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    out = Image.fromarray(rgb)
+    # --- Step 3: 銳化 + 高清化（整數倍 LANCZOS，長寬比必然保留）---
+    out = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
     if upscale > 1:
         out = out.resize((w * upscale, h * upscale), Image.LANCZOS)
     out = out.filter(ImageFilter.UnsharpMask(radius=1.5, percent=130, threshold=2))
 
+    # 座標安全的最後一道防線：幾何若真的被動到，寧可炸掉也不要產出會讓車錯位的圖
+    if out.size != (w * upscale, h * upscale):
+        raise RuntimeError(f"增強後尺寸 {out.size} 不是 {(w, h)} 的 {upscale} 倍——"
+                           f"幾何被改動，px_per_meter 將無法換算")
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    out.save(dst)
+    print(f"  Saved: {dst}  ({out.size[0]}x{out.size[1]})")
+    return {"out_size": out.size, "in_size": (w, h), "upscale": upscale,
+            "px_per_meter_factor": upscale, "vehicles_removed": n_removed}
+
+
+def enhance(code: str, key: str | None = None, upscale: int = 2) -> Path:
+    """satellite_pipeline 的標準路徑：output/<code>/sat_raw.png → sat_clean.png。"""
+    validate_code(code)   # code 會變成 output/<code> 路徑
+    out_dir = OUTPUT_DIR / code
+    raw_path = out_dir / "sat_raw.png"
+    if not raw_path.exists():
+        sys.exit(f"ERROR: 找不到 {raw_path}（先跑 map_capture.py）")
+
     clean_path = out_dir / "sat_clean.png"
-    out.save(clean_path)
+    info = enhance_file(raw_path, clean_path, key=key, upscale=upscale)
 
     # 更新 meta：記錄去車數 + 增強後尺寸
     meta_path = out_dir / "meta.json"
     if meta_path.exists():
         meta = json.loads(meta_path.read_text())
-        meta["vehicles_removed"] = n_removed
-        meta["enhanced_px"] = out.size[0]
+        meta["vehicles_removed"] = info["vehicles_removed"]
+        meta["enhanced_px"] = info["out_size"][0]
         meta["upscale"] = upscale
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
 
-    print(f"  Saved: {clean_path}  ({out.size[0]}x{out.size[1]})")
     return clean_path
 
 
 def main():
     ap = argparse.ArgumentParser(description="衛星圖去車 + 銳化高清化")
-    ap.add_argument("--code", required=True)
-    ap.add_argument("--upscale", type=int, default=2, help="放大倍率，預設 2")
+    ap.add_argument("--code", type=validate_code,
+                    help="satellite_pipeline 標準路徑：output/<code>/sat_raw.png → sat_clean.png")
+    ap.add_argument("--input", help="任意輸入圖（與 --output 併用）。用於把 G-projection "
+                                    "校正參考圖原地變好看——等比放大，座標仍然有效")
+    ap.add_argument("--output", help="與 --input 併用的輸出路徑")
+    ap.add_argument("--upscale", type=int, default=2, help="放大倍率（必須是整數），預設 2")
     ap.add_argument("--genai", action="store_true",
                     help="額外用 Gemini 圖像生成做 HD 化（在去車結果上），輸出 sat_genai.png")
     ap.add_argument("--genai-temp", type=float, default=0.4, help="genai temperature，預設 0.4")
     ap.add_argument("--style-ref", default="refs/road_style_ref.png",
                     help="風格參考圖（真實空拍馬路）；設空字串關閉")
     args = ap.parse_args()
+
+    if args.input or args.output:
+        if not (args.input and args.output):
+            ap.error("--input 與 --output 必須併用")
+        if args.genai:
+            ap.error("--genai 會重畫整張圖、可能改變長寬比與內容，"
+                     "不可用於 --input 路徑（該路徑的存在理由就是保住座標）")
+        print(f"[image_enhance] {args.input} → {args.output}")
+        info = enhance_file(args.input, args.output, upscale=args.upscale)
+        print(f"[image_enhance] 尺寸 {info['in_size']} → {info['out_size']}；"
+              f"px_per_meter 需乘以 {info['px_per_meter_factor']}")
+        print("[image_enhance] Done.")
+        return
+
+    if not args.code:
+        ap.error("需要 --code，或（--input + --output）")
     print(f"[image_enhance] code={args.code}")
     enhance(args.code, upscale=args.upscale)
     if args.genai:

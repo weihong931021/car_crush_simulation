@@ -115,9 +115,17 @@ export function refineAnchors(points, anchors, { maxTurnDeg = 12, maxIter = 40 }
   if (!points || points.length < 3 || !anchors || anchors.length < 3) {
     return anchors ? anchors.map(a => ({ ...a })) : [];
   }
-  // 錨點以「原始索引」表示（錨點是 points 的子集合，用 t 對回）
+  // 錨點以「原始索引」表示（錨點是 points 的子集合，用 t 對回）。
+  // 先去重 + 排序，建立「已選索引遞增且唯一」的不變量——下面「跨度 ≥2 就一定有可用中點」
+  // 的推論靠它成立（若中點已被選，它早該出現在兩端之間）。
   const idxByT = new Map(points.map((p, i) => [p.t, i]));
-  let idx = anchors.map(a => idxByT.get(a.t)).filter(i => i !== undefined);
+  const idx = [...new Set(anchors.map(a => idxByT.get(a.t)).filter(i => i !== undefined))]
+    .sort((a, b) => a - b);
+  if (idx.length < 3) return idx.map(i => ({ ...points[i] }));
+  const selected = new Set(idx);
+  // 兩側原始索引都相鄰（如 [17,18,19]）的角無法再細分——記下來跳過，
+  // 而不是像過去那樣 break 掉整個迴圈、連別處還超標的彎道一起放生。
+  const blocked = new Set();
   const turnAt = (a, b, c) => {
     const h1 = Math.atan2(points[b].x - points[a].x, points[b].z - points[a].z);
     const h2 = Math.atan2(points[c].x - points[b].x, points[c].z - points[b].z);
@@ -125,21 +133,34 @@ export function refineAnchors(points, anchors, { maxTurnDeg = 12, maxIter = 40 }
     if (d > Math.PI) d = 2 * Math.PI - d;
     return d * 180 / Math.PI;
   };
-  for (let iter = 0; iter < maxIter; iter++) {
+  // maxIter 限制的是「成功插入」次數；封鎖一個角不算進度消耗，否則單一個不可細分的
+  // 尖角就能把預算吃光，等同退回舊的整體 break。每個原始頂點至多被封鎖一次，迴圈必然終止。
+  let insertions = 0;
+  while (insertions < maxIter) {
     let worst = -1, worstDeg = maxTurnDeg;
     for (let k = 1; k < idx.length - 1; k++) {
+      if (blocked.has(idx[k])) continue;
       const d = turnAt(idx[k - 1], idx[k], idx[k + 1]);
       if (d > worstDeg) { worstDeg = d; worst = k; }
     }
-    if (worst < 0) break;
-    // 在較長（原始點數較多）的鄰段中點插入新錨點
-    const leftSpan = idx[worst] - idx[worst - 1];
-    const rightSpan = idx[worst + 1] - idx[worst];
-    const [a, b] = leftSpan >= rightSpan ? [idx[worst - 1], idx[worst]] : [idx[worst], idx[worst + 1]];
-    const mid = (a + b) >> 1;
-    if (mid === a || mid === b || idx.includes(mid)) break;   // 無法再細分
+    if (worst < 0) break;   // 已無「未封鎖且超標」的角
+    // 在較長（原始點數較多）的鄰段中點插入新錨點；較長的不行就試較短的那側
+    const vertex = idx[worst];
+    const spans = [[idx[worst - 1], vertex], [vertex, idx[worst + 1]]]
+      .sort((s1, s2) => (s2[1] - s2[0]) - (s1[1] - s1[0]));
+    let mid = -1;
+    for (const [a, b] of spans) {
+      // 用 Math.floor 而非 >>：位元運算會把索引壓成 signed 32-bit
+      const candidate = a + Math.floor((b - a) / 2);
+      if (candidate === a || candidate === b || selected.has(candidate)) continue;
+      mid = candidate;
+      break;
+    }
+    if (mid < 0) { blocked.add(vertex); continue; }   // 兩側都無內點：封鎖，換下一個角
     idx.push(mid);
     idx.sort((x, y) => x - y);
+    selected.add(mid);
+    insertions++;
   }
   return idx.map(i => ({ ...points[i] }));
 }
@@ -149,7 +170,10 @@ export function refineAnchors(points, anchors, { maxTurnDeg = 12, maxIter = 40 }
 // - 時序：每點保留自己的 t，速度剖面（證據）不被粗化。
 //   ↑ 純 RDP 的教訓：只留錨點的 t 會把速度剖面壓成幾段等速，kA=0.6 的 minGap
 //     從 0.66 漂到 1.48m——時序也是證據，動不得。
-// 投影以「沿曲線單調前進」約束（搜尋起點只進不退），避免蛇行點來回黏到同一段。
+// 投影以「沿曲線單調前進」約束（弧長參數只進不退），避免蛇行點來回黏到同一段。
+// 注意約束必須下在 (段索引, 段內比例 u) 這一對上：只擋段索引下降不夠——兩個相鄰樣本
+// 投影到**同一段**時 u 仍可能變小，實測 test1 有 29 次這種倒退（累計 2cm）。
+// buildPath 累加的是絕對距離，倒退會變成「多走的里程」再變成假速度剖面。
 // 投影目標＝錨點「折線」而非樣條：RDP 的 ≤ε 幾何偏差保證只對折線成立，稀疏錨點的
 // 樣條會外凸超過 ε（實測讓碰撞時刻漂 0.4s）。直線段正是直線化要的樣子；折線轉角
 // 對車身朝向的影響由 simulate 的轉向率上限自然平滑。
@@ -158,22 +182,30 @@ export function projectToPath(points, anchors) {
   if (!anchors || anchors.length < 2) return points.map(p => ({ ...p }));
   const curve = anchors;
   const out = new Array(points.length);
-  let segStart = 0;   // 單調前進的搜尋起點
+  let prevSeg = 0, prevU = 0;   // 上一點的投影位置（段索引 + 段內比例）
   for (let k = 0; k < points.length; k++) {
     const p = points[k];
-    let best = Infinity, bx = curve[segStart].x, bz = curve[segStart].z, bi = segStart;
-    for (let i = segStart; i < curve.length - 1; i++) {
+    // 保底值＝上一點的投影：候選全都無法比較時原地停住，不會倒退回段起點。
+    const pa = curve[prevSeg], pb = curve[prevSeg + 1];
+    const pdx = pb.x - pa.x, pdz = pb.z - pa.z;
+    let best = Infinity;
+    let bx = pa.x + pdx * prevU, bz = pa.z + pdz * prevU;
+    let bi = prevSeg, bu = prevU;
+    for (let i = prevSeg; i < curve.length - 1; i++) {
       const a = curve[i], b = curve[i + 1];
       const dx = b.x - a.x, dz = b.z - a.z;
       const L2 = dx * dx + dz * dz;
-      const u = L2 > 1e-12
+      let u = L2 > 1e-12
         ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.z - a.z) * dz) / L2))
         : 0;
+      // 同段內不得退回較小的 u。夾在「算距離之前」，段的取捨才會一併服從這個約束。
+      if (i === prevSeg) u = Math.max(u, prevU);
       const qx = a.x + dx * u, qz = a.z + dz * u;
       const d = (p.x - qx) * (p.x - qx) + (p.z - qz) * (p.z - qz);
-      if (d < best) { best = d; bx = qx; bz = qz; bi = i; }
+      if (d < best) { best = d; bx = qx; bz = qz; bi = i; bu = u; }
     }
-    segStart = bi;
+    prevSeg = bi;
+    prevU = bu;
     out[k] = { t: p.t, x: bx, z: bz };
   }
   return out;

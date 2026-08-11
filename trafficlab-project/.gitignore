@@ -36,4 +36,8 @@ output/*
 
 # Large local assets that should not be pushed
 models/*.pt
+models/*.pkl.epoch*
 location/*/footage/*.mp4
+
+# OpenPifPaf runtime (python 3.10 + torch 1.13.1, see docs/openpifpaf-apollo24.md)
+.venv-pifpaf/

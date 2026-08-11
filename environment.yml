@@ -1,0 +1,33 @@
+name: trafficlab
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - bzip2
+  - ca-certificates
+  - libffi
+  - openssl
+  - sqlite
+  - tk
+  - xz
+  - zlib
+  - pip:
+      - "numpy<2"
+      - Pillow
+      - "opencv-python<4.10"
+      - scipy
+      - openpifpaf==0.13.11
+      - torch==2.2.2
+      - torchvision==0.17.2
+      - torchaudio==2.2.2
+      - ultralytics
+      - PyQt5
+      - pyqtdarktheme
+      - pyqtgraph
+      - matplotlib
+      - scikit-learn
+      - filterpy
+      - pyyaml
+      - pandas

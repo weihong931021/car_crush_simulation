@@ -24,6 +24,9 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = SCRIPTS_DIR / "output"
 
+sys.path.insert(0, str(SCRIPTS_DIR))
+from common import validate_code  # noqa: E402
+
 
 def load_google_key() -> str:
     """從 GOOGLE_MAPS_KEY 環境變數或 .env 讀 Google Static API key。"""
@@ -48,6 +51,7 @@ def px_per_meter(lat: float, zoom: int, scale: int = 2) -> float:
 def capture(lat: float, lon: float, code: str, zoom: int = 21,
             size_m: float | None = None, key: str | None = None) -> dict:
     """抓 Static API 衛星圖；size_m 給定則裁中心 size_m×size_m，否則存整張 1280²。"""
+    validate_code(code)   # code 會變成 output/<code> 路徑
     key = key or load_google_key()
     scale = 2
 
@@ -109,7 +113,7 @@ def main():
     ap = argparse.ArgumentParser(description="Google Static API 衛星圖擷取")
     ap.add_argument("--lat", type=float, required=True)
     ap.add_argument("--lon", type=float, required=True)
-    ap.add_argument("--code", required=True, help="地點代號（輸出資料夾名）")
+    ap.add_argument("--code", required=True, type=validate_code, help="地點代號（輸出資料夾名，限英數-_）")
     ap.add_argument("--zoom", type=int, default=21, help="預設 21（此地點上限）")
     ap.add_argument("--size", type=float, default=None, help="裁切邊長（公尺）；省略=整張1280²")
     args = ap.parse_args()

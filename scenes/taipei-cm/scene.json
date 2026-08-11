@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "code": "taipei-cm",
+  "name": "台北民生（真實影片管線驗證）",
+  "ground": {
+    "image": "ground.png",
+    "px_per_meter": 55.70904395284782,
+    "size_m": [
+      42.72196812450118,
+      45.16322344590125
+    ]
+  },
+  "origin_offset_m": [
+    21.36098406225059,
+    22.581611722950626
+  ],
+  "frames": {
+    "source_start": 0,
+    "source_collision": 190,
+    "source_end": 197,
+    "anim_start": 1,
+    "anim_collision": 32,
+    "anim_end": 89,
+    "fps": 23
+  },
+  "vehicles": [
+    {
+      "track_id": 1,
+      "class": "Car",
+      "label": "汽車",
+      "model": "car.glb",
+      "mass_kg": 1500,
+      "length_m": 4.69,
+      "width_m": 1.85,
+      "role": "collider",
+      "default_speed_kmh": 20,
+      "pre_samples": 15
+    },
+    {
+      "track_id": 53,
+      "class": "Car",
+      "label": "汽車",
+      "model": "car.glb",
+      "mass_kg": 1500,
+      "length_m": 4.69,
+      "width_m": 1.85,
+      "role": "collider",
+      "default_speed_kmh": 20,
+      "pre_samples": 15
+    }
+  ],
+  "extras": "auto",
+  "collision": {
+    "restitution": 0.15,
+    "friction": 0.7
+  },
+  "camera": {
+    "default": "persp45"
+  }
+}

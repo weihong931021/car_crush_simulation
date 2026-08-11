@@ -1,13 +1,13 @@
 # satellite_pipeline — 衛星底圖自動化
 
-事故地點經緯度 → 衛星圖 → 去車 + 銳化高清化 → 自動貼進 Blender 地板。
+事故地點經緯度 → 衛星圖 → 去車 + 銳化高清化。輸出的 `sat_*.png` + `meta.json`
+供 `tools/build_scene.py --sat-dir` 取用，產生場景包的 `ground.png`。
 獨立模組，與 `trafficlab-project/`（上游軌跡推論）分開。
 
 ```text
 lat/lon
   → [1] map_capture.py    Google Static API      → sat_raw.png + meta.json
-  → [2] image_enhance.py  Gemini 去車 + 銳化      → sat_clean.png
-  → [3] blender_ground.py 貼 Blender 地板(MCP)    → GroundPlane_{code}
+  → [2] image_enhance.py  Gemini 去車 + 銳化      → sat_clean.png / sat_genai.png
 ```
 
 全部輸出在 `output/{code}/`。
@@ -25,14 +25,10 @@ lat/lon
 python3 satellite_pipeline/pipeline.py \
     --lat 23.026901 --lon 120.249615 --code tainan_yongkang --size 25
 
-# 第 3 步「自動貼進正在開的 Blender」由 Claude Code 透過 Blender MCP
-# execute_blender_code 執行 output/{code}/blender_ground_{code}.py 完成。
-
 # 單步 / 重跑
 python3 satellite_pipeline/map_capture.py  --lat .. --lon .. --code ..
 python3 satellite_pipeline/image_enhance.py --code .. --genai     # 出 HD 版 sat_genai.png
 python3 satellite_pipeline/pipeline.py --code .. --skip-capture   # 只重新增強
-python3 satellite_pipeline/pipeline.py --code .. --skip-enhance   # 用 raw 貼
 
 # HD 版預設帶風格參考圖 refs/road_style_ref.png（真實空拍馬路，借柏油材質）
 # 關閉風格參考：--style-ref ""
@@ -46,7 +42,6 @@ python3 satellite_pipeline/pipeline.py --code .. --skip-enhance   # 用 raw 貼
 | `output/{code}/sat_clean.png` | 去車 + 銳化（忠實版） |
 | `output/{code}/sat_genai.png` | Gemini HD 版（`--genai`，視覺最佳） |
 | `output/{code}/meta.json` | lat/lon, px_per_meter, img_w/h, 去車數… |
-| `output/{code}/blender_ground_{code}.py` | 貼地腳本（給 MCP 或手動） |
 
 ---
 
@@ -90,17 +85,11 @@ python3 satellite_pipeline/pipeline.py --code .. --skip-enhance   # 用 raw 貼
 
 ---
 
-## 座標系（與 design doc 2026-06-01 一致）
+## 座標系
 
-- 平面左上角對齊世界 **(0,0,0)**，往 +X/+Y 延伸，與 `position_m` 軌跡同源。
-- 平面尺寸 = `(img_w / px_per_meter) × (img_h / px_per_meter)` 公尺。
-- Emission（unlit）材質 + `bpy.ops.uv.reset()`（不可用 unwrap，已知 bug）。
-
-```python
-# sat 像素 → Blender 世界座標
-world_x = sat_x / px_per_meter
-world_y = sat_y / px_per_meter
-```
+- 影像左上角為原點，`px_per_meter` 記在 `meta.json`；平面尺寸 =
+  `(img_w / px_per_meter) × (img_h / px_per_meter)` 公尺。
+- `tools/build_scene.py` 讀 `meta.json` 換算場景包的 `size_m` 與 `origin_offset_m`。
 
 ---
 
@@ -111,7 +100,7 @@ world_y = sat_y / px_per_meter
 | `pipeline.py` | 一鍵編排 |
 | `map_capture.py` | Google Static API 擷取 |
 | `image_enhance.py` | Gemini 去車 + 銳化高清化 |
-| `blender_ground.py` | 產生 / 注入 Blender 貼地腳本 |
+| `common.py` | 地點代號驗證 |
 | `.env` | API keys（勿進版控） |
 | `refs/` | genai 風格參考圖（road_style_ref.png） |
 | `output/` | 各地點結果（gitignore） |
