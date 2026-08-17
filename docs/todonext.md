@@ -147,7 +147,16 @@ Codex review 後修正並回歸（JS 86/86、verify_scenes 全過）：
       乘上縮放比，長寬比不符時警告並退回原圖。
       實測 taipei-cm：1190×1258 → 2380×2516、去車 8 台、ppm 27.85 → 55.71，
       **`size_m` 維持 42.72×45.16 不變**（座標未被破壞）。
-      ⚠ `--genai` 不可用於此路徑（重畫整張會改長寬比與內容），CLI 已擋下
+      ⚠ `--genai` 不可用於此路徑（重畫整張會改寫路面內容），CLI 已擋下
+- [x] ✅ **2026-08-17 生圖那半改成雙供應商，並把幾何漂移量化**：
+      `--genai-provider {gemini,openai}`，**預設 `gemini`**。同一張 sat_raw 實測位移中位數
+      `sat_clean` 0.00 m ／ `gemini-3.1-flash-image` 0.20 m ／ `gpt-image-2` 0.30 m，
+      Gemini 兩次獨立跑一致。原本「HD 底圖只能人眼確認」現在有可重跑的數字
+      （`satellite_pipeline/measure_genai_drift.py`）。
+      診斷過「是不是只是取景跑掉」：扣掉最佳全域仿射只降 16%，是內容被改寫、不可校正。
+      prompt／`mask`／`input_fidelity` 三條路都查證無效（官方文件明載 mask 也是整張重生）。
+      決策文件：`docs/decisions/2026-08-17-satellite-genai-provider-choice.md`
+      ⚠ 換供應商**沒有讓 `--genai` 變安全**，只是量清楚了不安全的程度；座標關鍵路徑照舊禁用
 - [ ] **`path.js` 淨化參數的泛化性**：RDP ε=0.06、a≤3.0/b≤7.5 全在 test1 一份資料上調過，
       真實新影片的噪音特性、取樣率、碰前凍結窗都不同
 - [ ] per-site `η = h/z_cam` 校準（h 與 z_cam 無法分離，只能校 η；兩站點都顯示 z_cam

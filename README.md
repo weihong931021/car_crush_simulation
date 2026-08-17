@@ -82,7 +82,7 @@ blender_crash_project/
 ├── satellite_pipeline/            ← 衛星底圖自動化（lat/lon → 去車 → sat_*.png）
 │   ├── pipeline.py                ← 一鍵流程（擷取 + 增強）
 │   ├── map_capture.py             ← Google Static API 擷取
-│   ├── image_enhance.py           ← Gemini 去車 + 銳化 / --genai HD
+│   ├── image_enhance.py           ← Gemini 去車 + 銳化 / --genai HD（OpenAI gpt-image-2）
 │   ├── common.py                  ← 地點代號驗證
 │   ├── models/FSRCNN_x4.pb        ← 超解析模型（gitignored；目前無程式引用，待清理）
 │   └── output/<code>/             ← sat_raw / sat_clean / sat_genai / meta.json

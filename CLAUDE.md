@@ -107,6 +107,9 @@ python3 satellite_pipeline/image_enhance.py \
   --input  trafficlab-project/location/<code>/sat_<code>.png \
   --output trafficlab-project/location/<code>/sat_<code>_hd.png --upscale 2
 
+#    （這條路徑只用 GEMINI_API_KEY 去車；生圖那半 `--genai` 用 OPENAI_API_KEY，
+#      預設走 gemini、可選 gpt-image-2，且**不可**用在這條路徑上——見下方「地面圖增強的安全邊界」）
+
 # 1. 挑 collider（唯一的人工判讀，但現在有品質欄位輔助）
 python3 tools/build_scene.py --trajectory T.json --list
 
@@ -130,16 +133,6 @@ trajectory.json **sha256 位元組級相同**。
 
 實證有效：taipei-cm 的 track 53 可用率 83%、track 1 掛 ⚠（0 個輪點、0% 可用率）——
 這與獨立量測的 heading 誤差 3.10° vs 90.23° 完全一致，**不需要 ground truth 就挑得出好 track**。
-
-**地面圖增強的安全邊界**：`image_enhance.py --input/--output` 走的是
-「Gemini 偵測車框 → cv2 inpaint 去車 → UnsharpMask 銳化 → LANCZOS 整數倍放大」，
-**只動局部像素與像素密度，不動幾何**，所以 `size_m` 不變、只有 `px_per_meter` 乘上倍率。
-函式內有最後一道 assert，尺寸若不是精確整數倍會直接 raise。
-**`--genai` 不可用於此路徑**（Gemini 重畫整張，長寬比與內容都可能變），CLI 會直接擋下。
-
-`--sat-dir`（satellite_pipeline 新擷取的圖）只適用於**在衛星座標系合成的軌跡**
-（tainan_yongkang），真實影片用它會錯位——satellite_pipeline 的定位是合成場景的地面來源，
-不是真實影片的地面來源。
 
 ### 路徑產生器 haware（2026-07-28 起由本 repo 接管，不再是隊友專屬）
 
@@ -247,8 +240,25 @@ vs kee-cc 1.29×），而且有**獨立的 homography 度量缺陷**——用 h=
   main.js 寫死的 1），`--anim` 預設 1,32,89 是死值
 - **部署約束**：`scene-loader.js` 用 `../scenes/` 相對路徑 → 站根必須同時含 `threejs/`
   與 `scenes/` 兩個同層目錄，只部署 `threejs/` 會全數 404
-- **HD 底圖無自動驗收**：`sat_genai` 的去車乾淨度、幻想標線、左下角 Google 浮水印殘留
-  只能人眼確認；`genai_enhance()` 也不回寫 meta.json（長寬比若與 raw 不同會被拉伸）
+- **HD 底圖的幾何漂移已量化**（2026-08-17，分塊相位相關，同一張 sat_raw 同 prompt）：
+
+  | 路徑 | 位移中位數 | >10px | 全域相關 |
+  | --- | --- | --- | --- |
+  | `sat_clean`（忠實，不生圖） | **0.00 m** | 0% | 0.968 |
+  | `gemini-3.1-flash-image` | **0.20 m** | 37–39% | 0.854–0.876 |
+  | `gpt-image-2` | **0.30 m** | 47% | 0.746 |
+
+  原本「只能人眼確認」現在有數字。**Gemini 穩定比 OpenAI 忠於原圖**（兩次獨立跑一致），
+  所以 `--genai-provider` 預設 `gemini`，`openai` 是可選路徑（`OPENAI_API_KEY`）。
+  診斷過「是不是只是整體取景跑掉」：對 gpt-image-2 產物擬合最佳全域仿射後，
+  殘餘位移只從 21.0 降到 17.7 px——**是內容被改寫，不是可校正的平移縮放**。
+  官方文件也堵死了：即使用 `mask`，*"the entire image is regenerated rather than
+  preserving unmasked pixels exactly"*；`input_fidelity` 對 gpt-image-2 不可調（已固定最高）。
+  ✅ 已收斂的部分：兩家產物都縮回來源原尺寸（`plan_genai_size()` 負責 OpenAI 的 16 倍數協商），
+  `sat_genai.png` 與 `sat_raw.png` 必然同尺寸共用 px_per_meter；`genai_enhance()` 也回寫 meta。
+  **仍未解**：兩家都是「重畫」不是「修圖」，`--input` 座標關鍵路徑照舊禁用 `--genai`。
+  完整證據、量測方法與可重跑指令見 `docs/decisions/2026-08-17-satellite-genai-provider-choice.md`；
+  重量請用 `python3 satellite_pipeline/measure_genai_drift.py --code <code>`（比較時固定 `--tile`）。
 
 ---
 

@@ -19,6 +19,9 @@ secrets.json
 # Playwright MCP logs/cache
 .playwright-mcp/
 
+# Hypothesis 的 unicode 快取（產生物，非原始碼）
+.hypothesis/
+
 # Large binary files
 *.mp4
 *.mov
