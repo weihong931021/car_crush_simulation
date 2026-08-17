@@ -5,6 +5,10 @@ from PyQt5.QtCore import Qt, QPointF
 from PyQt5.QtGui import (QColor, QPen, QBrush, QPolygonF,
                          QImage, QPixmap, QPainter, QFont)
 
+from trafficlab.motion.localization_authority import (
+    authoritative_position,
+    diagnostic_visualization_position,
+)
 from trafficlab.visualization.cctv_renderer import get_color_from_string
 
 
@@ -68,8 +72,10 @@ class SatRenderer:
 
             have_heading = obj.get("have_heading", False)
             have_measurements = obj.get("have_measurements", False)
-            coord = obj.get("sat_coords") or obj.get("sat_coord")
-            pts = obj.get("sat_floor_box")
+            spatial_coord = authoritative_position(obj)
+            diagnostic_coord = diagnostic_visualization_position(obj)
+            coord = spatial_coord
+            pts = obj.get("sat_floor_box") if spatial_coord is not None else None
 
             # --- 1. Floor Box (heading + measurements required) ---
             if show_sat_box and have_heading and have_measurements and pts and len(pts) >= 3:
@@ -91,10 +97,13 @@ class SatRenderer:
                         QPointF(x1 + 40 * math.cos(rad), y1 + 40 * math.sin(rad)),
                     )
 
-            # --- 3a. Coordinate Dot (user-toggled) ---
+            # --- 3a. Coordinate Dot (user-toggled debugging visualization) ---
+            # Diagnostic positions are permitted only for this explicit point
+            # overlay; floor boxes, arrows, labels, and speed remain authoritative.
+            dot_coord = spatial_coord or diagnostic_coord
             _has_floor = pts and len(pts) >= 3
             _no_svg_no_3d = (not sat_use_svg) and (not show_3d)
-            if show_sat_coords_dot and coord and (_has_floor or _no_svg_no_3d):
+            if show_sat_coords_dot and dot_coord and (_has_floor or _no_svg_no_3d):
                 radius = 4.0
                 if pts and len(pts) >= 3:
                     xs = [p[0] for p in pts]
@@ -103,7 +112,7 @@ class SatRenderer:
                     radius = max(3.0, avg_dim * 0.15)
                 painter.setPen(QPen(Qt.black, 1))
                 painter.setBrush(QBrush(col))
-                painter.drawEllipse(QPointF(coord[0], coord[1]), radius, radius)
+                painter.drawEllipse(QPointF(dot_coord[0], dot_coord[1]), radius, radius)
 
             # --- 3b. Legacy Fallback Dot (no heading, has measurements) ---
             elif ((not have_heading) and have_measurements and (not show_3d)

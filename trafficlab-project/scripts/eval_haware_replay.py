@@ -41,6 +41,7 @@ from trafficlab.motion.haware_localization import (
     _FALLBACK_DIMS,
 )
 from trafficlab.io.replay_writer import ReplayWriter
+from trafficlab.inference.pifpaf_haware_adapter import create_openpifpaf_predictor
 
 
 def _infer_location_code(g_proj_path: str) -> str:
@@ -254,18 +255,12 @@ def main():
     localizer = HawareLocalizer(g_engine, template, kp_conf=args.kp_conf)
     px_m = g_engine.px_per_m
 
-    # --- OpenPifPaf ---
-    import openpifpaf
-    import openpifpaf.plugins.apollocar3d as _apc
-    _apc.register()
-    import argparse as _ap
-    _dec_p = _ap.ArgumentParser()
-    openpifpaf.decoder.cli(_dec_p)
-    _dec_args = _dec_p.parse_args([])
-    _dec_args.instance_threshold = args.pifpaf_threshold
-    _dec_args.seed_threshold     = args.seed_threshold
-    openpifpaf.decoder.configure(_dec_args)
-    predictor = openpifpaf.Predictor(checkpoint=args.checkpoint)
+    # --- OpenPifPaf (provider imports are isolated in the Haware adapter) ---
+    predictor = create_openpifpaf_predictor(
+        args.checkpoint,
+        instance_threshold=args.pifpaf_threshold,
+        seed_threshold=args.seed_threshold,
+    )
 
     # --- YOLO box source (only loaded for --method geometric) ---
     # Either a live model (--yolo) or a pre-computed replay JSON (--yolo-boxes-json);

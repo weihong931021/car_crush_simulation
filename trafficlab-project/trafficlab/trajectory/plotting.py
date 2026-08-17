@@ -25,6 +25,10 @@ import numpy as np
 from matplotlib import colors as mcolors
 from PIL import Image
 
+from trafficlab.motion.localization_authority import (
+    authoritative_position,
+    diagnostic_visualization_position,
+)
 from trafficlab.trajectory.io import (
     frames_from_data,
     infer_location_code,
@@ -91,18 +95,20 @@ class TrajectoryPlotter:
         self,
         *,
         min_points: int = 5,
+        include_diagnostics: bool = False,
     ) -> dict[int, list[tuple[float, float]]]:
+        """Extract authoritative trajectories; diagnostics are explicit display-only."""
         trajectories: dict[int, list[tuple[float, float]]] = {}
 
         for frame in self.frames:
             for obj in frame.get("objects", []):
                 tracked_id = obj.get("tracked_id")
-                sat_coords = obj.get("sat_coords") or obj.get("sat_coord")
-                if tracked_id is None or not self._valid_point(sat_coords):
+                position = authoritative_position(obj)
+                if position is None and include_diagnostics:
+                    position = diagnostic_visualization_position(obj)
+                if tracked_id is None or position is None:
                     continue
-                trajectories.setdefault(int(tracked_id), []).append(
-                    (float(sat_coords[0]), float(sat_coords[1]))
-                )
+                trajectories.setdefault(int(tracked_id), []).append(position)
 
         return {
             track_id: points
@@ -126,14 +132,14 @@ class TrajectoryPlotter:
         for frame in self.frames:
             for obj in frame.get("objects", []):
                 tracked_id = obj.get("tracked_id")
-                sat_coords = obj.get("sat_coords") or obj.get("sat_coord")
-                if tracked_id is None or not self._valid_point(sat_coords):
+                position = authoritative_position(obj)
+                if tracked_id is None or position is None:
                     continue
 
-                heading = obj.get("heading", obj.get("heading_deg", obj.get("yaw")))
+                heading = obj.get("heading_deg")
                 heading_value = float(heading) if isinstance(heading, (int, float)) else None
                 headings.setdefault(int(tracked_id), []).append(
-                    (float(sat_coords[0]), float(sat_coords[1]), heading_value)
+                    (position[0], position[1], heading_value)
                 )
 
         return headings

@@ -1,0 +1,52 @@
+{
+  "fixture_kind": "synthetic_regression_only",
+  "acceptance_evidence": false,
+  "legacy_schema": ["sat_coords", "heading", "confidence", "n_keypoints", "status", "p_sat", "spread_m", "n_wheel_kp", "method"],
+  "cases": [
+    {
+      "id": "finite_handedness",
+      "center": [120.0, 80.0],
+      "heading": 217.0,
+      "subset": [0, 1],
+      "max_spread_m": 8.0,
+      "expected": {"sat_coords": [120.0, 80.0], "heading": 217.0, "status": "ok", "n_keypoints": 2, "n_wheel_kp": 0, "method": null}
+    },
+    {
+      "id": "inclusive_spread_boundary",
+      "center": [0.0, 0.0],
+      "heading": 0.0,
+      "subset": [0, 1],
+      "max_spread_m": 1.26,
+      "expected": {"sat_coords": [0.0, 0.0], "heading": 0.0, "status": "extrapolated", "n_keypoints": 2, "n_wheel_kp": 0, "method": null, "spread_m": 1.26}
+    },
+    {
+      "id": "insufficient_keypoints",
+      "center": [120.0, 80.0],
+      "heading": 35.0,
+      "subset": [0],
+      "max_spread_m": 8.0,
+      "expected": {"sat_coords": null, "heading": null, "status": "failed_insufficient_kp", "n_keypoints": 1, "n_wheel_kp": 0, "method": null}
+    }
+  ],
+  "parity_contract": {
+    "coordinate_abs_tolerance": 1e-9,
+    "heading_circular_abs_tolerance": 1e-9,
+    "reason": {"present": false}
+  },
+  "classification_cases": [
+    {
+      "id": "non_finite_passthrough",
+      "expected": {
+        "sat_coords": ["nan", "positive_infinity"],
+        "heading": "negative_infinity",
+        "confidence": "nan",
+        "n_keypoints": 2,
+        "status": "extrapolated",
+        "p_sat": {"0": ["nan", "negative_infinity"]},
+        "spread_m": "positive_infinity",
+        "n_wheel_kp": 0,
+        "method": null
+      }
+    }
+  ]
+}

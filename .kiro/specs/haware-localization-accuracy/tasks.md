@@ -2,535 +2,519 @@
 
 ## Overview
 
-Implement the approved Python design in strict measurement-first order: Phase 0A canonical artifacts and schemas, frozen baselines and independent ground truth, deterministic metrics and the Phase-0 gate, the wheel-first single-frame estimator, downstream enforcement, and two-site acceptance. Fallback is a primary usable path. Calibration eta analysis proceeds on a parallel non-blocking branch. Temporal fusion is optional and may start only when its explicit permission predicate passes.
+Build the smallest credible Python feasibility-first MVP under `trafficlab-project/**`: deterministic provider-neutral stored observations, a pure calibrated CCTV image-space forward model, deterministic wheel-first/non-wheel-inclusive hypothesis generation, bounded robust refinement, strict coordinate authority, and a leak-free offline pilot for `kee-cc` and `taoyuan-tc`. Existing `localize()` and `localize_reprojection()` remain frozen baselines only; optimizer-disabled dispatch preserves the corrected `localize()` behavior and legacy schema exactly.
 
-All commands below are validation commands to run during implementation; none were run while creating this plan. Unless noted otherwise, run Python commands with working directory `trafficlab-project`.
+The Pose_Optimizer call graph must not introduce inverse-lifted per-keypoint ground targets, projected-point Procrustes, `RoleConstraintGraph`, geometry-mode selection, `wheel_only`, `wheel_weighted`, a wheel score bonus, or a wheel-based acceptance shortcut. Wheel-first means only generation/initialization order with `h=0`; valid non-wheel hypotheses are always generated and compete under the same score. A wheel-weighted Procrustes **is** implemented — as the diagnostic candidate arm `wheel_weighted_procrustes` in `trafficlab/measurement/haware_diagnostic_candidates.py` (Requirement 12), outside the optimizer call graph and outside production dispatch.
+
+**2026-08-16 revision.** The spec critique (see `design.md` Overview) added: the standalone `legacy-localize-v1` status policy (production would otherwise lose every `position_m`), the `tools/build_scene.py` last-mile binding, tracker-provenance emission from `eval_haware_replay.py`, the GT annotation protocol, `pilot-stats-v1` with a Minimum_Effect_Of_Interest and Paired_Accepted_Set, Source_Sequence-based held-out feasibility, the diagnostic candidate arm, the 600 s batch runtime envelope, and three simplifications (held-out access-control layer removed in favour of a commit-SHA rule; the former production-hardening/deferred-capability requirements replaced by the "Scope boundary and later phases" section — the numbers 12/13 now denote the diagnostic-candidate and runtime requirements; byte-exact replay weakened to value equality). Tasks touched by those changes are re-opened as `[-]` with a "re-opened" note; new tasks are `[ ]`.
+
+**2026-08-17 second review.** An independent reviewer found 15 further problems (design.md Appendix A.2); all are now applied. The ones that change how work is done: one estimand and one inference method (whole-track bootstrap, ≥ 8 clusters per effect, no sign-flip); the MEI decision trichotomy; `Capture_ID`-disjoint held-out partitions; a calibration sensitivity sweep whenever GT is calibration-conditional; a measured full-video runtime gate on production authorization; an append-only held-out exposure ledger; `Position_Equivalent_Ambiguity` so a heading tie no longer discards a usable position; and a fully specified site calibration health check.
 
 ## Tasks
 
-- [ ] 1. Build Phase 0A canonical contracts and test infrastructure
-  - [ ] 1.1 Implement typed failures and immutable acceptance-profile models
-    - Add Python models for observation validity, geometry, conditioning, spread, metrics, diagnostics, schema compatibility, calibration, and optional fusion configuration; validate finite values, inclusive boundaries, non-overlapping mode predicates, supported versions, and per-calibration thresholds before record processing.
-    - Add stable typed error payloads with code, field/gate, and optional detection identity, and prohibit authoritative coordinates on failures.
-    - Use a test-first cycle with focused invalid-profile and typed-error examples before implementation.
+- [-] 1. Establish immutable MVP contracts and validated profiles
+  - [x] 1.1 Implement canonical immutable models and serialization primitives
+    - Create `trafficlab/motion/haware_accuracy/models.py` with frozen Python dataclasses/enums for observations, provenance, profiles, calibration snapshots, templates, poses, nuisances, hypotheses, diagnostics, localization results, populations, and decisions.
+    - Implement finite-number validation, canonical set-like ordering, semantic-array preservation, version/content identities, and accepted/rejected coordinate-role invariants without building a generalized artifact platform.
     - **Depends on:** none
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_profiles.py -q`
-    - _Requirements: 6.1, 6.2, 6.3, 6.22, 6.23, 9.3, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8, 13.9, 13.10, 13.11, 13.12, 13.13, 13.14, 15.34, 15.35, 15.36_
+    - _Requirements: 1.1-1.6, 2.1-2.6, 4.1-4.8, 5.1, 6.1-6.6, 7.1-7.7, 10.19, 11.2, 11.5_
 
-  - [ ] 1.2 Implement Canonical JSON and artifact hashing utilities
-    - Create finite-number-only UTF-8 canonical serialization with sorted object keys, compact separators, preserved array order, one LF terminator, exact-byte SHA-256 hashing, and atomic content-addressed writes.
-    - Add exact-byte and mutation examples before implementation.
-    - **Depends on:** none
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_canonical_artifacts.py -q`
-    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.13, 2.14, 2.15, 2.16_
-
-  - [ ] 1.3 Implement versioned profile, result, diagnostics, baseline, ground-truth, and report schema repositories
-    - Define deterministic readers/writers and field-path validation for every frozen artifact; reject unsupported versions and non-finite metric inputs without processing payloads.
-    - Freeze the ordered schema-compatibility profile and diagnostics zero-denominator representation.
-    - **Depends on:** 1.1, 1.2
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_schema_contracts.py -q`
-    - _Requirements: 2.6, 3.1, 3.12, 3.13, 3.14, 5.19, 12.23, 12.24, 12.25, 12.26, 12.27, 13.3, 13.4, 13.5, 13.6, 13.7, 13.8, 13.9, 13.10, 13.11, 13.12, 13.13, 13.14_
-
-  - [ ]* 1.4 Write the property test for canonical baseline identity and comparability
-    - **Property 16: Canonical baseline identity and comparability**
-    - Cover deterministic canonical bytes, identity-field/artifact-hash sensitivity, and exact comparability of presence, JSON type, value, and array order.
-    - **Depends on:** 1.2, 1.3
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_16_baseline_identity.py -q`
-    - **Validates: Requirements 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.13, 2.14, 2.17, 2.18, 2.19, 2.20, 2.21**
-
-  - [ ] 1.5 Configure the reproducible Hypothesis property runner
-    - Add an exact pinned Hypothesis dependency to the project environment/lock, a `property` test marker, reusable PBT-profile strategies, all four required seeds, at least 100 cases per seed, boundary/`nextafter` generation, minimized-failure recording, and no-generation replay support.
-    - Keep every numbered property in its own test module with the required feature/property comment.
+  - [x] 1.2 Implement fail-fast profile validation and default-off scope guards
+    - Validate all closed nuisance bounds, ground-contact `[0,0]`, supported distortion/homography data, explicit SciPy settings, budgets, stable ordering, gate precedence, replay bounds, and acceptance-site namespaces before records or outcomes are read.
+    - Reject prohibited estimator contracts (`wheel_only`, `wheel_weighted`, projected-point Procrustes, `RoleConstraintGraph`, inverse-lifted targets) **within `OptimizerProfile` / estimator contracts only**; permit `wheel_weighted_procrustes` under `PilotPolicy.diagnostic_candidates`; keep calibration variation local to a fit.
+    - Encode `taipei-cm` as diagnostic-only and optimizer dispatch as default-off unless the exact candidate has held-out `go` at both `kee-cc` and `taoyuan-tc`.
     - **Depends on:** 1.1
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_property_runner.py -q`
-    - _Requirements: 15.1, 15.2, 15.3, 15.4, 15.5_
+    - _Requirements: 3.7-3.9, 4.15-4.18, 6.1-6.12, 9.14-9.18, 10.29-10.31, 11.1-11.7, 12.4; Scope boundary section_
+    - **Partly delivered 2026-08-17** (`tests/test_haware_profile_validation.py::NarrowedEstimatorProhibitionTest`, `::RevisedProfileFieldsTest`, 9 tests). Done: the prohibition now matches with an explicit `ALLOWED_ESTIMATOR_TERMS = ('wheel_weighted_procrustes',)` allowlist instead of a bare substring scan, and `validate_before_read` finally scans `profile.optimizer` itself — the old scan reached only the scope guard's declared terms, so a prohibited mode could ride in on the very profile it was meant to police (verified: it did not raise). `OptimizerProfile` gained `validity_gate_set` / `wheel_seeded_enabled` / `non_wheel_seeded_enabled` (rejecting an empty gate set and both-classes-disabled), `PilotPolicy` gained `diagnostic_candidates` + `diagnostic_candidate_params` (tuple-of-pairs, since a Mapping field makes the frozen model unhashable) with a both-ways consistency check, and `AcceptanceProfile` gained `acceptance_sites` / `candidate_site_pool` (exactly two, drawn from the pool, `taipei-cm` permanently ineligible).
+    - **Completed 2026-08-17** (`::FrozenRuntimeAndSweepFieldsTest`, 4 more tests; suite 245, OK): new `PreGateBound` / `SceneExportSettings` / `ReferenceMachine` models, `CalibrationProfile.pre_gate`, `AcceptanceProfile.scene_export` / `batch_runtime_envelope_s_per_s` / `reference_machine`, and the whole `PilotPolicy` statistics block (interval method pinned to `whole_track_cluster_bootstrap_v1`, cluster floor 8, resample budget, MEI table, `position_ambiguity_tolerance_m` validated at `<= MEI/2`, ascending `scene_region_bands_m`, calibration-health constants). Deleting the deferred-capability machinery (`DEFERRED_CAPABILITIES`, `MvpScopeGuard.enabled_deferred_capabilities`, `EvidenceGateDecision`) belongs to task 6.7.
+  - [x] 1.3 Configure deterministic property-test support
+    - Pin the exact Hypothesis version in the project dependency/lock files and add bounded strategies for valid/degenerate calibrations, poses, nuisances, observations, semantic alternatives, support boundaries, track provenance, populations, and decisions.
+    - Configure at least 100 successful examples per deterministic CI seed and replayable failure metadata; keep each numbered design property in its own test module.
+    - **Depends on:** 1.1
+    - _Requirements: 6.30; Design Testing Strategy_
 
-  - [ ]* 1.6 Write profile and schema validation smoke tests
-    - Test absent calibration thresholds, overlapping predicates, malformed enum/status values, non-finite fields, unsupported schemas, and deterministic supported-version error details.
-    - **Depends on:** 1.1, 1.2, 1.3
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_profiles.py tests/haware_accuracy/test_schema_contracts.py -q`
-    - _Requirements: 6.1, 6.2, 6.3, 9.3, 13.31, 13.32, 13.33, 13.34, 13.35, 13.36, 15.34, 15.35, 15.36_
+  - [-]* 1.4 Write unit tests for model, profile, and scope validation
+    - Cover immutable/canonical values, non-finite data, open or inverted bounds, invalid ground heights, insufficient stratified budgets, implicit optimizer defaults, incomplete gate precedence, authority-state contradictions, prohibited modes/call paths, diagnostic-site isolation, and default-off behavior.
+    - **Depends on:** 1.2
+    - _Requirements: 3.7-3.9, 4.1-4.8, 4.15-4.18, 6.1-6.6, 6.27-6.29, 7.1-7.7, 12.4; Scope boundary section_
 
-  - [ ]* 1.7 Write the property test for property-runner reproducibility
-    - **Property 26: Property-runner reproducibility**
-    - Verify the four seeds, minimum case count, frozen generator domains, complete failure metadata, and exact minimized-example replay without generation.
-    - **Depends on:** 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_26_runner_reproducibility.py -q`
-    - **Validates: Requirements 15.1, 15.2, 15.3, 15.4, 15.5**
+- [-] 2. Implement the narrow observation, replay, adapter, and track boundary
+  - [-] 2.1 Implement the provider-neutral observation schema and deterministic replay reader/writer
+    - Create `trafficlab/io/haware_observation_replay.py` with the frozen required/optional fields and numeric bounds (finite in-image coordinates, confidence in `[0,1]`); isolate invalid observations and invalid records at their required scopes with stable reasons.
+    - Reject records with duplicate observation identities (`duplicate_observation_id`); normalize permutation-invariantly; write sorted-key UTF-8 JSON; **return per-record observation exclusions and reasons alongside the payload**; verify read/write equivalence by value in tests; record source path/content identity for read-only legacy inputs.
+    - **Depends on:** 1.1, 1.2
+    - _Requirements: 1.2-1.5, 2.1-2.10, 2.13-2.18_
+    - **Re-opened 2026-08-16:** drop string/collection/max-observation bounds and the `non_deterministic_duplicate_resolution` / `replay_round_trip_mismatch` reasons; add the writer's exclusion return (the tasks.md finding "writer silently thins records" is now a requirement, 2.15).
 
-- [ ] 2. Create immutable frozen baselines and disabled-mode golden inputs
-  - [ ] 2.1 Implement the frozen-baseline store, comparability diff, and reproduction verifier
-    - Implement manifest identity construction, publish/verify/rerun APIs, immutable exact-byte storage, ordered artifact verification, canonical-path comparability differences, and scalar-metric tolerance checks.
-    - Add tamper and forbidden-replacement examples before implementation.
-    - **Depends on:** 1.2, 1.3
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_baseline_store.py -q`
-    - _Requirements: 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.10, 2.11, 2.12, 2.15, 2.16, 2.17, 2.18, 2.19, 2.20, 2.21, 2.22, 2.23, 2.24, 2.25_
-
-  - [ ] 2.2 [EXTERNALLY BLOCKED: frozen site inputs/profile/calibrations] Materialize both frozen legacy baselines and compatibility goldens
-    - Once exact `kee-cc` and `taoyuan-tc` input inventories, calibration artifacts, dependency lock, and effective profile values are supplied, use code-backed artifact builders to create content-addressed baseline manifests, outputs, and disabled-mode golden fixtures with handedness correction and the existing spread gate enabled.
-    - Do not infer missing values from `taipei-cm`; if any prerequisite artifact is absent or hash-invalid, leave this task blocked and Phase 0 failed.
-    - **Depends on:** 2.1; external supplied-and-frozen artifacts
-    - **Validation:** `python -m trafficlab.measurement baseline verify --site kee-cc --baseline-id <id>` and the same command for `taoyuan-tc`
-    - _Requirements: 1.14, 1.15, 1.16, 1.17, 2.6, 2.7, 2.8, 2.9, 2.10, 2.15, 2.22, 2.23, 2.24, 2.25, 2.29, 2.30_
-
-  - [ ]* 2.3 Write frozen-store integration tests
-    - In a temporary content-addressed store, cover publish, verify, comparable rerun, tampering, changed artifact identity, partial staging, immutable overwrite/mutation rejection, ordered output hash mismatch, and scalar metric mismatch.
+  - [-] 2.2 Implement the sole PifPaf MVP adapter and one-way replay import
+    - Create `trafficlab/inference/pifpaf_haware_adapter.py` as the only production module allowed to import PifPaf and map Apollo-24 records to candidate semantic labels without promoting confidence or labels to correspondence truth.
+    - Add a one-way importer for existing TrafficLab replay records that records provider/source provenance and produces the narrow provider-neutral schema; the optimizer must depend only on normalized models/protocols.
     - **Depends on:** 2.1
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_baseline_store_integration.py -q`
-    - _Requirements: 2.3, 2.4, 2.5, 2.9, 2.10, 2.11, 2.12, 2.13, 2.14, 2.15, 2.16, 2.22, 2.23, 2.24, 2.25_
+    - _Requirements: 1.3-1.5, 2.5-2.12, 2.19-2.23_
 
-- [ ] 3. Validate independent ground truth and freeze evaluation populations
-  - [ ] 3.1 Implement the ground-truth validator, annotation isolation contract, and population builder
-    - Validate complete metadata, calibrated metre coordinates, frozen reference point, source lineage, independence/contamination, uncertainty, partition exclusivity, track IDs, duplicate groups, and deterministic exclusion audits.
-    - Implement annotation-tool guards that make Haware-derived overlays unavailable and require hash-verifiable source lineage.
-    - Build stable per-site populations and reject insufficient counts/tracks or missing/ambiguous matches without shrinking denominators.
-    - **Depends on:** 1.1, 1.3
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_ground_truth.py -q`
-    - _Requirements: 3.1-3.37, 5.1, 5.2, 5.3, 5.4, 15.50, 15.57, 15.58_
+  - [-] 2.3 Implement genuine-versus-pseudo track provenance finalization
+    - Classify a track as real only with consistent tracker name/version, Source_Sequence, association provenance, and occurrence in more than one frame; classify frame-local `500+`, incomplete, inconsistent, and one-frame claims as pseudo with stable reasons.
+    - Finalize classification over a complete replay before partitioning and expose pseudo/no-track data only to explicitly named frame-local diagnostics.
+    - **Depends on:** 2.1, 2.7
+    - _Requirements: 8.1-8.7, 8.10-8.13, 10.32_
 
-  - [ ] 3.2 [EXTERNALLY BLOCKED: independent GT acquisition] Import, validate, and freeze GT/population artifacts for both acceptance sites
-    - Acquisition/annotation is external and is not a coding task. After independently produced `kee-cc` and `taoyuan-tc` records and lineage artifacts are supplied, run the coded validator and write frozen partition/population artifacts only if each site retains at least 30 eligible detections and 3 independent non-null tracks.
-    - Reject Haware-derived, contaminated, unverifiable, incomplete, duplicate, or excessive-uncertainty records; never substitute diagnostic-site data.
-    - **Depends on:** 3.1; external independent GT and lineage artifacts
-    - **Validation:** `python -m trafficlab.measurement ground-truth validate --site kee-cc --input <gt.json>` and the same command for `taoyuan-tc`
-    - _Requirements: 3.1-3.37, 4.9-4.18_
+  - [-]* 2.4 Write the property test for value-exact provider-neutral replay
+    - **Property 11: Provider-neutral replay round trip is value-exact**
+    - Generate bounded records and unordered equivalent presentations; verify value-equal round trips, `duplicate_observation_id` rejection, record isolation, and preservation of provider, semantic, frame, detection, source, and track provenance.
+    - **Depends on:** 1.3, 2.1
+    - **Validates: Requirements 1.4, 2.5, 2.6, 2.9, 2.10, 2.13, 2.15, 2.16, 2.17**
+    - **Re-opened 2026-08-16:** relax byte-identity assertions to value equality.
 
-  - [ ]* 3.3 Write the property test for deterministic ground-truth exclusion
-    - **Property 17: Ground-truth exclusion is deterministic**
-    - Generate independence, metadata, coordinate, uncertainty, partition, track, and duplicate-group cases; require permutation-invariant whole-group exclusion and frozen codes.
-    - **Depends on:** 3.1, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_17_ground_truth_exclusion.py -q`
-    - **Validates: Requirements 3.1-3.30, 15.50, 15.57, 15.58**
+  - [x]* 2.5 Write the property test for genuine track classification and exclusion
+    - **Property 14: Genuine track classification and exclusion**
+    - Generate complete/incomplete/inconsistent/one-frame and frame-local `500+` claims; prove pseudo-track changes cannot affect acceptance metrics, clustered intervals, power, partitions, or motion diagnostics.
+    - **Depends on:** 1.3, 2.3
+    - **Validates: Requirements 8.1-8.8, 8.10, 8.13, 10.32**
 
-  - [ ]* 3.4 Write ground-truth and annotation integration tests
-    - Add annotation-view smoke coverage for unavailable prohibited layers and mandatory lineage, plus sufficiency, partition disjointness, ambiguous join, and denominator-preservation fixtures.
-    - **Depends on:** 3.1
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_ground_truth_integration.py -q`
-    - _Requirements: 3.4-3.37, 5.1-5.4, 15.50_
+  - [x]* 2.6 Write replay/adapter integration tests
+    - Import representative existing PifPaf replay fixtures, prove `500+` display IDs are pseudo, write/read replays, isolate malformed records, and replay without importing or invoking OpenPifPaf.
+    - Verify production imports and writes never target root `pifpaf/**` or `location/**`.
+    - **Depends on:** 2.2, 2.3
+    - _Requirements: 1.2-1.5, 2.11-2.21, 8.1-8.7_
 
-- [ ] 4. Implement fixed-population metrics and the Phase-0 gate
-  - [ ] 4.1 Implement planar error, percentile, coverage, status, and per-mode accounting
-    - Compute unrounded finite metre errors, nearest-rank statistics, null empty samples, fixed-denominator usable coverage, and per-mode contributions with fallback included as a usable primary path.
-    - Start with hand-computed tables for empty, fallback-heavy, and unequal usable-subset cases.
-    - **Depends on:** 1.3, 3.1
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_metrics.py -q`
-    - _Requirements: 4.1-4.8, 5.1-5.31, 15.50, 15.51, 15.53_
+  - [ ] 2.7 Emit tracker provenance from the replay producer
+    - Extend `scripts/eval_haware_replay.py` (its `ReplayWriter` payload) and `TrafficLabReplayImporter._legacy_track_claim` so every ByteTrack-matched detection carries `tracker_name='bytetrack'`, `tracker_version=<ultralytics.__version__>+sha256(Path(ultralytics.__file__).parent/'cfg/trackers/bytetrack.yaml')`, `source_sequence=<video path>+sha256`, `association_provenance='yolo_bbox_iou_match iou>=<--iou-threshold>'`; keep synthesized `500+` IDs frame-local; `finalize_track_provenance` must classify these REAL.
+    - **Depends on:** 2.2
+    - _Requirements: 8.1-8.4, 8.6, 8.14, 10.32_
 
-  - [ ] 4.2 Implement deterministic selective-risk curves
-    - Sort only finite-confidence usable matches by descending confidence then frame/detection identity; use `k=ceil(cN)`, fixed population `N`, the required schedule, and explicit matched/null point behavior.
+  - [ ] 2.8 Generate, import, and content-address stored replays for kee-cc and taoyuan-tc
+    - Command (per site, under `.venv-pifpaf`): `python scripts/eval_haware_replay.py --method geometric --yolo models/yolo11l-visdrone-ft.pt --g-proj location/<code>/G_projection_<code>.json --video location/<code>/footage/<code>.mp4 --out evidence/haware/replays/<code>/replay.json.gz` (adjust flag names to the script's actual CLI; the default `--yolo models/best.pt` does not exist); import through the one-way importer; record source lineage and sha256 in `evidence/haware/current_evidence_inventory.json`. These were wrongly listed as external blockers; the tools and the footage are in the repo.
+    - **Depends on:** 2.7, 6.9
+    - _Requirements: 2.19-2.21_
+
+- [x] 3. Implement pure calibrated forward projection and bounded parameters
+  - [x] 3.1 Implement immutable calibration snapshots and pure forward projection
+    - Create `trafficlab/projection/haware_forward.py`; copy and validate `K`, `D`, `H`, `H_inv`, camera satellite point, camera height, and pixel scale from `GProjection` without mutating it.
+    - Vectorize pose/template/nuisance transformation, camera-radial parallax, inverse homography, and repository-compatible distortion; return per-point validity and explicit failures for unsupported distortion, singular denominators, non-finite intermediates, or `h >= z_cam`.
+    - **Depends on:** 1.1, 1.2
+    - _Requirements: 1.6-1.8, 3.1-3.6, 4.1-4.8_
+
+  - [x] 3.2 Implement scaled pose and bounded nuisance parameterization
+    - Encode position in metres, an unwrapped local heading delta, bounded positive dimensions, non-ground cue heights, and only profile-authorized calibration deltas in frozen order/units/scales; keep ground-contact heights constant at zero.
+    - Convert position back to satellite pixels once and normalize heading only at output; never publish fitted calibration or feed it back into site calibration.
+    - **Depends on:** 1.2, 3.1
+    - _Requirements: 3.1, 3.5, 3.6, 4.1-4.8_
+
+  - [x]* 3.3 Write forward-projection parity and parameter-bound tests
+    - Compare nominal predictions point-by-point with `GProjection.sat_to_cctv()` for `h=0`, nonzero heights, distortion, `kee-cc`, and `taoyuan-tc` calibration fixtures; cover invalid homographies, distortion layouts, height limits, exact nuisance endpoints, and north/east/arbitrary headings.
+    - **Depends on:** 3.2
+    - _Requirements: 1.6-1.8, 3.1-3.6, 4.1-4.8_
+
+- [x] 4. Implement deterministic semantic and seed hypothesis generation
+  - [x] 4.1 Implement semantic paths, cue subsets, and direct image-space seeds
+    - Create `trafficlab/motion/haware_hypotheses.py` with normal, profile-defined front/rear reversed, and explicit heading-plus-180 paths; preserve correspondence and candidate-label provenance for every path.
+    - Generate eligible wheel seeds first from frozen minimal CCTV-pixel equations with `h=0`, then generate eligible non-wheel seeds regardless of wheel presence, support, visibility, or later outlier status; permit all evidence-supported cue families.
+    - Do not call baseline localizers or construct inverse-lifted ground points, projected-point fits, role constraints, geometry modes, or wheel-exclusive paths.
+    - **Depends on:** 2.1, 3.2
+    - _Requirements: 1.16-1.18, 2.22-2.23, 3.7-3.9, 4.9-4.18, 5.2-5.8, 6.7_
+
+  - [x] 4.2 Implement deterministic stratified hypothesis budgeting and terminal-state accounting
+    - Reserve budget across eligible semantic paths and both seed classes before canonical round-robin filling; wheel precedence controls emission order only and cannot consume the non-wheel stratum.
+    - Record exactly one terminal state for every authorized semantic-path/cue-subset/seed-class combination and mark each omitted combination `hypothesis_budget_exceeded`.
     - **Depends on:** 4.1
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_selective_risk.py -q`
-    - _Requirements: 5.32-5.45, 15.52, 15.53_
+    - _Requirements: 5.1, 5.8-5.12, 6.2, 6.8, 6.11-6.12_
+  - [x]* 4.3 Write the property test for deterministic complete hypothesis generation
+    - **Property 2: Deterministic complete hypothesis generation**
+    - Verify every authorized combination has one terminal state, every generated seed uses a frozen minimal configuration, and equivalent observation permutations preserve canonical generation.
+    - **Depends on:** 1.3, 4.2
+    - **Validates: Requirements 1.16, 5.2-5.8, 5.11-5.12, 6.7, 6.11-6.12**
 
-  - [ ] 4.3 Implement paired-track confidence intervals
-    - Sample the population's distinct track count with replacement, apply identical track sequences/multiplicities to both systems, recompute complete metrics, and emit frozen interval metadata and undefined-replicate handling.
-    - **Depends on:** 4.1
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_paired_track_intervals.py -q`
-    - _Requirements: 5.46-5.56_
+  - [x]* 4.4 Write the property test for non-exclusive wheel-first ordering
+    - **Property 3: Wheel-first ordering is non-exclusive**
+    - Verify the first eligible seed is wheel-seeded at exact `h=0` while applicable non-wheel paths are always generated and remain equally eligible despite wheel presence, support, or outlier status.
+    - **Depends on:** 1.3, 4.2
+    - **Validates: Requirements 1.17, 4.1, 4.9-4.12, 5.6-5.7**
 
-  - [ ] 4.4 Implement per-site evidence enforcement and acceptance decisions
-    - Enforce ground-truth error as primary evidence; report proxies only in strict hierarchy; filter `taipei-cm` before tuning, metrics, resampling, and decisions; evaluate all accuracy/coverage/risk gates independently at both sites; never allow pooled/proxy rescue.
-    - **Depends on:** 4.1, 4.2, 4.3
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_acceptance_evaluator.py -q`
-    - _Requirements: 4.1-4.18, 5.57-5.65, 15.37, 15.38, 15.39, 15.40_
+  - [x]* 4.5 Write the property test for deterministic accountable hypothesis budgets
+    - **Property 7: Hypothesis budget allocation is deterministic and accountable**
+    - Generate oversized cross products; prove the budget is respected, semantic and seed strata survive, and generated plus budget-excluded paths exactly partition the authorized combinations under every permutation.
+    - **Depends on:** 1.3, 4.2
+    - **Validates: Requirements 5.1, 5.8-5.9, 5.12, 6.2, 6.8**
 
-  - [ ] 4.5 Implement the conjunctive Phase-0 gate and preliminary/finality policy
-    - Require verified baseline, sufficient independent GT, and reproducible baseline metrics for each acceptance site; otherwise label wheel-first results preliminary and omit every final pass/acceptance decision.
-    - **Depends on:** 2.1, 3.1, 4.4
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_phase0_gate.py -q`
-    - _Requirements: 2.26-2.35, 3.31-3.37, 15.55, 15.56_
+- [-] 5. Implement bounded robust refinement, scoring, observability, and selection
+  - [x] 5.1 Implement deterministic minimal solving and bounded SciPy refinement
+    - Create `trafficlab/motion/haware_optimizer.py` with direct image-space minimal seed solving and `scipy.optimize.least_squares(method='trf')` robust refinement under explicit finite bounds.
+    - Freeze and pass every loss, scale, derivative, tolerance, step, iteration/candidate limit, retention key, parameter scale, seed, and runtime setting; translate numerical exceptions into typed non-authoritative failures.
+    - **Depends on:** 3.2, 4.2
+    - _Requirements: 3.1-3.10, 4.6-4.8, 6.2-6.12, 6.25-6.26_
 
-  - [ ]* 4.6 Write the property test for the conjunctive Phase-0 finality gate
-    - **Property 18: Phase 0 is a conjunctive finality gate**
-    - Generate every per-site prerequisite combination and verify exact pass versus preliminary/no-final-decision behavior.
-    - **Depends on:** 4.5, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_18_phase0_gate.py -q`
-    - **Validates: Requirements 2.26-2.35, 3.31-3.37, 15.55, 15.56**
+  - [x] 5.2 Implement support/outlier diagnostics and one common comparison score
+    - Apply the frozen pixel residual support boundary and equality policy, record every outlier/residual, reject insufficient support, and compute one robust score from residual loss, outlier penalty, and bounded nuisance prior cost.
+    - Prohibit score terms or acceptance conditions based on wheel count, seed class, generation order, provider, or semantic-label confidence; retain visible wheel count only as diagnostics.
+    - **Depends on:** 5.1
+    - _Requirements: 1.18, 4.11-4.18, 5.10-5.12, 6.3-6.4, 6.13-6.15_
 
-  - [ ]* 4.7 Write the property test for fixed-population metric accounting
-    - **Property 19: Fixed-population metric accounting**
-    - Generate differing usable subsets, empty samples/modes, and fallback-heavy populations; preserve fixed denominators and require mode contributions to sum to coverage.
-    - **Depends on:** 4.1, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_19_fixed_population_metrics.py -q`
-    - **Validates: Requirements 5.1-5.34, 15.50, 15.51, 15.53**
+  - [x] 5.3 Implement Jacobian, information, marginalized covariance, and conditioning
+    - Compute the frozen robust image-residual Jacobian and information matrix in scaled units, nuisance-marginalized pose information via the frozen Schur/pseudoinverse rule, rank, singular values, condition, covariance, position ellipse, heading uncertainty, and active-bound diagnostics.
+    - Include every varied height/dimension/calibration nuisance and reject rank, condition, uncertainty, and non-finite failures at the exact frozen boundaries.
+    - **Depends on:** 5.1
+    - _Requirements: 4.7-4.8, 6.5-6.6, 6.16-6.21, 6.25_
 
-  - [ ]* 4.8 Write the property test for selective-risk determinism
-    - **Property 20: Selective-risk determinism**
-    - Verify tie ordering, `ceil(cN)`, schedule endpoints, matched/null points, and empty curves.
-    - **Depends on:** 4.2, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_20_selective_risk.py -q`
-    - **Validates: Requirements 5.32-5.45, 15.52, 15.53**
+  - [x] 5.4 Implement pose-equivalence deduplication, ambiguity handling, and ordered gates
+    - Build permutation-invariant equivalence components from pose and prediction tolerances, select the lowest common-score representative, and retain all merged provenance/path states.
+    - Latch margin necessity from the initial deduplicated valid set; reject distinct equal-score alternatives as `ambiguous_equal_score`, insufficient margin as `ambiguous_hypotheses`, and choose one decisive reason by total precedence while retaining all failures.
+    - Finalize selected pose coordinates/headings only after support, numeric, convergence, observability, conditioning, uncertainty, spread, equality, and margin gates; return `insufficient_valid_hypothesis` when no higher-precedence failure applies.
+    - **Depends on:** 5.2, 5.3
+    - _Requirements: 3.5-3.6, 5.13-5.18, 6.19-6.31, 7.1-7.7_
 
-  - [ ]* 4.9 Write the property test for paired-track resampling
-    - **Property 21: Paired-track resampling remains paired**
-    - Verify identical sampled track sequence/multiplicity, whole-metric recomputation, deterministic seeds, and interval null metadata.
-    - **Depends on:** 4.3, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_21_paired_track_resampling.py -q`
-    - **Validates: Requirements 5.46-5.56**
+  - [x]* 5.5 Write the property test for image-space recovery and coordinate equivariance
+    - **Property 1: Image-space recovery and coordinate equivariance**
+    - Generate observable synthetic forward projections and valid transforms; verify pose recovery, circular heading, coordinate equivariance, body-axis preservation, and ineligibility rather than success when required gates fail.
+    - **Depends on:** 1.3, 5.4
+    - **Validates: Requirements 1.6-1.7, 3.1-3.6, 3.10-3.11**
 
-  - [ ]* 4.10 Write the property test for site-separated, proxy-proof acceptance
-    - **Property 22: Acceptance is site-separate and proxy-proof**
-    - Generate both acceptance sites, pooled/proxy values, and diagnostic-site add/remove/permutation cases; require both sites to pass independently.
-    - **Depends on:** 4.4, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_22_site_acceptance.py -q`
-    - **Validates: Requirements 4.1-4.18, 5.57-5.65, 15.37, 15.38, 15.39, 15.40**
+  - [-]* 5.6 Write the property test that common scoring permits a non-wheel winner
+    - **Property 4: Common scoring permits a non-wheel winner**
+    - Verify identical predictions/support/nuisance cost score identically across seed classes and a uniquely lower non-wheel score wins without any wheel bonus or shortcut.
+    - **Depends on:** 1.3, 5.14
+    - **Validates: Requirements 1.18, 4.11, 4.17-4.18, 5.10, 6.33**
 
-  - [ ] 4.11 [EXTERNALLY BLOCKED: Tasks 2.2 and 3.2 artifacts] Materialize reproducible baseline metric reports and Phase-0 evidence
-    - With both verified frozen baselines and sufficient frozen GT populations, use the automated harness to write deterministic per-site baseline reports and a Phase-0 evidence artifact; keep the gate failed if either site cannot reproduce.
-    - **Depends on:** 2.2, 3.2, 4.5
-    - **Validation:** `python -m trafficlab.measurement evaluate --phase baseline --site kee-cc --profile <profile-id>` and the same command for `taoyuan-tc`
-    - _Requirements: 2.22-2.35, 3.31-3.37, 5.1-5.56_
+  - [x]* 5.7 Write the property test for robust support and outliers
+    - **Property 5: Robust outliers cannot displace sufficient clean support**
+    - Add residuals immediately below/equal/above the support boundary; verify exclusion diagnostics and equivalent recovery with sufficient clean support, or decisive `insufficient_support` otherwise.
+    - **Depends on:** 1.3, 5.4
+    - **Validates: Requirements 4.12, 6.3-6.4, 6.13-6.15, 6.27**
 
-  - [ ]* 4.12 Write metric and Phase-0 integration fixtures
-    - Add known nearest-rank tables, one hand-computed paired-track fixture, fallback-heavy accounting, missing/ambiguous match failures, diagnostic invariance, and every Phase-0 prerequisite combination.
-    - **Depends on:** 4.4, 4.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_metrics.py tests/haware_accuracy/test_acceptance_evaluator.py tests/haware_accuracy/test_phase0_gate.py -q`
-    - _Requirements: 2.26-2.35, 4.1-4.18, 5.1-5.65_
+  - [x]* 5.8 Write the property test for semantic ambiguity and pose deduplication
+    - **Property 6: Front/rear alternatives never resolve ambiguity by order**
+    - Generate normal/reversed/180 alternatives and equivalent-pose clusters; verify complete evaluation, provenance-preserving merge, equal-score and margin rejection, and invariance to diagnostic order or motion output.
+    - **Depends on:** 1.3, 5.4
+    - **Validates: Requirements 2.22-2.23, 5.2-5.4, 5.13-5.17, 6.22-6.24, 6.29, 8.9**
 
-- [ ] 5. Checkpoint — verify Phase 0 code and identify external blockers
-  - Ensure all available Phase 0 tests pass, ask the user if questions arise. Do not claim Phase 0 passed while Tasks 2.2, 3.2, or 4.11 remain blocked.
+  - [x]* 5.9 Write the property test for nuisance bounds and uncertainty propagation
+    - **Property 8: Nuisance bounds and uncertainty propagation**
+    - Verify every varied nuisance stays in its closed interval, ground heights remain zero, and diagnostics include every authorized nuisance and frozen prior/interval treatment.
+    - **Depends on:** 1.3, 5.3
+    - **Validates: Requirements 4.1-4.8, 6.5**
 
-- [ ] 6. Implement projection conditioning and mathematically correct weighted fitting
-  - [ ] 6.1 Implement the calibrated projection-conditioning metric
-    - Extend projection code with the versioned analytic homography-Jacobian metric in metres per undistorted pixel; reject invalid calibration, undistortion, denominator, Jacobian, singular value, or scale with `invalid_conditioning_metric`.
-    - Add exact below/equal/above threshold examples before implementation; never use projection fallback defaults in acceptance execution.
-    - **Depends on:** 1.1, 1.3
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_projection_conditioning.py -q`
-    - _Requirements: 9.1-9.10, 15.45, 15.46, 15.47_
+  - [-]* 5.10 Write the property test for observability rejection
+    - **Property 9: Unobservable, ill-conditioned, or uncertain poses are rejected**
+    - Compare reported rank, condition, and covariance/uncertainty with a reference calculation and verify exact-boundary rejection with no authoritative coordinate.
+    - **Depends on:** 1.3, 5.14
+    - **Validates: Requirements 6.6, 6.16-6.21, 6.33-6.34, 7.2-7.3**
 
-  - [ ] 6.2 Implement pure weighted proper-rigid Procrustes with local handedness correction
-    - Preserve the Apollo-24 template and `+x=vehicle left`; mirror only the local source x column before fitting; use positive-weight centroids/covariance, proper rotation, fixed scale, profile-frozen rank/uniqueness checks, stable typed failures, and finite outputs.
-    - Begin with existing north/east/arbitrary-angle examples and malformed-weight/shape cases.
-    - **Depends on:** 1.1, 1.3
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_weighted_procrustes.py tests/test_haware_localization.py -q`
-    - _Requirements: 1.1, 1.2, 7.1-7.34, 15.6-15.18, 15.23, 15.30-15.33, 15.59_
+  - [-]* 5.11 Write the property test for deterministic decisive-gate precedence
+    - **Property 10: Decisive gate precedence is deterministic**
+    - Generate simultaneous gate failures; require the highest frozen precedence (`insufficient_support` first), retention of all other diagnostics, and no acceptance change from tie-breakers, diagnostic codes, or ordering.
+    - **Depends on:** 1.3, 5.14
+    - **Validates: Requirements 4.13, 5.18, 6.25-6.29, 6.31-6.32**
 
-  - [ ] 6.3 Implement wheel-only, wheel-weighted, and fallback fit adapters
-    - Build profile-approved supports and weights, use consistent weighted centering, compute finite residual/heading/confidence, and return reduced-confidence usable fallback without calling unresolved reprojection semantics.
-    - Keep fallback behavior explicit and independently testable rather than embedding it as an exception path.
-    - **Depends on:** 6.1, 6.2
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_mode_fitters.py -q`
-    - _Requirements: 6.31-6.38, 7.1-7.34, 8.17, 8.18, 8.19, 8.20, 15.19, 15.20, 15.53_
+  - [x]* 5.12 Write optimizer boundary and call-graph tests
+    - Cover convergence limits, support equality, active nuisance endpoints, rank/condition/uncertainty equality, score and margin equality, inclusive spread rejection, all-invalid paths, and numerical exceptions.
+    - Add a static AST import-graph test: modules `trafficlab/motion/haware_optimizer.py`, `haware_hypotheses.py`, `haware_accuracy/models.py`, `projection/haware_forward.py` import neither `haware_localization`, `haware_baseline_dispatch`, nor `measurement/haware_diagnostic_candidates`, and contain no **identifier** (`ast.Name`/`ast.Attribute`; string literals and substrings do not count) equal to `RoleConstraintGraph` / `wheel_only` / `wheel_weighted`; `haware_accuracy/validation.py` is excluded because it holds those strings as the prohibited list (design "Static and smoke checks").
+    - **Depends on:** 5.4
+    - _Requirements: 1.9-1.12, 3.7-3.9, 4.13-4.18, 5.16-5.18, 6.13-6.31_
+    - **Delivered 2026-08-17.** `tests/test_haware_optimizer.py::OptimizerCallGraphStaticTest` (5 tests) with a module-level `scan_module()` AST helper. The four in-scope modules are clean today, so the only genuinely red arm is the scanner's own self-test against a synthetic violating module — without it the real-module arms would pass no matter how the scanner was written. That self-test immediately earned its keep: the first scanner missed `from trafficlab.measurement import haware_diagnostic_candidates`, because for `ImportFrom` the module name sits in `node.names`, not `node.module`. A second arm pins that string literals are not identifiers, so `haware_accuracy/validation.py` can keep holding the prohibited list and `wheel_weighted_procrustes` stays legal.
 
-  - [ ]* 6.4 Write the property test for handed proper-rigid recovery and equivariance
-    - **Property 1: Handed proper-rigid recovery and equivariance**
-    - Generate nondegenerate Apollo-24 supports, translations, and rotations; verify recovery, translation equivariance, rotation equivariance, unchanged template convention, status, and mode.
-    - **Depends on:** 6.2, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_01_handed_recovery.py -q`
-    - **Validates: Requirements 1.1, 1.2, 7.15-7.18, 15.6-15.12**
+  - [-]* 5.13 Write the property test for exact optimizer replay
+    - **Property 12: Complete optimizer replay is exact**
+    - With fixed replay/profile/code/runtime identities and seed, verify exact normalized observations, terminal path states, selected hypothesis, floating pose values, support, status, reason, and diagnostics **by value** across repeated runs. Drop the byte-identity leg; keep the permuted-presentation leg. (This module was 49 % of suite time.)
+    - **Depends on:** 1.3, 2.1, 5.4
+    - **Validates: Requirements 6.11, 6.12, 6.30**
+    - **Re-opened 2026-08-16:** value equality instead of canonical bytes.
 
-  - [ ]* 6.5 Write the property test for weighted Procrustes solution correctness
-    - **Property 2: Weighted Procrustes solution correctness**
-    - Verify positive-weight centroids/covariance, orthogonality, positive determinant, translation equation, and objective optimality against generated comparison rotations.
-    - **Depends on:** 6.2, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_02_weighted_solution.py -q`
-    - **Validates: Requirements 7.1-7.18, 15.17**
+  - [ ] 5.14 Reconcile the frozen objective, observability, validity-gate set, rank-zero rule, and position-equivalent ambiguity with the implementation
+    - Score = per-component `rho` over image **and prior** residual components (matches `least_squares` semantics); `_robust_observation_loss` moves to per-component; `_robust_weights` applies `rho'` to prior components so `P_nuis = diag(rho'(e_a^2)/sigma_a^2)`; add the invariant `Score - lambda_out*(N-|Support|) == 2*cost` within `1e-9` relative.
+    - Rank zero: report `condition=None`, decisive `unobservable_pose`, do not evaluate `ill_conditioned_pose`; update Property 9 to assert this instead of skipping it.
+    - Make `validity_gate_set = ('support','non_finite','convergence')` explicit in `OptimizerProfile` and `OrderedGateSelector`; decisive reason for the all-invalid case per Requirement 4.13.
+    - Implement Position_Equivalent_Ambiguity (Requirements 5.19-5.20, 7.1): tied hypotheses whose max pairwise position distance ≤ `position_ambiguity_tolerance_m` (0.25 m) accept with the lowest-score representative position, `heading=null`, `heading_status='ambiguous'`, and cluster dispersion folded into position uncertainty; two or more position clusters still reject `ambiguous_equal_score`.
+    - Wire `wheel_seeded_enabled` / `non_wheel_seeded_enabled` through `HypothesisGenerator` and profile validation (strata reservation only for enabled classes).
+    - **Depends on:** 5.4, 1.2
+    - _Requirements: 4.9-4.13, 5.7, 5.18-5.21, 6.32-6.34, 10.16-10.17_
+    - **Partly delivered 2026-08-17** (suite 253, OK). Done: (a) rank zero now reports `condition=None` and skips the `ill_conditioned_pose` gate entirely — `ObservabilityDiagnostics.condition` became `Optional[float]` (`tests/test_haware_optimizer.py::RankZeroConditioningTest`, 2 tests); (b) Position_Equivalent_Ambiguity — `resolve_equal_score_positions()` plus its wiring in `OrderedGateSelector.select`, so tied hypotheses whose maximum pairwise centre distance is within `position_ambiguity_tolerance_m` accept with the lowest-score representative's position, `heading_deg=None`, `heading_status='ambiguous'` (5 unit tests + one selector test). The tolerance is measured in **metres** via `CalibrationSnapshot.pixels_per_metre`, not pixels; the pre-existing far-apart case (10 px) still rejects `ambiguous_equal_score`, so the guard works in both directions.
+    - A first attempt at the selector test silently proved nothing: two candidates 0.05 px apart with the same heading were merged by pose equivalence before selection, so the tie never occurred. The test now uses a 180-degree heading swap, which is the real front/rear case.
+    - **Still open:** (c) the per-component robust loss across score/refinement/observability with the `Score - lambda_out*(N-|Support|) == 2*cost` invariant, and (d) wiring `wheel_seeded_enabled` / `non_wheel_seeded_enabled` through `HypothesisGenerator`.
+- [-] 6. Enforce coordinate authority and preserve frozen baseline behavior
+  - [x] 6.1 Implement atomic localization authority and compatibility policies
+    - Create `trafficlab/motion/localization_authority.py` to validate new result invariants, normalize legacy records only through the frozen explicit policy, and reject inconsistent records atomically without mutating prior output.
+    - Map accepted authoritative coordinates to compatibility `sat_coords`; keep rejected optimizer `sat_coords` null and retained fits diagnostic-only.
+    - Ship `LEGACY_LOCALIZE_V1: LegacyStatusPolicy` (design §6 table) as a module constant with content identity; `authoritative_position()` defaults to it when a record lacks new-contract fields, and records the applied policy version in its result. A legacy `ok` record with finite `sat_coords` is Accepted even when its heading is non-finite (`heading=null`, `heading_status='ambiguous'`).
+    - **Depends on:** 1.1, 5.4
+    - _Requirements: 1.19-1.20, 7.1-7.7, 7.15-7.16_
+    - **Delivered 2026-08-17.** `LEGACY_LOCALIZE_V1` ships in `trafficlab/motion/localization_authority.py`; `LegacyStatusPolicy` gained `unknown_status_reason`, `rejection_reasons` ((status, reason) pairs — a Mapping field would make the frozen dataclass unhashable) and `null_diagnostic_statuses`; `LocalizationResult` gained `heading_status` and now accepts a null heading; `LocalizationDiagnostics` gained `legacy_policy_version`. Tests: `tests/test_localization_authority.py::LegacyLocalizeV1PolicyTest` (10) and `tests/test_downstream_localization_authority.py::RealLegacyReplayEnrichmentTest` (3). Suite: 224 tests, OK.
+    - Two defects the tests found that the scout had not predicted: (a) routing keyed on *field presence* sent a legacy `extrapolated` record carrying `decisive_gate` into new-contract validation, where `LocalizationStatus('extrapolated')` raised `inconsistent_coordinate_state` — routing now keys on the status value (Requirement 1.22); (b) defaulting the policy turned a record with **no** localization evidence (`{}`, an unobserved track) into `legacy_status_evidence_insufficient`, destroying the enrichment `missing` count — missing and rejected are now distinguished (Requirement 1.21).
+    - One superseded assertion updated, not deleted: `test_legacy_acceptance_requires_frozen_policy_coordinate_and_heading` pinned `heading=None` to REJECTED; Requirement 1.19 inverts that, and the test now documents why in its docstring.
+    - Mutation-verified: reverting the `from_mapping` default to `None` turns all three end-to-end enrichment tests red.
 
-  - [ ]* 6.6 Write the property test for weight representation invariance
-    - **Property 3: Weight representation invariance**
-    - Verify positive uniform scaling and finite zero-weight additions preserve centroid, covariance, objective, rank, position, and heading; cover non-finite scaled total as `numeric_failure`.
-    - **Depends on:** 6.2, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_03_weight_invariance.py -q`
-    - **Validates: Requirements 7.19-7.22, 15.16, 15.18, 15.59**
+  - [-] 6.2 Enforce authority and segment gaps in downstream consumers
+    - Update `scripts/filter_and_enrich_output.py` and the trajectory, replay, collider, and export adapters to consume only validated Authoritative_Position for enrichment and spatial computation; load `legacy-localize-v1` by default (`--legacy-policy PATH` to a policy JSON overrides) and write the applied version into the output. Do **not** assign `segment_id` here — segmentation is owned by `build_scene.py` (6.8); this script only breaks velocity/interpolation at every rejected/missing sample (7.12–7.13).
+    - Clear per-real-track state at rejected/missing records so velocity and interpolation never bridge gaps; allow Diagnostic_Position only in debugging visualization/non-spatial analysis and group output counts by status/decisive reason.
+    - Golden regression: a real `eval_haware_replay.py` output and a taipei-cm-shaped legacy `trajectory.json` — `status=ok` keeps `position_m` parity with the pre-authority output; `status=extrapolated` nulls `sat_coords`/`position_m`.
+    - **Depends on:** 6.1
+    - _Requirements: 1.20, 7.8-7.16_
+    - **Re-opened 2026-08-16:** `filter_and_enrich_output.py:138` calls `authoritative_position(enriched)` with no policy → every real record becomes `missing_localization`. This is a live regression on the only production path.
 
-  - [ ]* 6.7 Write the property test for authoritative-safe estimator validation
-    - **Property 4: Typed estimator validation is authoritative-safe**
-    - Generate malformed shapes, non-finite coordinates, invalid weights/totals, deficient ranks, ambiguous fits, and non-finite outputs; require exact typed codes and no authoritative position.
-    - **Depends on:** 6.2, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_04_estimator_validation.py -q`
-    - **Validates: Requirements 7.23-7.34, 15.23, 15.30-15.33, 15.59**
+  - [-] 6.3 Implement corrected frozen baseline and exact disabled dispatch
+    - Add explicit dispatch in the canonical tree so disabled mode calls corrected `localize()` directly and emits its frozen legacy schema without passing through optimizer models, adapters, or result mapping.
+    - Keep `localize_reprojection()` as a separately identified diagnostic frozen baseline only; optimizer selection must never call either baseline.
+    - Preserve corrected handedness, configured spread behavior, status/reason/null/non-finite classifications, finite coordinates, and circular heading exactly within the required tolerance.
+    - Implement the per-Calibration_Profile near-horizon pre-gate (Requirement 1.23): emit legacy status `pre_gate_near_horizon` with null `sat_coords` before fitting; disabled unless `CalibrationProfile.pre_gate` is set; unit test that a passing detection is bit-identical to the ungated output.
+    - **Depends on:** 1.2
+    - _Requirements: 1.6-1.15; Scope boundary section_
 
-  - [ ]* 6.8 Write targeted fitter and conditioning boundary tests
-    - Cover handedness regressions, exact/adjacent conditioning boundaries, invalid homography/scale, zero weights, ambiguous support, proper determinant, and finite confidence/residual for all three fit paths.
-    - **Depends on:** 6.1, 6.2, 6.3
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_projection_conditioning.py tests/haware_accuracy/test_weighted_procrustes.py tests/haware_accuracy/test_mode_fitters.py -q`
-    - _Requirements: 1.1, 1.2, 7.23-7.34, 9.1-9.16, 15.23, 15.30-15.33, 15.45-15.47_
+  - [-]* 6.4 Write the property test for coordinate authority and downstream safety
+    - **Property 13: Coordinate authority is coherent and downstream-safe**
+    - Generate every accepted/rejected state and diagnostic-coordinate mutation; verify authority invariants, atomic rejection, unchanged spatial outputs, segment breaks, reason-grouped counts, every row of the `legacy-localize-v1` table, and that a scene export carries `position_m` only for accepted objects.
+    - **Depends on:** 1.3, 6.2, 6.8
+    - **Validates: Requirements 1.9, 1.10, 1.19, 1.20, 7.1-7.10, 7.12-7.18**
+    - **Re-opened 2026-08-16:** legacy-table and scene-export legs.
 
-- [ ] 7. Implement geometry-aware selection and the deterministic gate state machine
-  - [ ] 7.1 Implement observation normalization and exact-seven-check wheel geometry selection
-    - Validate and deterministically deduplicate/sort observations, preserve original diagnostic order, calculate diagnostic-only `n_wheel_kp`, evaluate exactly seven checks per candidate mode, enforce inclusive minima and non-overlap, and select by frozen priority without reading wheel count.
-    - **Depends on:** 6.1, 6.3
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_mode_selector.py -q`
-    - _Requirements: 1.7, 1.8, 6.1-6.30, 6.39-6.49, 15.13-15.15, 15.21, 15.22, 15.48, 15.49_
+  - [-]* 6.5 Write the property test for disabled-mode corrected-baseline parity
+    - **Property 19: Disabled mode preserves the corrected baseline exactly**
+    - Against deterministic golden fixtures, verify coordinate components and circular heading within `1e-9` plus exact statuses, reasons, nulls, non-finite classifications, and compatible legacy schema.
+    - **Depends on:** 1.3, 6.3
+    - **Validates: Requirements 1.13-1.15**
 
-  - [ ] 7.2 Implement fallback as the primary non-wheel support path
-    - Inspect fallback evidence only when every wheel mode is geometry-ineligible; cover zero-wheel, one-wheel, degenerate-wheel, and fallback-heavy traffic; condition the selected fallback support and prohibit fallback after safety rejection or fit failure.
-    - **Depends on:** 7.1
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_fallback_selection.py -q`
-    - _Requirements: 6.31-6.38, 8.6-8.11, 8.17, 8.18, 15.19-15.21, 15.53, 15.54_
+  - [-]* 6.6 Write downstream authority integration tests
+    - Run mixed accepted/rejected/missing fixtures through enrichment, scene construction, trajectories, visualization, collider, and export paths; assert only visualization/non-spatial diagnostics can consume diagnostic coordinates and no velocity/interpolation crosses a gap.
+    - **Depends on:** 6.2, 6.8
+    - _Requirements: 7.4-7.19_
 
-  - [ ] 7.3 Implement gate precedence, inclusive spread rejection, and result finalization
-    - Encode observation → support → conditioning → fit/numeric → spread → completion; first failure owns status/reason/mode, later gates become `not_evaluated`, and unsafe fit coordinates remain diagnostic-only.
-    - Preserve spread after fitting but change its boundary to inclusive rejection; map successful wheel modes to `ok` and successful fallback to `fallback`.
+  - [-]* 6.7 Write baseline-dispatch and static scope integration tests
+    - Compare disabled dispatch with corrected-baseline goldens and verify optimizer-enabled output stays diagnostic outside the pilot while dual-site held-out authorization is absent.
+    - Inspect production imports and dispatch to prove legacy trees are read-only, PifPaf has one adapter, and baselines are isolated. Remove the "every deferred capability is guarded and has no implementation symbol" assertion and the `enabled_deferred_capabilities` / `EvidenceGateDecision` machinery it tests (the former production-hardening/deferred-capability requirements are now the "Scope boundary and later phases" section).
+    - **Depends on:** 6.3
+    - _Requirements: 1.1-1.5, 1.11-1.16; Scope boundary section_
+    - **Re-opened 2026-08-16:** delete deferred-capability guard tests and models.
+
+  - [ ] 6.8 Bind the scene-bundle last mile: `tools/build_scene.py` and the Scene_Export_Contract
+    - `build_scene.py` (sole owner of segmentation): treat objects without non-null `position_m` as missing; never read `diagnostic_position_sat_px`; split each collider track at runs > `scene_export.max_gap_frames` (default 5) of rejected/missing samples; select the segment containing `--source-collision` and refuse the build when that frame falls inside a gap for either collider (`--diagnostic-scene` still builds, marked `diagnostic_only: true`); write `segment: {start_frame, end_frame}` and `localization_counts` per collider into `scene.json`; refuse the build when the selected segment's accepted share < `scene_export.min_accepted_share` (default `0.5`) unless `--allow-low-pass-rate`, printing share and dominant rejection reason. `trajectory.json` stays a verbatim copy.
+    - `filter_and_enrich_output.py` output carries `status`, reason, `localization_counts`, and `legacy_policy_version` per the Scene_Export_Contract (no `segment_id`).
+    - Tests in `tools/tests/` (segment split, collider segment selection, refusal + override, counts in scene.json); rerun `node tools/verify_scenes.mjs` after rebuilding one real scene.
+    - **Depends on:** 6.2
+    - _Requirements: 7.17-7.19_
+
+  - [ ] 6.9 Route `eval_haware_replay.py` through `localize_dispatch`
+    - Default path = corrected `localize()` with the exact legacy schema; `--localizer optimizer` emits diagnostic, non-authoritative output only.
+    - **Depends on:** 6.3
+    - _Requirements: 1.23; Scope boundary section_
+
+- [-] 7. Build outcome-blind evidence populations and comparable pilot runs
+  - [-] 7.1 Implement independent-GT validation and pre-outcome population freezing
+    - Create `trafficlab/measurement/haware_pilot.py` validators for exact GT matching, Reference_Point coordinates in the Metric_Frame (validated against the Glossary definition, not an opaque string), band-level measured uncertainty from repeat annotation, `protocol_version == gt-protocol-v1`, `annotation_medium` with its admissibility role (calibration-conditional vs calibration-independent), `lift_method`, `repeat_annotation_group`, source/annotator lineage, independence attestation, contamination, duplicate groups, genuine tracks, Capture_IDs and Source_Sequences (with the frozen temporal-buffer rule), independent views `(camera_id, Source_Sequence, scene_region)`, and the design §8 calibration health check with all three gates (`site_calibration_unfit` / `site_calibration_health_insufficient_data`).
+    - Freeze per-site eligibility, denominator, GT groups, real-track/source/view/band memberships, and whole-group pilot/held-out assignments before outcome APIs are accessible; report `held_out_capture_unavailable` when a site has < 2 Capture_IDs (a within-capture split never counts); permit a held-out Capture_ID to be registered after pilot freeze but before any held-out outcome is read.
+    - Keep `kee-cc` and `taoyuan-tc` namespaces separate and exclude `taipei-cm`, pseudo/no-track records, pooled rescue, and outcome-dependent inclusion.
+    - **Depends on:** 1.1, 2.3
+    - _Requirements: 8.5-8.7, 8.12-8.13, 9.1-9.24, 10.2, 10.32_
+    - **Re-opened 2026-08-16:** GT protocol fields, Source_Sequence definition and minimum, scene_region bands, site health check.
+
+  - [-] 7.2 Implement baseline/full/ablation/diagnostic-candidate pilot orchestration and run identity
+    - Run the corrected baseline, full optimizer, wheel-seeded-initialization-disabled ablation (`wheel_seeded_enabled=False`), non-wheel-seeded-initialization-disabled ablation (`non_wheel_seeded_enabled=False`), and every `PilotPolicy.diagnostic_candidates` arm on the same stable eligible ordering; record wall-clock and per-detection runtime per arm.
+    - Make each ablation change exactly one enable flag while preserving replay, candidate, calibration/cue/nuisance profiles, score/support rules, metric definitions, code/runtime identities, and deterministic seed. Tag each report with `arm_kind`.
+    - Add the calibration sensitivity sweep (Requirement 9.28) for any site using calibration-conditional GT: for each perturbation in `nominal + per-parameter endpoints + 256 seeded Sobol samples`, rebuild the medium-(a) GT and rerun both arms, then classify each perturbation under the 10.34 trichotomy and combine (unanimous go → go; disagreement → insufficient_data; unanimous failure → no_go). Exempt from the runtime envelope.
+    - **Depends on:** 5.14, 6.3, 7.1, 10.1
+    - _Requirements: 9.26-9.29, 10.1-10.2, 10.14-10.19, 12.1-12.2, 13.2_
+    - **Re-opened 2026-08-16:** ablation flags now exist in the contract; diagnostic candidate arm; runtime capture.
+
+  - [-]* 7.3 Write the property test for leak-free site-isolated evidence
+    - **Property 15: Independent evidence and partitions are leak-free and site-isolated**
+    - Generate GT duplicate/contamination groups and track/source incidence constraints; verify whole-group assignments, deterministic exclusions/failures, and invariance to `taipei-cm` or the other acceptance-site namespace.
+    - **Depends on:** 1.3, 7.1
+    - **Validates: Requirements 9.1, 9.4, 9.5, 9.7-9.12, 9.14-9.18**
+
+  - [-]* 7.4 Write the property test for isolated pilot ablations
+    - **Property 17: Pilot ablations isolate one initialization class**
+    - Verify the two ablation profiles differ from full only in `wheel_seeded_enabled` / `non_wheel_seeded_enabled` and preserve every replay, candidate, score/support, seed, metric, and run identity field.
+    - **Depends on:** 1.3, 5.14, 7.2
+    - **Validates: Requirements 10.15-10.19**
+    - **Re-opened 2026-08-16:** the shipped test asserts `wheel_seeded_initialization_enabled`; rename to the contract fields introduced by 5.14.
+
+  - [-]* 7.5 Write GT/population/orchestration integration tests
+    - Verify outcome APIs remain unavailable until independent GT, track classification, views, denominator, and partitions are frozen; cover exact-one joins, whole-group contamination/duplicates, assignment conflicts, pseudo exclusion, site isolation, and identical ordered inputs across all four core configurations plus the diagnostic candidate arm.
     - **Depends on:** 7.2
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_gate_state_machine.py -q`
-    - _Requirements: 1.3-1.6, 8.1-8.32, 9.11-9.16, 15.42-15.47, 15.54_
+    - _Requirements: 8.5-8.13, 9.1-9.24, 10.1-10.2, 10.15-10.19, 10.32, 12.1_
+    - **Re-opened 2026-08-16:** GT protocol / health-check fixtures and the diagnostic candidate arm (needs 10.1).
 
-  - [ ]* 7.4 Write the property test for deterministic geometry-based selection
-    - **Property 5: Deterministic geometry-based mode selection**
-    - Generate permutations and equivalent duplicates; preserve validation, mode, reasons, status, pose, and heading while proving selection uses labeled geometry/exact checks rather than wheel count or iteration order.
-    - **Depends on:** 7.1, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_05_mode_selection.py -q`
-    - **Validates: Requirements 1.7, 1.8, 6.4-6.6, 6.22, 6.39-6.49, 15.13-15.15**
+  - [ ] 7.6 Add the pilot driver `scripts/run_haware_pilot.py`
+    - Reads stored replays (`evidence/haware/replays/<code>/replay.json.gz`) + GT (`evidence/haware/gt/<code>/gt.json`, GroundTruthRecord schema), runs population freeze → baseline/full/two ablations/diagnostic candidate → statistics → decision; emits `insufficient_data` (with `held_out_capture_unavailable` per site) on the current inventory; reports `wall_s / video_s` and the projected full-video value against the `10 s/s` Batch_Runtime_Envelope and flags `runtime_envelope_exceeded`.
+    - **Depends on:** 8.2, 2.8
+    - _Requirements: 10.1-10.36, 13.1-13.4_
+- [-] 8. Implement pilot statistics, feasibility decisions, and held-out controls
+  - [-] 8.1 Implement per-site metrics, clustered intervals, power, and sufficiency (`pilot-stats-v1`)
+    - Compute accepted/rejected counts; own-set median/p90 (descriptive); **Paired_Accepted_Set** median/p90 for both arms, paired-set size and shares; fixed-denominator usable coverage; signed effects (median/p90 on the paired set, coverage on the denominator); selected seed provenance; genuine-track count; independent-view and `scene_region` band coverage; GT uncertainty; each arm's error-vs-coverage operating point.
+    - Implement `pilot-stats-v1` exactly as design §8: detection-level estimands (paired median, paired p90, fixed-denominator coverage); one inference method — 4096 seeded whole-track bootstrap that recomputes the detection-level statistic per resample; per-effect cluster universe and a per-effect minimum of 8 clusters → else `insufficient_data`; nearest-rank 0.95 interval; variance incl. GT uncertainty; `n_req` from the frozen MEI; power reported at the MEI; the 10.34 trichotomy (`U ≤ −MEI` go / `L > −MEI` no_go / straddle insufficient_data) with p90 non-gating; print cluster and replicate counts next to every interval.
+    - **Depends on:** 7.2
+    - _Requirements: 10.3-10.24, 10.33-10.36_
+    - **Re-opened 2026-08-16:** the harness froze a cluster minimum of 2 and computed post-hoc power (`directional_signal = max(0, -effect)`); both are replaced.
 
-  - [ ]* 7.5 Write the property test for geometry boundaries and eligibility
-    - **Property 6: Geometry boundary and eligibility semantics**
-    - Verify eligibility iff all seven checks pass, exact inclusive minima pass, adjacent-below values fail, and validated predicates never overlap.
-    - **Depends on:** 7.1, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_06_geometry_boundaries.py -q`
-    - **Validates: Requirements 6.7-6.23, 6.30, 15.21, 15.22, 15.48, 15.49**
-
-  - [ ]* 7.6 Write the property test for deterministic primary fallback
-    - **Property 7: Fallback is a deterministic primary support path**
-    - Generate zero/one/degenerate wheels and geometry-ineligible wheel modes; require fallback exactly when frozen non-wheel evidence and conditioning pass, otherwise `none`.
-    - **Depends on:** 7.2, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_07_fallback_path.py -q`
-    - **Validates: Requirements 6.31-6.38, 8.6, 8.7, 8.17, 8.18, 15.19-15.21, 15.53**
-
-  - [ ]* 7.7 Write the property test for inclusive terminal conditioning
-    - **Property 8: Conditioning rejection is inclusive and terminal**
-    - Generate exact and adjacent thresholds plus invalid metrics; verify rejection before fitting and no fallback replacement.
-    - **Depends on:** 7.3, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_08_conditioning_terminal.py -q`
-    - **Validates: Requirements 6.24-6.29, 6.32, 6.33, 6.37, 8.8-8.11, 9.1-9.20, 15.45-15.47, 15.54**
-
-  - [ ]* 7.8 Write the property test for first-failure gate precedence
-    - **Property 9: Gate precedence is first-failure deterministic**
-    - Generate simultaneous failures at all stages; require the earliest stage to determine status/reason/mode and all later stages to be `not_evaluated`.
-    - **Depends on:** 7.3, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_09_gate_precedence.py -q`
-    - **Validates: Requirements 8.1-8.16, 8.30-8.32, 9.11-9.14, 15.54**
-
-  - [ ]* 7.9 Write the property test for inclusive post-fit spread rejection
-    - **Property 10: Spread rejection is inclusive and post-fit**
-    - Generate greatest-below, exact, and least-above spread values; verify only below passes and rejected fit positions are diagnostic-only.
-    - **Depends on:** 7.3, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_10_spread_gate.py -q`
-    - **Validates: Requirements 1.3-1.6, 8.14-8.16, 9.12-9.14, 15.42-15.44**
-
-  - [ ]* 7.10 Write targeted fallback and status-state tests
-    - Add a fallback-heavy matrix, equal wheel count/different geometry cases, all statuses, first-failure combinations, no-late-fallback assertions, and exact gate traces/reason codes.
-    - **Depends on:** 7.1, 7.2, 7.3
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_mode_selector.py tests/haware_accuracy/test_fallback_selection.py tests/haware_accuracy/test_gate_state_machine.py -q`
-    - _Requirements: 6.24-6.49, 8.1-8.32, 9.11-9.20_
-
-- [ ] 8. Introduce LocalizationResultV2 and opt-in compatibility
-  - [ ] 8.1 Implement V2 result invariants and deterministic serialization
-    - Define all approved status/mode/gate/coordinate-role fields; require `usable` iff `ok|fallback`, alias usable `sat_coords` to authoritative coordinates, null both on unusable results, and mark retained unsafe coordinates diagnostic-only.
-    - **Depends on:** 1.3, 7.3
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_result_v2.py -q`
-    - _Requirements: 8.17-8.32, 12.1-12.14, 13.15-13.18, 13.22-13.30_
-
-  - [ ] 8.2 Implement configuration dispatch and legacy compatibility mappings
-    - Validate configuration before payloads; absent/false dispatches unchanged legacy behavior and originating unversioned schema, enabled supported versions dispatch to V2, and unsupported types/versions fail deterministically.
-    - Require explicit legacy status policy before downstream normalization and record that policy in output metadata.
-    - **Depends on:** 2.1, 8.1
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_compatibility.py -q`
-    - _Requirements: 1.14-1.17, 10.27-10.29, 13.1-13.36_
-
-  - [ ]* 8.3 Write the property test for coherent result states and coordinate roles
-    - **Property 11: Result state and coordinate roles are coherent**
-    - Generate every supported state; verify usable modes/finite authoritative positions and unusable `none`/null authoritative aliases with diagnostic-only retention.
-    - **Depends on:** 8.1, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_11_result_coherence.py -q`
-    - **Validates: Requirements 8.17-8.29, 13.16-13.18, 15.24, 15.26, 15.41**
-
-  - [ ]* 8.4 Write the property test for versioned schema round trips
-    - **Property 14: Versioned schema round trip**
-    - Generate valid records across every supported schema/status/mode and preserve fields, finite values, enums, nulls, arrays, object meaning, and originating legacy mapping.
-    - **Depends on:** 8.1, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_14_schema_roundtrip.py -q`
-    - **Validates: Requirements 13.15-13.18, 13.22-13.30, 15.26, 15.28, 15.34, 15.35**
-
-  - [ ]* 8.5 Write the property test for disabled-mode frozen parity
-    - **Property 15: Disabled-mode frozen parity**
-    - Against the frozen inventory, verify absent/false dispatch preserves every finite component within `1e-9`, heading within angular `1e-9`, exact statuses/nulls, and legacy-only schema.
-    - **Depends on:** 2.2, 8.2, 1.5; externally blocked until goldens exist
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_15_disabled_parity.py -q`
-    - **Validates: Requirements 1.14-1.17, 13.1, 13.2, 13.19-13.21, 15.29**
-
-  - [ ]* 8.6 Write targeted V2, invalid-config, and compatibility golden tests
-    - Cover all valid status/mode combinations, malformed statuses, unsupported versions and supported-list details, exact legacy null/status behavior, and explicit legacy policy metadata.
-    - **Depends on:** 8.2
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_result_v2.py tests/haware_accuracy/test_compatibility.py -q`
-    - _Requirements: 1.14-1.17, 10.27-10.29, 13.1-13.36, 15.28, 15.29, 15.34, 15.35_
-
-- [ ] 9. Add replayable diagnostics and auditability
-  - [ ] 9.1 Upgrade the replay adapter and ordered per-attempt diagnostics recorder
-    - Assign stable site/frame/detection identifiers, retain non-null acceptance track IDs, serialize raw and normalized observations without metric rounding, and record every accepted/rejected attempt with supports, weights, seven checks, fallback evidence, conditioning, fit details, gates, coordinate roles, and artifact/profile/run provenance.
+  - [-] 8.2 Implement pilot go/no-go and current-evidence insufficiency reporting
+    - Require each acceptance site independently to satisfy frozen sufficiency and the three-condition feasibility rule (10.34: superiority, MEI materiality, coverage non-inferiority); emit `no_go` with all gaps/failures when either site is insufficient or infeasible, and `go` only when both pass.
+    - Add the checked-in evidence inventory path that must emit final-evidence `insufficient_data` and no proven-improvement claim; keep selective-risk, pooled, proxy, diagnostic-candidate, and `taipei-cm` values diagnostic-only.
     - **Depends on:** 8.1
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_replay_adapter.py -q`
-    - _Requirements: 6.43-6.47, 9.17-9.20, 12.1-12.22_
+    - _Requirements: 9.14-9.18, 10.20-10.31, 10.34-10.37, 12.3_
+    - **Re-opened 2026-08-16:** MEI materiality condition and `pilot-stats-v1` sufficiency inputs.
 
-  - [ ] 9.2 Implement deterministic aggregate reports, diagnostics replay, and threshold audits
-    - Derive canonical aggregate reports and human summaries solely from ordered records; name every denominator predicate and apply frozen zero-denominator rules.
-    - Verify source hashes and replay validation/selection/fitting without PifPaf; reproduce decisions, gate outcomes, statuses, roles, report hashes, and summaries; record old/new threshold, reason, and run ID without editing published profiles.
-    - **Depends on:** 1.2, 9.1
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_diagnostics_replay.py -q`
-    - _Requirements: 12.23-12.41_
+  - [-] 8.3 Implement the commit-SHA-bound held-out decision
+    - After pilot `go`, extend the Acceptance Profile with per-site thresholds by the `pilot_upper_bound_v1` rule (Requirement 10.37) and commit it; the held-out command `scripts/run_haware_held_out.py --profile-sha <sha>` takes the commit SHA, records SHA + profile digest in the report, applies `no_go > insufficient_data > go` independently across `kee-cc` and `taoyuan-tc`, and refuses to reuse an outcome exposed under a different SHA; never allow `taipei-cm`, pooled, proxy, diagnostic-candidate, or selective-risk rescue.
+    - **Delete** `OutcomeAccessToken`, `HeldOutAccessGrant`, `HeldOutDecisionController` and their tamper-refusal tests from `trafficlab/measurement/haware_held_out.py`; keep the threshold freeze, precedence, and site-independence logic.
+    - Feed only a dual-site held-out `go` into the default-off authorization guard; do not implement production hardening or enable authoritative optimizer dispatch in this plan.
+    - **Depends on:** 1.2, 8.2
+    - _Requirements: 11.1-11.16; Scope boundary section_
+    - **Re-opened 2026-08-16:** access-control layer removed (F14).
 
-  - [ ]* 9.3 Write the property test for replay-deterministic diagnostics
-    - **Property 23: Diagnostics are replay-deterministic**
-    - Generate hash-matching replay artifacts and require exact mode/gate/status/usability/reason/role/aggregate/report-hash/summary reproduction.
-    - **Depends on:** 9.2, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_23_diagnostics_replay.py -q`
-    - **Validates: Requirements 6.43-6.47, 9.17-9.20, 12.1-12.36, 12.38-12.41**
+  - [-]* 8.4 Write the property test for fixed pilot accounting and decisions
+    - **Property 16: Pilot accounting and decision rules use fixed evidence**
+    - Generate paired outcomes over frozen populations; compare all metrics/intervals to a reference implementation; include the "candidate rejects the worst-error detections" case (own-set effect negative, paired effect zero, decision uses paired); verify `go` only when both sites satisfy sufficiency and feasibility, otherwise complete `no_go` evidence.
+    - **Depends on:** 1.3, 8.2
+    - **Validates: Requirements 10.1-10.14, 10.21-10.29, 10.33-10.36**
+    - **Re-opened 2026-08-16:** paired set, MEI, validity minimum.
 
-  - [ ]* 9.4 Write a fallback-heavy replay integration test
-    - Replay stored keypoints through wheel and fallback modes, V2 serialization, deterministic diagnostics replay, and report generation without inference; include rejected attempts and artifact-tamper failure.
-    - **Depends on:** 9.2
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_replay_integration.py -q`
-    - _Requirements: 8.17-8.32, 12.1-12.41_
+  - [-]* 8.5 Write the property test for held-out precedence and site independence
+    - **Property 18: Held-out decisions preserve precedence and site independence**
+    - Generate all per-site threshold/sufficiency states and diagnostic/pooled/proxy/diagnostic-candidate perturbations; verify `no_go > insufficient_data > go`, both-site conjunction, and decision invariance.
+    - **Depends on:** 1.3, 8.3
+    - **Validates: Requirements 11.8-11.16**
 
-- [ ] 10. Enforce authoritative coordinates in enrichment and scene building
-  - [ ] 10.1 Implement compatibility-normalized enrichment and interruption-safe velocity
-    - Normalize every input through compatibility policy; derive `position_m` only from finite authoritative positions on usable records; copy status/mode/confidence/reasons unchanged; close segments on every defined interruption and null the first subsequent velocity.
-    - Start with unusable/diagnostic-only and interruption table tests.
-    - **Depends on:** 8.2
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_enrichment.py -q`
-    - _Requirements: 8.32, 10.1-10.18, 10.27-10.29, 15.24, 15.41, 15.60_
+  - [-]* 8.6 Write pilot and held-out integration tests
+    - Use hand-computed fixtures for metric/interval/power calculations (cluster minimum at n=7 → `insufficient_data` and n=8; seeded bootstrap reproducibility; the three trichotomy branches; power at MEI vs observed), current checked-in evidence, all four core configurations plus the diagnostic candidate, per-site reports, pilot decisions, commit-SHA recording, refusal to reuse an exposed outcome under a new SHA, and default-off enforcement.
+    - **Depends on:** 8.3
+    - _Requirements: 10.1-10.36, 11.1-11.16, 12.1-12.3_
+    - **Re-opened 2026-08-16:** drop tamper-refusal tests; add stats-v1 fixtures.
 
-  - [ ] 10.2 Enforce usable authoritative positions in scene scanning and collider creation
-    - Include only usable finite authoritative `position_m`; exclude diagnostic coordinates from extents, frame ranges, interpolation, collision geometry, and collider eligibility; report accepted/excluded counts by status/mode and fail empty requested tracks with `no_usable_collider_observations` plus status counts.
-    - **Depends on:** 10.1
-    - **Validation:** `python -m pytest ../tools/tests/test_build_scene.py ../tools/tests/test_build_scene_edges.py -q`
-    - _Requirements: 10.19-10.26, 15.25, 15.41_
+- [ ] 9. Checkpoint — Ensure all tests pass, ask the user if questions arise.
+  - Ensure all available unit, property, integration, import-graph, and diagnostics checks pass (`(cd trafficlab-project && .venv-pifpaf/bin/python -m unittest discover -s tests)`, plus `python3 -m unittest discover -s tools/tests` and `node tools/verify_scenes.mjs` after 6.8). Report external evidence blockers as `insufficient_data`; do not claim pilot feasibility or held-out acceptance.
+  - **Re-opened 2026-08-16:** re-run after the re-opened and new tasks land.
 
-  - [ ]* 10.3 Write the property test for authoritative-only downstream propagation
-    - **Property 12: Authoritative-only downstream propagation**
-    - Generate V2 usable/unusable/diagnostic-only records and require null spatial outputs and exclusion for every non-authoritative coordinate across enrichment, scene, collider, and enabled-fusion interfaces.
-    - **Depends on:** 10.2, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_12_authoritative_only.py -q`
-    - **Validates: Requirements 8.32, 10.1-10.3, 10.19-10.26, 11.11-11.13, 15.24, 15.25, 15.27, 15.41**
+- [ ] 10. Implement the diagnostic candidate arm (the 2026-08-10 weighted-Procrustes proposal, measured, never authoritative)
+  - [ ] 10.1 Implement `wheel_weighted_procrustes` in `trafficlab/measurement/haware_diagnostic_candidates.py`
+    - Reuse the corrected baseline template, handedness correction (`Q[:,0] = -Q[:,0]`), and spread diagnostic; weighted fixed-scale Procrustes `Hc = (Q-q̄)ᵀ W (P-p̄)` with weighted centroids `q̄ = Σ w_i q_i / Σ w_i` and diagonal `w_wheel` (`PilotPolicy.diagnostic_candidate_params`, default `4.0`, module constant `W_WHEEL_DEFAULT`) on `WHEEL_KP_IDX`; when `n_wheel_kp < 2` fall back to the unweighted full-point fit and set `fallback=true`; output the legacy schema plus `arm='wheel_weighted_procrustes'`, `w_wheel`, `fallback`, `n_wheel_kp`, `spread_m`. Never imported by the optimizer or by production dispatch.
+    - **Depends on:** 6.3
+    - _Requirements: 12.4-12.5_
+  - [ ]* 10.2 Write the property test that diagnostic candidate arms never influence a decision
+    - **Property 20: Diagnostic candidate arms never influence a decision**
+    - Perturb/add/remove diagnostic-candidate outputs; assert every optimizer/baseline metric, threshold, pilot gate, and held-out decision is unchanged, and that the candidate's own report uses the paired definitions.
+    - **Depends on:** 1.3, 7.2, 10.1
+    - **Validates: Requirements 12.1-12.4**
 
-  - [ ]* 10.4 Write the property test for interruption-safe velocity
-    - **Property 13: Track interruptions prevent velocity bridging**
-    - Generate ordered streams and require finite delta/time velocity only for consecutive usable observations in one uninterrupted non-null track; every interruption makes the first subsequent velocity null.
-    - **Depends on:** 10.1, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_13_track_interruptions.py -q`
-    - **Validates: Requirements 10.4-10.13, 15.60**
+- [ ] 11. Synchronize documentation with the 2026-08-16 spec revision
+  - [ ] 11.1 Update `CLAUDE.md` haware section: 214-test count and command, pointer to this Kiro spec, `legacy-localize-v1`, the `build_scene.py` binding (closes priority #2), and the diagnostic-candidate status of weighted Procrustes.
+  - [ ] 11.2 Confirm the superseded banner on `docs/specs/2026-08-10-haware-localization-accuracy-design.md` (added 2026-08-16) and add a decision record `docs/decisions/2026-08-16-haware-spec-critique.md` from design.md Appendix A (the F1–F18 table).
+  - **Depends on:** 9
 
-  - [ ]* 10.5 Write replay-to-scene authoritative-gating integration tests
-    - Carry a fallback-heavy V2 replay through enrichment and scene scanning; prove usable fallback is measured/enriched/scene-eligible while extrapolated, near-horizon, abstained, insufficient-keypoint, and diagnostic-only positions cannot affect scenes or colliders.
-    - **Depends on:** 9.2, 10.2
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_replay_to_scene.py ../tools/tests/test_build_scene*.py -q`
-    - _Requirements: 8.17-8.32, 10.1-10.29, 12.1-12.41, 15.24, 15.25, 15.41, 15.53_
+## External Data Blockers (Not Executable Coding Tasks)
 
-- [ ] 11. Wire and evaluate two-site unfused single-frame acceptance
-  - [ ] 11.1 Implement the single-frame candidate evaluation command and immutable report package
-    - Wire verified artifacts, fixed populations, V2 candidate outputs, diagnostics, per-site metrics, paired intervals, mode/fallback contributions, risk curves, and finality policy into one deterministic command.
-    - Keep `kee-cc` and `taoyuan-tc` decisions separate; emit pooled values only as informational and `taipei-cm` only as diagnostic.
-    - **Depends on:** 4.5, 9.2, 10.2
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_single_frame_acceptance.py -q`
-    - _Requirements: 2.26-2.35, 4.1-4.18, 5.1-5.65, 8.17-8.32, 10.1-10.26, 12.1-12.41_
+Stored replays and tracker provenance for `kee-cc`/`taoyuan-tc` are **not** external: they are produced in-repo by tasks 2.7/2.8 from `location/<code>/footage/<code>.mp4` (this list previously claimed otherwise). What genuinely remains external:
 
-  - [ ] 11.2 [EXTERNALLY BLOCKED: passed Phase 0 and frozen candidate artifacts] Materialize two-site single-frame acceptance results
-    - Once Task 4.11 proves Phase 0 and frozen V2 candidate outputs exist, generate immutable separate `kee-cc` and `taoyuan-tc` reports over identical fixed populations; reject the candidate if either site fails median, p90, coverage, required 20%/all matched risk points, or any integrity gate.
-    - If profile thresholds change, create a new profile artifact and complete threshold audit records; never mutate the approved artifact or tune from `taipei-cm`.
-    - **Depends on:** 4.11, 11.1; external candidate replay artifacts
-    - **Validation:** `python -m trafficlab.measurement evaluate --phase candidate --site kee-cc --profile <profile-id> --candidate <artifact-id>` and the same command for `taoyuan-tc`
-    - _Requirements: 4.1-4.18, 5.57-5.65, 12.37-12.41_
+- Independently created GT for both sites under `gt-protocol-v1` (design §8): blinded annotator, ≥ 0.5 s frame spacing per genuine track stratified by `scene_region`, ≥ 20 % (and ≥ 8 records) repeat-annotated per band for measured uncertainty, content-hashed before any outcome is read. The calibration-conditional medium (CCTV wheel-contact clicks lifted through the frozen calibration) is admissible for the effect and feasibility but obliges the 256-sample calibration sensitivity sweep and forbids any absolute-accuracy claim; only calibration-independent GT (satellite or surveyed/GNSS references) can support an absolute claim.
+- A second Capture_ID per acceptance site (a separate recording session, not another span of the same clip) so a Held_Out_Partition can exist at all; today each site has exactly one checked-in clip (kee-cc 5.3 s, taoyuan-tc 3.0 s) → `held_out_capture_unavailable`. It may be acquired after the pilot partition is frozen.
+- Enough genuine tracks per site per partition to reach the `pilot-stats-v1` minimum of 8 clusters per effect and the MEI-derived `n_req`; the current clips are far below this.
+- A `taoyuan-tc` calibration health check pass (it has never been measured; kee-cc passed the track-width check at 53.2 %).
 
-  - [ ]* 11.3 Write two-site single-frame acceptance integration tests
-    - Use deterministic fixtures to prove independent site decisions, required matched 20% risk, no pooled/proxy rescue, diagnostic invariance, Phase-0 preliminary behavior, and fallback participation in every relevant metric.
-    - **Depends on:** 11.1
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_single_frame_acceptance.py -q`
-    - _Requirements: 2.26-2.35, 4.1-4.18, 5.1-5.65, 15.37-15.40, 15.50-15.56_
-
-- [ ] 12. Run eta calibration analysis on a parallel, non-blocking branch
-  - [ ] 12.1 Implement site/family-specific effective-eta analysis and identifiability labels
-    - Reject degenerate/non-finite rays; compute and aggregate eta only within site/height family; emit finite ordered intervals and complete provenance; never infer separate `h` and `z_cam` from image-only data or zero-height wheels.
-    - Emit direct or jointly identified physical quantities only under the approved independent-positive-evidence conditions, using distinct authoritative field names.
-    - **Depends on:** 1.1, 1.3
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_calibration_analyzer.py -q`
-    - _Requirements: 14.1-14.30, 15.36, 15.61, 15.62_
-
-  - [ ]* 12.2 Write the property test for explicit calibration identifiability
-    - **Property 25: Calibration identifiability is explicit**
-    - Generate site/family samples, zero-inclusive intervals, independent height/metrology cases, and finite positive quotients; prohibit unsupported authoritative camera-height claims.
-    - **Depends on:** 12.1, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_25_calibration_identifiability.py -q`
-    - **Validates: Requirements 14.1-14.30, 15.36, 15.61, 15.62**
-
-  - [ ]* 12.3 Write targeted calibration interval and provenance tests
-    - Cover zero eta, positive eta with strictly positive interval, zero-inclusive/invalid intervals, direct metrology, missing calibration IDs, cross-site/family pooling rejection, and independence from localization acceptance.
-    - **Depends on:** 12.1
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_calibration_analyzer.py -q`
-    - _Requirements: 14.1-14.30, 15.36, 15.61, 15.62_
-
-  - [ ] 12.4 [EXTERNALLY BLOCKED: independent calibration samples/metrology] Materialize eta analysis artifacts without blocking acceptance
-    - When calibrated camera/target points, documented height-family provenance, and any claimed direct metrology are supplied with valid hashes, generate separate site/family eta reports. Leave unsupported physical fields omitted and clearly label missing artifacts.
-    - This branch may execute in parallel with baseline, GT, estimator, and acceptance work; its blocked or failed state must not replace or block wheel-first position-accuracy evidence.
-    - **Depends on:** 12.1; external independent calibration artifacts
-    - **Validation:** `python -m trafficlab.measurement calibration analyze --site <kee-cc|taoyuan-tc> --family <name> --input <samples.json>`
-    - _Requirements: 14.1-14.30_
-
-- [ ] 13. Conditionally evaluate optional temporal fusion
-  - [ ] 13.1 Implement and record the temporal-fusion permission predicate
-    - Permit fusion only when every single-frame prerequisite gate from Requirements 1–10 (excluding Requirement 5 candidate-improvement thresholds) passes and at least one single-frame Requirement 5 target remains unmet; otherwise record `unnecessary` or `not_permitted` and skip all later temporal waves.
-    - Keep fusion disabled by default and require a distinct versioned algorithm/configuration artifact before use.
-    - **Depends on:** 4.5, 11.1
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_fusion_permission.py -q`
-    - _Requirements: 11.1-11.10_
-
-  - [ ]* 13.2 [CONDITIONAL: only if Task 13.1 returns permitted] Implement offline temporal fusion with immutable source provenance
-    - Segment only uninterrupted equal non-null tracks using enrichment gap rules; pass unusable records through unchanged/null and terminate segments; retain unfused coordinates and complete fusion provenance for every changed usable result.
-    - Never mutate single-frame artifacts or use diagnostic positions; issue a distinct fusion candidate and re-evaluate both sites against the identified source candidate.
-    - **Depends on:** 10.1, 13.1; permitted predicate and frozen fusion algorithm/configuration
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_temporal_fusion.py -q`
-    - _Requirements: 11.1-11.26_
-
-  - [ ]* 13.3 [CONDITIONAL: only if Task 13.2 executes] Write the property test for fusion safety and non-regression
-    - **Property 24: Fusion preserves source safety and cannot regress site gates**
-    - Generate interruptions, unusable records, changed usable results, and per-site regressions; require immutable source, complete provenance, no coverage decrease, and no p90 increase.
-    - **Depends on:** 13.2, 1.5
-    - **Validation:** `python -m pytest tests/haware_accuracy/properties/test_property_24_fusion_safety.py -q`
-    - **Validates: Requirements 11.1-11.26, 15.27**
-
-  - [ ]* 13.4 [CONDITIONAL: only if Task 13.2 executes] Write optional fusion end-to-end tests
-    - Cover permission denied/unnecessary/permitted fixtures, interruption segmentation, unusable pass-through, provenance completeness, identical-population source comparison, and independent `kee-cc`/`taoyuan-tc` coverage/p90 rejection.
-    - **Depends on:** 13.2
-    - **Validation:** `python -m pytest tests/haware_accuracy/test_temporal_fusion.py tests/haware_accuracy/test_fusion_acceptance.py -q`
-    - _Requirements: 11.1-11.26, 15.27_
-
-- [ ] 14. Final checkpoint — validate all applicable scopes
-  - Ensure all tests pass, ask the user if questions arise. Run temporal scopes only when Task 13.1 permits them; report externally blocked artifacts separately from code/test failures.
+Current checked-in evidence must therefore produce `insufficient_data`, keep the optimizer default-off/non-authoritative outside the pilot, and prohibit any claim of proven improvement.
 
 ## Notes
 
-- Tasks marked with `*` are optional test tasks, except conditional Tasks 13.2–13.4, which are optional by product design and must be skipped unless Task 13.1 records `permitted`.
-- Every implementation task should use a red-green-refactor cycle for the targeted examples named in its bullets; property tests add universal generated coverage and do not replace examples.
-- External acquisition, annotation, metrology, and candidate production are not coding tasks. Tasks 2.2, 3.2, 4.11, 11.2, and 12.4 are code-backed artifact materialization steps that remain explicitly blocked until supplied artifacts are hash-valid and complete.
-- Fallback is a primary usable mode throughout fitting, diagnostics, accuracy, coverage, selective risk, enrichment, and scene tests; it is never treated as an exception-only path.
-- `taipei-cm` is diagnostic-only and cannot provide missing acceptance inputs, tune thresholds, or rescue either acceptance site.
-- Recommended one-shot scopes after targeted tests exist (do not use watch mode):
-  - Phase 0: `python -m pytest tests/haware_accuracy/test_canonical_artifacts.py tests/haware_accuracy/test_schema_contracts.py tests/haware_accuracy/test_baseline_store*.py tests/haware_accuracy/test_ground_truth*.py tests/haware_accuracy/test_metrics.py tests/haware_accuracy/test_selective_risk.py tests/haware_accuracy/test_paired_track_intervals.py tests/haware_accuracy/test_phase0_gate.py -q`
-  - Single-frame core: `python -m pytest tests/test_haware_localization.py tests/haware_accuracy/test_projection_conditioning.py tests/haware_accuracy/test_weighted_procrustes.py tests/haware_accuracy/test_mode_fitters.py tests/haware_accuracy/test_mode_selector.py tests/haware_accuracy/test_fallback_selection.py tests/haware_accuracy/test_gate_state_machine.py tests/haware_accuracy/test_result_v2.py tests/haware_accuracy/test_compatibility.py -q`
-  - Replay/downstream: `python -m pytest tests/haware_accuracy/test_replay*.py tests/haware_accuracy/test_diagnostics_replay.py tests/haware_accuracy/test_enrichment.py tests/haware_accuracy/test_replay_to_scene.py ../tools/tests/test_build_scene.py ../tools/tests/test_build_scene_edges.py -q`
-  - All properties: `python -m pytest tests/haware_accuracy/properties -m property -q`
-  - Full affected suite: `python -m pytest tests ../tools/tests -q`
+- Tasks marked with `*` are test tasks. The numbered-property tests (Properties 1–20) are **required**, one module each, per the Design Testing Strategy — the `*` never authorizes skipping them. Only non-property `*` tests (extra unit/integration coverage) may be deferred for a faster implementation pass. All core implementation tasks remain required.
+- This plan implements only the narrow PifPaf-backed provider-neutral MVP contract, not a full multi-provider platform or exhaustive artifact-management system.
+- Explicitly deferred and excluded: generalized learned reliability, detector retraining/replacement, calibration identification/re-estimation, selective-risk acceptance, temporal fusion, multi-sensor fusion, and unrelated production hardening.
+- `localize()` and `localize_reprojection()` are frozen baselines only. The optimizer call graph must remain independent of both methods and all stale projected-point/role-graph/mode-selection architectures.
+- Wheel-first is strictly an ordering/initialization preference at `h=0`; it is never exclusivity, a score bonus, an acceptance shortcut, or a substitute for non-wheel hypothesis generation.
+
+## Status Audit (2026-08-16)
+
+Rule: **a checkbox may only flip when the row cites a file path and a passing test; audits never contradict checkboxes — they replace them.** Verified 2026-08-16 with `(cd trafficlab-project && .venv-pifpaf/bin/python -m unittest discover -s tests)` → **214 tests, OK** (167 s). The 2026-08-12 audit below is history: everything it reported missing now exists in the tree.
+
+| Task | Deliverable path(s) | Test module(s) | State |
+|---|---|---|---|
+| 1.1 | `trafficlab/motion/haware_accuracy/models.py` | `tests/test_haware_accuracy_models.py` | [x] |
+| 1.2 | `trafficlab/motion/haware_accuracy/validation.py` | `tests/test_haware_profile_validation.py` | [-] re-opened: narrow prohibition scan; new profile fields |
+| 1.3 | `tests/property_support/` | `tests/test_haware_property_support.py` | [x] |
+| 2.1 | `trafficlab/io/haware_observation_replay.py` | `tests/test_haware_observation_replay.py`, `tests/properties/test_property_11_*` | [-] re-opened: value round-trip, `duplicate_observation_id`, writer exclusions |
+| 2.2 | `trafficlab/inference/pifpaf_haware_adapter.py` | `tests/test_pifpaf_haware_adapter.py`, `tests/test_haware_replay_adapter_integration.py` | [x] |
+| 2.3 | track provenance in `haware_accuracy/` | `tests/test_haware_track_provenance.py`, `tests/properties/test_property_14_*` | [x] |
+| 2.7, 2.8 | `scripts/eval_haware_replay.py`, `evidence/haware/` | — | [ ] new |
+| 3.1–3.2 | `trafficlab/projection/haware_forward.py` | `tests/test_haware_forward.py`, `tests/properties/test_property_01_*` | [x] |
+| 4.1–4.2 | `trafficlab/motion/haware_hypotheses.py` | `tests/test_haware_hypotheses.py`, `tests/properties/test_property_02/03/07_*` | [x] |
+| 5.1–5.4 | `trafficlab/motion/haware_optimizer.py` | `tests/test_haware_optimizer.py`, `tests/properties/test_property_04/05/06/08/09/10_*` | [x] |
+| 5.12 | — | `tests/test_haware_optimizer.py` (runtime spies only) | [-] static AST proof missing |
+| 5.13 | — | `tests/properties/test_property_12_*` | [-] re-opened: value equality |
+| 5.14 | `haware_optimizer.py`, `haware_hypotheses.py` | Property 9 update, new invariant test | [ ] new |
+| 6.1 | `trafficlab/motion/localization_authority.py` (396 lines) | `tests/test_localization_authority.py`, `tests/properties/test_property_13_*` | [-] re-opened: no default legacy policy |
+| 6.2 | `scripts/filter_and_enrich_output.py` | `tests/test_downstream_localization_authority.py` | [-] re-opened: calls authority with no policy → all real records missing |
+| 6.3 | `trafficlab/motion/haware_baseline_dispatch.py` | `tests/test_haware_baseline_dispatch.py`, `tests/properties/test_property_19_*` | [x] |
+| 6.4 | — | `tests/properties/test_property_13_*` | [-] re-opened: legacy-table and scene-export legs |
+| 6.7 | — | `tests/test_haware_baseline_scope_integration.py` | [-] re-opened: remove deferred-capability guard tests |
+| 6.8, 6.9 | `tools/build_scene.py`, `scripts/eval_haware_replay.py` | `tools/tests/` | [ ] new |
+| 7.1–7.2 | `trafficlab/measurement/haware_pilot.py` | `tests/test_haware_pilot.py`, `tests/properties/test_property_15_*` | [-] re-opened: GT protocol, Source_Sequence, bands, diagnostic arm, flags |
+| 7.4, 7.5 | — | `tests/properties/test_property_17_*`, `tests/test_haware_gt_population_orchestration_integration.py` | [-] re-opened: flag names; diagnostic arm fixtures |
+| 7.6 | `scripts/run_haware_pilot.py` | — | [ ] new |
+| 8.1–8.2 | `haware_pilot.py` statistics | `tests/test_haware_pilot_statistics.py`, `tests/test_haware_pilot_decision.py`, `tests/properties/test_property_16_*` | [-] re-opened: `pilot-stats-v1`, paired set, MEI |
+| 8.3 | `trafficlab/measurement/haware_held_out.py` (728 lines) | `tests/test_haware_held_out.py`, `tests/properties/test_property_18_*` | [-] re-opened: replace access control with commit SHA |
+| 10.1 | `trafficlab/measurement/haware_diagnostic_candidates.py` | Property 20 | [ ] new |
+| 11 | `CLAUDE.md`, `docs/decisions/2026-08-16-*.md` | — | [ ] new |
+
+### Cascade re-opened 2026-08-17 (dependents of a changed contract)
+
+- **1.4** — 1.2 narrows the prohibited-contract scan and adds profile fields; the prohibited-mode assertions must be rewritten.
+- **2.2** — 2.1 changes the record contract and 2.7 adds tracker-provenance fields the importer must carry.
+- **2.3** — 2.7 supplies the provenance that `finalize_track_provenance` must classify REAL; re-verify against real ByteTrack records.
+- **6.3** — the pre-gate (6.9) adds legacy status `pre_gate_near_horizon`, which Requirements 1.14-1.15 parity must now cover.
+- **6.5** — golden fixtures must include a `pre_gate_near_horizon` record.
+- **6.6** — 6.2 (default legacy policy) and 6.8 (scene builder) change what these fixtures must prove.
+- **7.3** — 7.1 introduces Capture_ID, Source_Sequence spans, and scene_region bands that partition assignment now depends on.
+- **5.6** — Property 4 now also validates Requirement 6.33 (per-component robust loss, Score == 2*cost).
+- **5.10** — Property 9 now asserts the rank-zero rule (condition null, no `ill_conditioned_pose`) instead of skipping it.
+- **5.11** — Property 10 now also validates Requirements 4.13, 5.18, and 6.32 (Validity_Gate_Set, all-invalid decisive reason).
+
+`3.1` and `3.2` are deliberately **not** cascaded: they depend on `1.2` only for profile validation, and the forward-projection contract (`K`, `D`, `H`, `z_cam`, pose/nuisance parameterization) is untouched by the 2026-08-16/17 revisions.
+
+### Adjudicated 2026-08-16 (formerly "Findings for follow-up")
+
+- Robust loss per-component vs per-observation → **per-component everywhere** (Requirement 6.33, design "Robust refinement"); task 5.14.
+- Priors robustified in refinement but Gaussian in observability → **robustified in both**; observability weights `rho'(e_a^2)/sigma_a^2`; task 5.14.
+- Rank-zero condition sentinel → **`condition=null`, `ill_conditioned_pose` not evaluated** (Requirement 6.34); task 5.14.
+- Writer silently drops invalid observations → **writer returns exclusions** (Requirement 2.15); task 2.1.
+
+### History: audit of 2026-08-12 (superseded)
+
+`.venv-pifpaf/bin/python -m unittest discover -s tests` reported 132 tests with 1 failure at that time (144 after the 5.9 fix), and `tests/properties/` contained modules for Properties 1, 3, 8, 11, and 14 only. Everything below this line described that state and is retained only as history.
+
+- **Reset `[x]` -> `[ ]` (claimed, no deliverable):** 4.3 (Property 2), 4.5 (Property 7), 5.6 (Property 4), 5.7 (Property 5), 5.8 (Property 6), 5.11 (Property 10). No test module exists for any of these numbered properties, and the Design Testing Strategy requires one module per numbered property.
+- **Reset `[x]` -> `[-]` (started, not delivering):**
+  - 4.4 (Property 3): `tests/properties/test_property_03_non_exclusive_wheel_first_ordering.py` exists but defines zero test functions; the file ends mid-class.
+  - 5.9 (Property 8): **resolved 2026-08-12, now `[x]`.** The module failed at `test_property_08_nuisance_bounds_and_uncertainty_propagation.py:296` on `assert set(fields) == set(published_nuisance)`. Triage found the defect in the test, not the optimizer: `RefinedCandidate.nuisance` publishes template geometry only, while fit-local calibration deltas are applied to the fit's `CalibrationSnapshot` and reported through `parameter_values` and `observability.nuisance_treatments` (verified: `delta_z_cam` appears there with `role='calibration'`, its closed interval, prior treatment, and `jacobian_schur_marginalized`). That satisfies Requirement 4.8 and the Design Property 8 clause, which constrains the *observability calculation*, not the published vector; `_bounded_nuisance_prior_cost` independently encodes the subset contract via `unknown_nuisance_value`, and Design "Parameterization and bounded nuisances" states the MVP never publishes a fitted calibration. The assertion now pins the published set to `fields - calibration.authorized_nuisance_fields`; a mutation that publishes `delta_z_cam` makes it fail, so the check retains its teeth.
+  - 5.12: optimizer boundary tests exist in `tests/test_haware_optimizer.py`, but the required static/import call-graph proof is absent. Prohibited-contract rejection is only config-level (`tests/test_haware_profile_validation.py`) and baseline isolation is only runtime spies (`tests/test_haware_baseline_dispatch.py`).
+- 5.13 (Property 12): **delivered 2026-08-12, now `[x]`.** `tests/properties/test_property_12_complete_optimizer_replay_is_exact.py` replays one generated content variant per example and asserts exact reproduction across a repeated identical run and an equivalent permuted presentation: canonical result bytes, status/usable/decisive gate/reason, verbatim pose floats, normalized observations, selected path, margin, spread, gate failures, merged components, exclusions, per-path terminal states, and per-path support/outlier/score. Two fixture traps were hit and fixed while writing it: unclamped pixel jitter pushed a coordinate out of the image so the replay layer legitimately dropped it, and `configured_profile()` is a generation-only fixture whose missing `roof_height_m` nuisance and mismatched `parameter_scale` made every hypothesis fail at `invalid_refinement_parameterization`, leaving nothing to compare. The module therefore builds its own refinement-ready profile and carries `test_the_replayed_fixture_reaches_a_selected_pose`, which fails loudly if the property ever degenerates into comparing empty runs. Mutation-verified: a call-count-dependent initial value fails the repeated-run leg, and removing `canonical_order` from `ObservationRecord` fails the presentation leg.
+- 5.10 (Property 9): **delivered 2026-08-12, now `[x]`.** `tests/properties/test_property_09_observability_rejection.py` targets the pose spectrum directly (`J = W^-1/2 Q diag(sqrt(eig)) V^T`, so `J^T W J` reproduces the drawn eigenvalues) and checks three legs: an independent numpy re-derivation of weights/information/Schur/singular values/covariance/ellipse/heading, exact-boundary rejection for all three gates using the reported value as the boundary, and a real generate/refine/score/select run proving each gate yields `status=rejected`, `usable=False`, no authoritative position, a retained diagnostic position, and the reason present on the *selected* candidate rather than only in the aggregate. Measured coverage over 300 draws: rank 0/1/2/3 = 38/60/88/114, all three losses, 0-2 nuisance parameters, 38 coupled Schur cases. Mutation-verified: `>=` to `>` on the condition gate, dropping `rank` from the degrees of freedom, un-reversing the ellipse axes, and `or` to `and` on the uncertainty gate each fail the property.
+  - Three design decisions worth keeping: comparisons are scaled by the array magnitude rather than element-wise, because entries that are mathematically zero carry cancellation noise from whichever decomposition produced them; the closed-form robust weights are cross-checked against a central difference of `rho` itself, so a wrong hand differentiation cannot cancel between reference and production; and coupling is never combined with a below-tolerance eigenvalue in one case, because a rotation puts eigenvalues nobody chose into the nuisance block and the pseudoinverse is discontinuous there. Coupled cases draw every eigenvalue above the tolerance, which Cauchy interlacing then propagates to every principal submatrix and to the Schur complement.
+  - The rank-zero `condition := condition_rejection_boundary` sentinel is deliberately **not** asserted. It makes `condition >= boundary` self-fulfilling, so a rank-zero case always reports `ill_conditioned_pose` alongside `unobservable_pose`, and raising the boundary can never clear it. That coupling is absent from the design's `sigma_max / sigma_min_retained` definition; see the findings below.
+- **Parent tasks 4 and 5 reset to `[-]`:** their implementation subtasks are complete, but their test subtasks are not, and 5.10 remains `[-]`.
+
+(Historical, 2026-08-12:) Core (non-`*`) implementation tasks complete: 16 of 22. Remaining core work: 6.1, 6.2, 7.2, 8.1, 8.2, 8.3. — All of these modules exist as of 2026-08-16; see the table above for what is re-opened and why.
+
+### Findings for follow-up (2026-08-12; all four adjudicated above)
+
+- **Robust loss is applied per residual component in observability but per 2D observation in scoring.** `design.md` freezes `L(q) = sum_j rho(||e_j(q)||^2)`, i.e. one rho per observation pair. `_robust_observation_loss` (`haware_optimizer.py:1075`) matches that. `_robust_weights` (`haware_optimizer.py:524`), which builds the information matrix, squares each scalar component independently, so reported curvature is not rotation-invariant in image space: two residual pairs of equal norm get different weights depending on how the norm splits across x and y. SciPy's `least_squares(loss=...)` also applies rho per element, so the refinement being measured agrees with `_robust_weights` and disagrees with both the design formula and the score.
+- **Nuisance priors are robustified in refinement but enter observability as un-robustified Gaussian precision.** `residual()` concatenates `_prior_residuals(...)` into the vector handed to `least_squares(loss=huber)` (`haware_optimizer.py:908-935`), so SciPy applies the robust loss to the prior residuals. `design.md` places the prior term outside `rho` as a plain quadratic, and observability adds it as `diag(prior_precision)` (`haware_optimizer.py:618`). Observability matches the design; the refinement does not. For a large fitted prior residual under a non-linear loss, the reported curvature is not the curvature of the objective that was actually minimized.
+- **Rank-zero condition sentinel.** With no retained direction, `condition` is set to `settings.condition_rejection_boundary` (`haware_optimizer.py:648-652`), which makes the `ill_conditioned_pose` gate fire unconditionally and makes the reported condition depend on the boundary being tested against. Property 9 asserts only `unobservable_pose` in that regime.
+- `ObservationReplayWriter._normalized_mappings` reads only `result.record` from `normalize_record_mapping` and discards `result.exclusions`, so writing a record whose observation violates the replay contract (verified with `observation_coordinate_out_of_bounds`) emits a payload with that observation silently removed and no signal to the caller. The reader path does surface the same exclusion. Whether the write scope owes the caller a reason is a Requirement 2 question, so it is recorded here rather than changed.
+
 
 ## Task Dependency Graph
+
+Remaining work only (completed `[x]` tasks omitted). Order respects every `Depends on` line above.
 
 ```json
 {
   "waves": [
-    { "id": 0, "tasks": ["1.1", "1.2"] },
-    { "id": 1, "tasks": ["1.3", "1.5"] },
-    { "id": 2, "tasks": ["1.4", "1.6", "1.7", "2.1", "3.1", "6.1", "6.2", "12.1"] },
-    { "id": 3, "tasks": ["2.2", "2.3", "3.2", "3.3", "3.4", "4.1", "6.3", "6.4", "6.5", "6.6", "6.7", "12.2", "12.3", "12.4"] },
-    { "id": 4, "tasks": ["4.2", "4.3", "4.7", "6.8", "7.1"] },
-    { "id": 5, "tasks": ["4.8", "4.9", "7.2", "7.4", "7.5"] },
-    { "id": 6, "tasks": ["4.4", "7.3", "7.6"] },
-    { "id": 7, "tasks": ["4.5", "4.10", "7.7", "7.8", "7.9", "7.10"] },
-    { "id": 8, "tasks": ["4.6", "4.12", "8.1"] },
-    { "id": 9, "tasks": ["4.11", "8.2", "8.3", "8.4"] },
-    { "id": 10, "tasks": ["8.5", "8.6", "9.1", "10.1"] },
-    { "id": 11, "tasks": ["9.2", "10.2", "10.4"] },
-    { "id": 12, "tasks": ["9.3", "9.4", "10.3", "10.5", "11.1"] },
-    { "id": 13, "tasks": ["11.2", "11.3", "13.1"] },
-    { "id": 14, "condition": "Task 13.1 == permitted", "tasks": ["13.2"] },
-    { "id": 15, "condition": "Task 13.2 executed", "tasks": ["13.3", "13.4"] }
+    { "id": 0, "tasks": ["1.2", "5.12", "6.1"] },
+    { "id": 1, "tasks": ["1.4", "2.1", "5.14", "6.2", "6.3"] },
+    { "id": 2, "tasks": ["2.2", "2.4", "5.6", "5.10", "5.11", "5.13", "6.5", "6.7", "6.8", "6.9", "10.1"] },
+    { "id": 3, "tasks": ["2.7", "6.4", "6.6"] },
+    { "id": 4, "tasks": ["2.3", "2.8"] },
+    { "id": 5, "tasks": ["7.1"] },
+    { "id": 6, "tasks": ["7.2", "7.3"] },
+    { "id": 7, "tasks": ["7.4", "7.5", "8.1", "10.2"] },
+    { "id": 8, "tasks": ["8.2"] },
+    { "id": 9, "tasks": ["7.6", "8.3", "8.4"] },
+    { "id": 10, "tasks": ["8.5", "8.6"] },
+    { "id": 11, "tasks": ["9"] },
+    { "id": 12, "tasks": ["11.1", "11.2"] }
   ]
 }
 ```

@@ -1,5 +1,19 @@
 # haware 定位準確度優化設計
 
+> **⚠️ 已被取代（2026-08-16）**：本文件的正式規格是 Kiro spec
+> [`.kiro/specs/haware-localization-accuracy/`](../../.kiro/specs/haware-localization-accuracy/)
+> （requirements.md / design.md / tasks.md）。對應關係：
+>
+> - **誤差模型（§一）**與「輪子 h=0 是唯一乾淨輸入」的洞察 → 被吸收為優化器的 **wheel-seeded 假設優先起手**（排序偏好，非權重、非獨佔）
+> - **§3.1 加權 Procrustes「輪子優先」** → 降級為 pilot 內的**診斷候選** `wheel_weighted_procrustes`（Kiro Requirement 12），
+>   與 baseline／優化器同資料同指標對比，**永不進生產路徑、不參與任何決策**
+> - **§3.2 近地平線前置剔除** → Kiro Requirement 1.21（`pre_gate_near_horizon`）
+> - **§3.3 展開度閘門接下游** → Kiro Requirement 1.19–1.20（`legacy-localize-v1` 狀態政策）＋ 7.17–7.19（`build_scene.py` 綁定）
+> - **§3.4 時序融合** → 明列為 out of scope（Kiro "Scope boundary and later phases"）
+> - **§四 驗證階梯／§五 Phase 0 量尺** → Kiro Requirement 9（`gt-protocol-v1`）、10（`pilot-stats-v1`）
+>
+> 以下內容保留為史料與推理脈絡，**數字與階段規劃不再是行動依據**。
+
 日期：2026-08-10　範圍：`trafficlab-project/trafficlab/motion/haware_localization.py`
 及其上下游（`scripts/eval_haware_replay.py`、`scripts/filter_and_enrich_output.py`、
 `tools/build_scene.py`）

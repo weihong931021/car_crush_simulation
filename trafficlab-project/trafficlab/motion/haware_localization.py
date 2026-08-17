@@ -376,10 +376,13 @@ class HawareLocalizer:
         conf   = min(1.0, n / 8.0) * max(0.0, 1.0 - rms / (5.0 * s))
 
         # Step 5 — 展開度品質閘門。座標照樣回傳（診斷與影像疊圖還要用），但 status 明說
-        # 不可信，讓下游能拒答而不是靜默採用一個外推出來的位置。
+        # 不可信，讓下游能拒答而不是靜默採用一個外推出來的位置。凍結邊界是包含式：
+        # 非有限值或 spread >= max_spread_m 都標記為 extrapolated。
         spread_m = _kp_spread_m(p_sat, s)
         status = 'ok'
-        if self.max_spread_m is not None and spread_m > self.max_spread_m:
+        if self.max_spread_m is not None and (
+            not math.isfinite(spread_m) or spread_m >= self.max_spread_m
+        ):
             status = 'extrapolated'
 
         return HawareResult(

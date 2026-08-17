@@ -2,6 +2,8 @@ import gzip
 import json
 import numpy as np
 
+from trafficlab.motion.localization_authority import sanitize_replay_for_export
+
 
 class NumpyEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -19,5 +21,6 @@ class ReplayWriter:
 
     @staticmethod
     def write(path, data):
+        export_data = sanitize_replay_for_export(data)
         with gzip.open(path, 'wt', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, cls=NumpyEncoder)
+            json.dump(export_data, f, indent=2, cls=NumpyEncoder)

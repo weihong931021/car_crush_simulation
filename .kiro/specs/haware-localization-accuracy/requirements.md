@@ -2,743 +2,448 @@
 
 ## Introduction
 
-This specification defines measurable requirements for improving Haware vehicle localization accuracy. A reliability-aware multi-cue estimator is the core new algorithm and depends on a Phase 0 measurement system. The estimator may use wheel or ground-contact cues, windshield or glass-corner cues, roof-corner cues, mirror cues, and other documented keypoint families when the available view provides reliable evidence. Wheel and ground-contact cues are preferred zero-height anchors for position because `h=0` removes the vertical-parallax correction term, but no cue family is globally exclusive. Existing handedness correction, spread gating, and `n_wheel_kp` behavior remain in scope as preserved capabilities. Reduced-evidence fallback and explicit abstention are primary operating outcomes. Historical taipei-cm observations motivate the work but are diagnostic-only; acceptance uses kee-cc and taoyuan-tc independently.
+This specification defines a feasibility-first replacement for the proposed projected-point Procrustes and role-constraint-graph architectures. The new core is a detector-agnostic, image-space forward-model optimizer that generates multiple pose hypotheses, predicts template keypoints into calibrated CCTV image space, and scores robust reprojection residuals. When evidence-supported wheel or ground-contact cues are available, the optimizer uses their zero-height geometry first for initialization, anchoring, and hypothesis generation. Wheel-first is a preference rather than a wheel-only rule: non-wheel hypotheses remain eligible and can be selected.
+
+The smallest credible MVP is an offline two-site pilot implemented under `trafficlab-project`. The pilot replays stored keypoints for the two named Acceptance_Sites (`kee-cc` and `taoyuan-tc` at the time of writing), compares a corrected frozen legacy baseline with the robust optimizer, uses independent ground truth and genuine tracker identities, and estimates effect size, uncertainty, view and track coverage, data sufficiency, and power. The power method, metric definitions, and the minimum effect of interest are frozen before outcome evaluation; final thresholds are derived from pilot evidence and frozen before a disjoint held-out evaluation. `taipei-cm` remains diagnostic-only. Current checked-in data are insufficient for final acceptance and do not prove improvement.
+
+The whole system is an offline background batch: a full source video may take minutes to localize (Requirement 13 bounds it), and no clause in this specification implies real-time or per-frame latency. A weighted-Procrustes wheel-first estimator (the 2026-08-10 proposal) is carried as a Diagnostic_Candidate arm inside the pilot only (Requirement 12); it is never the production core.
+
+The Corrected_Legacy_Baseline is what production runs today and will keep running until held-out `go`; therefore its status vocabulary (`ok`, `extrapolated`, `failed_insufficient_kp`) is bound to coordinate authority by an explicit Legacy_Status_Policy (Requirement 1.19) that exists before any pilot, and the scene-bundle last mile (`tools/build_scene.py`, `scenes/<code>/trajectory.json`) is bound by Requirement 7 even though it lives outside the Canonical_Implementation.
 
 ## Glossary
 
-- **Localization_Improvement_System**: The complete Haware localization measurement, estimation, filtering, enrichment, and scene-building capability governed by this specification.
-- **Measurement_Harness**: The reproducible evaluation capability that creates baselines, evaluates candidates, and produces metric reports.
-- **Canonical_JSON**: UTF-8 JSON encoded with sorted object keys, no insignificant whitespace, normalized line feed termination, preserved array order, and finite JSON numbers.
-- **Artifact_Hash**: The lowercase 64-character hexadecimal SHA-256 digest of an artifact's exact byte sequence.
-- **Baseline_Manifest**: A Canonical_JSON document containing `baseline_id`, source revision, clean-or-dirty source state, dependency-lock Artifact_Hash, runtime and platform versions, every effective configuration value, ordered input inventory with Artifact_Hashes, invocation commands, random seeds, ordered output inventory with Artifact_Hashes, metric-definition version, and creation timestamp.
-- **Baseline_Identity_Payload**: The Baseline_Manifest object with the `baseline_id` and creation timestamp fields removed, encoded as Canonical_JSON without changing any remaining value or array order.
-- **Baseline_ID**: The Artifact_Hash of the exact Baseline_Identity_Payload bytes.
-- **Comparability_Fields**: Source revision, clean-or-dirty source state, dependency-lock Artifact_Hash, runtime and platform versions, every effective configuration value, ordered input inventory with Artifact_Hashes, invocation commands, random seeds, and metric-definition version. Baseline identifier, creation timestamp, ordered output inventory, and output metrics are reproduction results and are excluded from comparability classification.
-- **Comparable_Rerun**: A rerun for which every Comparability_Field has the same Canonical_JSON type and value, including array order, as the Frozen_Baseline.
-- **Frozen_Baseline**: A published Baseline_Manifest and content-addressed artifacts. Publication makes the Baseline_ID immutable: existing bytes remain addressable by the Baseline_ID, replacement is prohibited, and any manifest or artifact byte change creates a different Baseline_ID.
-- **Phase_0_Gate**: The prerequisite requiring a verified Frozen_Baseline, a sufficient Ground_Truth_Dataset, and a reproducible baseline metric report for both Acceptance_Sites.
-- **Ground_Truth_Dataset**: Independently produced vehicle reference positions in the calibrated satellite coordinate frame together with complete Ground_Truth_Metadata.
-- **Ground_Truth_Metadata**: Satellite-image Artifact_Hash, calibration identifier and Artifact_Hash, coordinate origin, axis directions, units, vehicle reference-point definition, site, frame identifier, detection identifier, track identifier, source timestamp, annotation timestamp, annotator identifier, annotation method and tool version, source-artifact Artifact_Hashes, uncertainty in metres, uncertainty-estimation method, independence declaration, and contamination declaration.
-- **Ground_Truth_Contamination**: Use or display during reference-position creation of Haware satellite coordinates, fitted centers, headings, projected keypoints, localization overlays, candidate outputs, or metrics derived from those values.
-- **Independence_Violation**: Ground_Truth_Contamination, a false or missing independence declaration, use of a source artifact derived from a Haware baseline or candidate localization, or inability to verify recorded source-artifact lineage.
-- **Acceptance_Site**: One of `kee-cc` or `taoyuan-tc`.
-- **Diagnostic_Site**: `taipei-cm`, whose records may appear only in diagnostic outputs.
-- **Eligible_Detection**: A detection satisfying the frozen site, partition, timestamp, matching, annotation-quality, uncertainty, independence, and inclusion rules before baseline or candidate status is considered.
-- **Evaluation_Population**: The identical ordered set of Eligible_Detections used as the fixed denominator for a baseline and candidate at one Acceptance_Site; every record has one non-null track identifier used as the paired resampling cluster.
-- **Matched_Detection**: An Eligible_Detection joined to exactly one reference position by site, frame identifier, and detection identifier.
-- **Planar_Position_Error**: `sqrt((x_est - x_gt)^2 + (y_est - y_gt)^2)` in metres, computed without rounding from finite coordinates in the same calibrated satellite frame, for a Matched_Detection with a Usable_Localization.
-- **Error_Sample**: The ordered Planar_Position_Error values for every usable Matched_Detection produced by exactly one system, baseline or candidate, over one fixed Evaluation_Population; unusable detections remain in coverage denominators but do not contribute an error value.
-- **Usable_Localization**: A localization with status `ok` or `fallback`, `usable=true`, and a finite Authoritative_Position.
-- **Unusable_Localization**: A localization with status `extrapolated`, `near_horizon`, `abstained`, or `failed_insufficient_kp`, `usable=false`, and no Authoritative_Position.
-- **Authoritative_Position**: The coordinate field permitted for enrichment, velocity calculation, scene positions, and colliders.
-- **Diagnostic_Position**: An optional coordinate field retained for analysis and prohibited from downstream spatial use.
-- **Estimator_Mode**: One of `single_family`, `complementary_multi_cue`, `fallback`, or `none`.
-- **Cue_Family**: A documented semantic group of Apollo-24 keypoints with common physical role and height treatment; required families are `wheel_ground_contact`, `windshield_glass_corner`, `roof_corner`, `mirror`, and `other_documented`.
-- **Height_Family**: A Cue_Family subset whose members share one documented height prior and Effective_Eta uncertainty model for orientation estimation.
-- **Zero_Height_Anchor**: A wheel or other validated ground-contact cue with documented height `h=0`, for which the vertical-parallax correction term is zero.
-- **Cue_Reliability_Factors**: Visibility, projected baseline or leverage for the proposed constraint, Projection_Conditioning_Metric, keypoint confidence, label and semantic consistency, Height_Family uncertainty, and frozen Site_View_Evidence.
-- **Site_View_Evidence**: Versioned evidence associated with one site and documented view region that records validated cue behavior, including semantic anomalies and applicable sample provenance, without authorizing global conclusions from one site or view.
-- **Cue_Eligibility_Checks**: The frozen checks for Cue_Family membership, required visibility, minimum template and observed projected baseline or leverage, required centered-template and centered-observation rank where applicable, minimum confidence, label and semantic consistency, Height_Family uncertainty, Site_View_Evidence, and projection conditioning.
-- **Observation_Validity_Profile**: The versioned Acceptance_Profile section that freezes valid coordinate and confidence domains, required identifiers and labels, missing-value treatment, and the Duplicate_Keypoint_Policy before evaluation.
-- **Duplicate_Keypoint_Policy**: The frozen deterministic rule for repeated keypoint identifiers, including the result for equal duplicate values and conflicting duplicate values.
-- **Geometry_Profile**: The versioned Acceptance_Profile section that freezes Cue_Family definitions, Height_Family definitions, candidate constraint roles, topology rules, projected baseline and leverage thresholds, rank tolerances, confidence thresholds, semantic-consistency rules, height-family uncertainty rules, Site_View_Evidence gates, fallback-evidence rules, non-overlapping mode predicates, deterministic mode priority, and fit-uniqueness tolerance before evaluation.
-- **Reliability_Aware_Multi_Cue_Estimator**: The estimator that selects and weights eligible cue constraints by Cue_Reliability_Factors, prefers Zero_Height_Anchors for parallax-free position support, permits complementary cue roles, and otherwise emits an explicit fallback or unusable outcome.
-- **Mode_Selector**: The deterministic component that evaluates observation validity, Cue_Eligibility_Checks, Cue_Reliability_Factors, constraint role, projection conditioning, and frozen priority rules to select one Estimator_Mode.
-- **Primary_Support_Path**: An eligible `single_family` or `complementary_multi_cue` estimator path selected from reliability-qualified cue constraints.
-- **Fallback_Path**: A usable reduced-confidence estimator path selected only when every Primary_Support_Path is ineligible and valid reduced evidence satisfies the frozen fallback predicate.
-- **Orientation_Constraint**: A heading constraint estimated within one Height_Family; constraints from different Height_Families may be combined only after each family is estimated separately and the combination accounts for Effective_Eta uncertainty.
-- **Position_Bearing_Constraint**: A cue-derived constraint on position, centerline, or camera-relative bearing that does not by itself imply reliable heading.
-- **Projection_Conditioning_Metric**: A finite scalar derived only from calibrated projection geometry and one observation coordinate, ordered so that larger values represent greater near-horizon amplification.
-- **Near_Horizon_Threshold**: The frozen inclusive rejection boundary for the Projection_Conditioning_Metric: finite values below the boundary pass and finite values equal to or above the boundary fail.
-- **Spread_Gate**: The existing post-projection keypoint-spread check with a frozen inclusive rejection boundary: finite spread strictly below the boundary passes and finite spread equal to or above the boundary fails.
-- **Gate_Order**: The deterministic status-decision order: (1) observation validity and count; (2) cue eligibility and role assignment followed, only when every Primary_Support_Path is ineligible, by fallback-evidence eligibility; (3) projection conditioning for the selected support path; (4) fit and numeric validation; (5) Spread_Gate; and (6) usable mode completion. The first failing stage determines status, and a later fallback cannot replace an earlier safety rejection.
-- **Weighted_Procrustes_Estimator**: A fixed-scale two-dimensional proper-rigid estimator for paired points `Q_i` and `P_i` with nonnegative weights `w_i`; zero-weight points are excluded from centroids, covariance, objective, and rank; positive-weight total `W = sum_i(w_i)`; weighted centroids `q_bar = sum_i(w_i Q_i)/W` and `p_bar = sum_i(w_i P_i)/W`; covariance `H = sum_i(w_i (Q_i-q_bar)(P_i-p_bar)^T)`; proper rotation `R` minimizing `sum_i(w_i ||P_i-(R Q_i+t)||^2)` subject to `R^T R = I` and `det(R)=+1`; and translation `t = p_bar - R q_bar`.
-- **Ambiguous_Fit**: A fit for which the positive-weight correspondences do not identify one proper rotation within the frozen fit-uniqueness tolerance.
-- **Typed_Validation_Failure**: A machine-readable failure with a stable error code, detection identifier, failed field or gate, and no Authoritative_Position.
-- **Proxy_Metric**: A non-ground-truth diagnostic: wheelbase consistency, track-width consistency, motion-course heading consistency, fit residual, or keypoint spread.
-- **Evidence_Hierarchy**: The strict order: Ground_Truth_Dataset Planar_Position_Error; ground-plane wheelbase and track-width consistency; motion-course heading consistency; fit residual and keypoint spread.
-- **Usable_Coverage**: At one Acceptance_Site, the count of Evaluation_Population records with a Usable_Localization divided by the Evaluation_Population count.
-- **Per_Mode_Coverage_Contribution**: For one Estimator_Mode at one Acceptance_Site, the count of Evaluation_Population records that are usable and have the Estimator_Mode divided by the Evaluation_Population count; the three usable-mode contributions sum to Usable_Coverage.
-- **Nearest_Rank_Percentile**: For `m > 0` values sorted in nondecreasing order, percentile `p` is the value at one-based rank `ceil(p*m)`.
-- **Selective_Risk**: At retained count `k > 0`, the arithmetic mean Planar_Position_Error of the first `k` usable Matched_Detections after descending finite-confidence sort, with confidence ties ordered by frame identifier and detection identifier; requested coverage is `k/N`, where `N` is the fixed Evaluation_Population count. Non-finite-confidence records remain in `N` and coverage metrics but are ineligible for retention.
-- **Matched_Coverage_Point**: A requested coverage `c` for which `k = ceil(cN)` and both baseline and candidate contain at least `k` finite-confidence usable Matched_Detections.
-- **Paired_Track_Confidence_Interval**: A percentile confidence interval for a candidate-minus-baseline metric difference. Every replicate samples, with replacement, exactly as many distinct track identifiers as occur in the Evaluation_Population, applies the same sampled identifier sequence and multiplicities to baseline and candidate records, recomputes the complete metric, and records candidate value minus baseline value. The Acceptance_Profile freezes replicate count, confidence level, random seed, percentile endpoints, and handling of an undefined replicate metric.
-- **Acceptance_Profile**: The immutable, versioned metric definitions, thresholds, partitions, Observation_Validity_Profile, Geometry_Profile, conditioning and spread boundaries, confidence-interval procedure, temporal gap, and deterministic tie rules frozen before candidate evaluation.
-- **Enrichment_Pipeline**: The replay filtering and enrichment stage that derives metric positions and velocities.
-- **Track_Interruption**: An unusable or missing localization, null or changed track identifier, non-increasing timestamp, or frame gap greater than the Acceptance_Profile maximum frame gap.
-- **Consecutive_Usable_Observations**: Two usable observations adjacent within one uninterrupted track segment, with equal non-null track identifiers, strictly increasing timestamps, and no intervening unusable or missing observation.
-- **Velocity_Mps**: For Consecutive_Usable_Observations, `(current_position_m - previous_position_m) / (current_timestamp - previous_timestamp)` with timestamp difference expressed in seconds.
-- **Scene_Builder**: The stage that scans enriched tracks and creates scene packages.
-- **Temporal_Fusion_Module**: An optional offline replay postprocessor that combines usable observations from one uninterrupted tracked vehicle segment.
-- **Single_Frame_Prerequisite_Gates**: Every Requirement 1 through 10 criterion governing baseline validity, evidence validity, computation correctness, estimator behavior, safety status, downstream exclusion, and observability, excluding Requirement 5 candidate-improvement thresholds and pass-fail criteria.
-- **Fusion_Provenance**: Fusion algorithm and version, configuration Artifact_Hash, evaluation-run identifier, source frame and detection identifiers, source statuses, source coordinates, source confidences, fusion weights or gains, frame gaps, unfused result, fused result, and fusion status.
-- **Diagnostics_Recorder**: The capability that records replayable per-detection provenance and deterministic aggregate localization reports.
-- **Diagnostics_Report_Schema**: The immutable versioned report schema frozen before candidate evaluation that defines every aggregate-rate denominator predicate and the null-or-omitted representation for every zero-denominator rate.
-- **Compatibility_Layer**: The opt-in capability that supports versioned reliability-aware multi-cue records while preserving frozen legacy behavior when multi-cue functionality is disabled.
-- **Schema_Compatibility_Profile**: The immutable ordered list of supported schema versions, including any explicitly named unversioned legacy schema, with required fields, optional fields, field types, enum domains, nullability, and deterministic read/write mappings for every version.
-- **Calibration_Analyzer**: The capability that estimates calibration-related quantities without overstating identifiability.
-- **Effective_Eta**: The dimensionless ratio `eta = h / z_cam` inferred for one site and one documented keypoint-height family; image observations identify the ratio rather than `h` and `z_cam` separately.
-- **Effective_Eta_Interval**: A finite ordered pair `[lower, upper]` with `lower <= upper`; the interval includes zero exactly when `lower <= 0 <= upper`.
-- **Direct_Z_Cam**: A positive physical camera height measured by independent metrology without using Effective_Eta or Haware localization outputs.
-- **Jointly_Identified_Z_Cam**: A positive physical camera height computed as `h / eta` from independently measured positive `h` and an Effective_Eta_Interval that excludes zero.
-- **Validation_Suite**: Automated example-based and property-based tests for estimator, status, serialization, evaluation, and downstream correctness.
-- **PBT_Profile**: Property-test configuration using seeds `104729`, `130363`, `155921`, and `196613`, at least 100 generated cases per property per seed, point counts from 2 through 24, finite source coordinates in `[-100, 100]`, translations in `[-10000, 10000]` pixels, rotations in `[-180, 180)` degrees, positive weights in `[2^-10, 2^10]`, positive uniform weight multipliers in `[2^-10, 2^10]`, minimum distinct-point separation `1e-3`, and required normalized singular value at least `1e-6`.
-- **Angular_Difference**: The absolute shortest signed difference between two headings after normalization to `[-180, 180)` degrees.
+- **Localization_System**: The Haware vehicle-localization capability governed by this specification.
+- **Canonical_Implementation**: The exclusive production boundary `trafficlab-project/**` for this feature.
+- **Legacy_Input_Tree**: Either repository subtree `pifpaf/**` or `location/**` outside `trafficlab-project/**`, available only as read-only legacy or scratch input.
+- **Frozen_Baseline**: A reproducibly identified output of legacy `localize()` or `localize_reprojection()` behavior used only for comparison, regression evidence, or tooling.
+- **Corrected_Legacy_Baseline**: The Frozen_Baseline for existing `localize()` behavior with the applied handedness correction and configured spread behavior, used for MVP comparison and Optimizer_Disabled_Mode parity. Its status vocabulary is exactly `ok`, `extrapolated`, `failed_insufficient_kp`, `pre_gate_near_horizon` (Requirement 1.23; emitted in the legacy schema before fitting), and `ambiguous_heading` from `localize_reprojection()`.
+- **Legacy_Status_Policy**: A versioned, content-identified artifact mapping each Corrected_Legacy_Baseline status to Accepted_Result or Rejected_Result with a decisive reason. It is defined independently of the Acceptance_Profile, exists before any pilot, and is required on the Optimizer_Disabled_Mode/production path.
+- **Diagnostic_Candidate**: A named estimator arm (for the MVP: `wheel_weighted_procrustes`, a wheel-weighted fixed-scale Procrustes on the corrected baseline geometry with `n_wheel_kp < 2` fallback to the full-point fit) run by the Pilot_Harness on the same ordered Eligible_Detections for comparison only. It never participates in production dispatch, the Pilot_Feasibility_Gate, held-out decisions, or any improvement claim.
+- **Batch_Runtime_Envelope**: The frozen wall-clock bound for localizing one complete source video in background batch mode, expressed as wall-clock seconds per second of source video (Requirement 13: at most `10 s / s`, i.e. 600 s for a 60 s clip).
+- **Optimizer_Disabled_Mode**: Configuration that dispatches to the Corrected_Legacy_Baseline instead of the Pose_Optimizer.
+- **Observation_Provider**: A replaceable detector or replay source that supplies keypoint observations; PifPaf is one Observation_Provider.
+- **Observation_Adapter**: The detector-independent boundary that converts provider records into Image_Observations.
+- **Replay_Reader**: The component that parses stored keypoint replay records.
+- **Replay_Writer**: The component that emits stored keypoint replay records.
+- **Image_Observation**: A finite CCTV image coordinate with confidence, candidate semantic label, frame identity, detection identity, provider provenance, and optional Real_Track_ID.
+- **Vehicle_Template**: The versioned three-dimensional keypoint model with body axes `+x = vehicle left`, `+y = up`, and `+z = rear`.
+- **Pose**: Vehicle planar position and heading in the preserved satellite-coordinate and heading conventions.
+- **Calibrated_Forward_Model**: The mapping that transforms Vehicle_Template points by a Pose and projects the transformed points into CCTV image space using the Calibration_Profile.
+- **Calibration_Profile**: Versioned calibration values, bounded nuisance intervals, coordinate conventions, and provenance used by the Calibrated_Forward_Model.
+- **Nuisance_Profile**: Frozen finite closed intervals for keypoint-family heights, vehicle dimensions, and calibration quantities authorized for variation during optimization.
+- **Cue_Family**: A documented semantic keypoint family, including wheel or ground-contact, glass or windshield, roof, mirror, and other evidence-supported cues.
+- **Cue_Height_Interval**: A bounded physical-height interval and uncertainty assigned to a Cue_Family or keypoint by documented evidence.
+- **Ground_Contact_Cue**: A wheel or other evidence-supported road-contact cue with height and height uncertainty fixed at `h=0`.
+- **Cue_Evidence_Profile**: Versioned site/view evidence that defines supported Cue_Families, semantic mappings, Cue_Height_Intervals, and provenance.
+- **Pose_Hypothesis**: A candidate Pose with semantic interpretation, correspondence mapping, evidence-supported cue subset, initialization source, nuisance values, and provenance.
+- **Wheel_Seeded_Hypothesis**: A Pose_Hypothesis initialized or anchored first with evidence-supported Ground_Contact_Cues at `h=0`.
+- **Non_Wheel_Seeded_Hypothesis**: A Pose_Hypothesis initialized without Ground_Contact_Cues from another evidence-supported Cue_Family.
+- **Normal_Semantics_Hypothesis**: A Pose_Hypothesis that uses provider front/rear semantics without reversal.
+- **Reversed_Semantics_Hypothesis**: A Pose_Hypothesis that evaluates the applicable front/rear swap or 180-degree alternative.
+- **Robust_Procedure**: The frozen deterministic outlier procedure comprising minimal-hypothesis sampling and robust nonlinear refinement, or an evidence-equivalent deterministic procedure frozen before held-out evaluation.
+- **Support_Set**: The Image_Observations retained as inliers for a Pose_Hypothesis after application of the frozen robust support rule.
+- **Robust_Reprojection_Score**: The frozen robust aggregate of CCTV image-space residuals, Support_Set evidence, and documented penalties used to compare Pose_Hypotheses.
+- **Pose_Optimizer**: The component that generates, robustly refines, scores, deduplicates, and selects Pose_Hypotheses using the Calibrated_Forward_Model.
+- **Position_Equivalent_Ambiguity**: The state in which the tied-best Pose_Hypotheses disagree on heading beyond the frozen ambiguity tolerance but agree on position within `position_ambiguity_tolerance_m`. It yields an Accepted_Result carrying the Authoritative_Position with a null heading, because this repository consumes only the position half of localization.
+- **Validity_Gate_Set**: The frozen subset of per-hypothesis gates whose survivors form the initial unique valid hypothesis set from which the Hypothesis_Margin requirement is latched. For the MVP it is exactly {support, non-finite, convergence}; rank, conditioning, uncertainty, and spread gates are evaluated on the selected representative after latching.
+- **Hypothesis_Margin**: The frozen score difference or ratio between the selected unique hypothesis and the next-best unique valid hypothesis.
+- **Conditioning_Metric**: A finite scalar derived from the optimized image-residual system whose ordering and rejection boundary quantify sensitivity of Pose to observation perturbations.
+- **Observability_Diagnostics**: Jacobian, Hessian or information-matrix rank and conditioning measures, plus the resulting Pose covariance or uncertainty bounds.
+- **Accepted_Result**: A usable localization that passes support, optimization, conditioning, uniqueness, uncertainty, spread, and numeric gates, contains one finite Authoritative_Position, and contains a null Diagnostic_Position. A Corrected_Legacy_Baseline record becomes an Accepted_Result only through the Legacy_Status_Policy.
+- **Reference_Point**: The Vehicle_Template origin — the ground-plane point `(x=0, h=0, z=0)` midway between the four wheel ground contacts — transformed by a Pose into the satellite frame. Every Authoritative_Position, Diagnostic_Position, and Independent_Ground_Truth coordinate denotes this physical point.
+- **Metric_Frame**: Satellite-image pixel coordinates of the site's Calibration_Profile reference image (`location/<code>/sat_<code>.png`) divided by its `px_per_meter`, origin at the image top-left, `+x` right, `+y` down, units metres. This is the frame `position_m` already uses.
+- **Rejected_Result**: An unusable localization that fails a required gate, records one decisive machine-readable reason, contains a null Authoritative_Position, and may contain a Diagnostic_Position.
+- **Authoritative_Position**: A finite accepted coordinate permitted for enrichment, velocity, scene geometry, and colliders.
+- **Diagnostic_Position**: A coordinate retained for analysis and prohibited from downstream spatial authority.
+- **Spread_Diagnostic**: The existing projected-keypoint spread measurement with a frozen computation and boundary policy.
+- **Real_Track_ID**: A stable vehicle identity with tracker name, tracker version, Source_Sequence, association provenance, and consistent occurrence across more than one frame. The ByteTrack identities already produced by `scripts/eval_haware_replay.py` qualify once that script emits their provenance (Requirement 8.14).
+- **Capture_ID**: The identity of one physical recording session (one camera, one continuous shoot) at one Acceptance_Site, derived from the source video path and its content digest.
+- **Source_Sequence**: One contiguous span of frames within one Capture_ID. Time-disjoint spans of one capture are separate Source_Sequences only when separated by a temporal buffer of length `T` frozen in the Acceptance_Profile with no Real_Track_ID present on both sides of the buffer; otherwise the whole capture is one Source_Sequence. Splitting a capture never creates a second Capture_ID.
+- **Pseudo_Track_ID**: A frame-local or unverified identity, including an identifier constructed in the `500+` range or any identifier with missing or inconsistent tracker provenance.
+- **Motion_Tie_Breaker**: An optional Real_Track_ID motion diagnostic that cannot override a required frame-local ambiguity rejection.
+- **Independent_Ground_Truth**: Reference vehicle positions created without access to baseline outputs, candidate outputs, Haware coordinates, or Haware overlays, produced under the GT_Annotation_Protocol.
+- **GT_Annotation_Protocol**: The versioned annotation procedure (`gt-protocol-v1`, defined in design §8) fixing annotator blinding, annotation medium, the annotated physical point and its conversion to the Reference_Point, frame-sampling rule, repeat-annotation fraction, and how per-record `uncertainty` is measured rather than asserted.
+- **Acceptance_Site**: One of exactly two Site_IDs named in `AcceptanceProfile.acceptance_sites`, drawn from the frozen candidate-site pool and subject to the pre-freeze calibration health check of Requirement 9.24. The pool and the two names are `kee-cc` and `taoyuan-tc` at the time of writing; substitution is governed by Requirement 9.25. `taipei-cm` is permanently ineligible.
+- **Diagnostic_Site**: `taipei-cm`, which is excluded from acceptance decisions.
+- **Eligible_Detection**: A detection that satisfies the frozen site, partition, replay, ground-truth, uncertainty, and identity rules before baseline or optimizer outcome is considered.
+- **Pilot_Partition**: Data used to estimate effect size, uncertainty, track/view coverage, data sufficiency, and candidate thresholds.
+- **Held_Out_Partition**: Data isolated from candidate, policy, nuisance, and threshold selection until the Acceptance_Profile is frozen.
+- **Independent_View**: A stratum `(camera_id, Source_Sequence, scene_region)` where `scene_region` is a frozen band of ground-plane distance from the camera nadir (or of homography magnification `1/k`) computed from the Independent_Ground_Truth Reference_Point, never from baseline or candidate output; band edges are frozen in the Acceptance_Profile before outcomes.
+- **Pilot_Harness**: The offline evaluator that replays observations, validates evidence, compares candidates, estimates uncertainty, and emits pilot and held-out reports.
+- **Acceptance_Profile**: The immutable versioned candidate-configuration artifact (calibration, cue-evidence, nuisance, optimizer, replay contract, Legacy_Status_Policy identity, Pilot_Statistics_Method, GT_Annotation_Protocol identity, deterministic seed). Its pre-pilot version freezes methods, gates, and metric definitions; the post-`go` version additionally records per-site held-out thresholds and is identified by the git commit SHA of the committed profile file (Requirement 11.16).
+- **Pilot_Statistics_Method**: The frozen statistical procedure (`pilot-stats-v1`, design §8): paired per-track effects, exact enumeration or seeded resampling, nearest-rank percentile intervals, variance and power method, methodological validity minimum of clusters, and the feasibility rule shape.
+- **Minimum_Effect_Of_Interest**: A frozen per-effect magnitude in output units (metres for median-error and p90-error effects, coverage fraction for the Usable_Coverage effect), justified from the downstream sensitivity of the scene player's collision conclusion and fixed before any baseline or candidate outcome is read. It is not an acceptance threshold and is distinct from the derived per-site thresholds.
+- **Paired_Accepted_Set**: The Eligible_Detections at one Acceptance_Site that received an Accepted_Result from both the Corrected_Legacy_Baseline and the compared candidate configuration; the fixed population for median-error and p90-error effects.
+- **Usable_Coverage**: The number of Eligible_Detections with an Accepted_Result divided by the fixed Eligible_Detection count.
+- **Effect_Interval**: A frozen-confidence interval for a candidate-minus-baseline metric effect that preserves Real_Track_ID clusters.
+- **Pilot_Feasibility_Gate**: The go/no-go decision based on pilot effect estimates, Effect_Intervals, independent-track coverage, Independent_View coverage, and data sufficiency.
+- **Deferred_Capability**: Detector replacement or retraining, generalized learned reliability, a full multi-provider schema platform, exhaustive artifact management, a selective-risk suite, calibration identification, temporal or multi-sensor fusion, or another capability not required by the MVP (see "Scope boundary and later phases").
+- **Downstream_Consumer**: `scripts/filter_and_enrich_output.py`, `postprocess.py`, `trafficlab/trajectory/*`, `trafficlab/io/replay_writer.py`, and — outside the Canonical_Implementation but governed by Requirement 7 — `tools/build_scene.py` and the Scene_Export_Contract.
+- **Scene_Export_Contract**: The `scenes/<code>/trajectory.json` shape consumed by `tools/build_scene.py` and the Three.js player: each object retains `tracked_id`, `status`, decisive reason, `sat_coords`, `position_m` (null for any non-Accepted_Result), and optional `diagnostic_position_sat_px`; the top level retains `localization_counts` and the applied Legacy_Status_Policy version. `trajectory.json` is copied verbatim into the scene bundle; the per-collider selected segment (`segment: {start_frame, end_frame}`) is recorded by `build_scene.py` in `scene.json`, which is the sole owner of segmentation.
 
 ## Requirements
 
-### Requirement 1: Preserve Existing Corrections and Define Change Scope
+## MVP and Pilot Requirements
 
-**User Story:** As a localization maintainer, I want existing corrections distinguished from new work, so that implementation effort targets unresolved accuracy problems.
+### Requirement 1: Establish Canonical Scope and Preserve Proven Behavior
 
-#### Acceptance Criteria
-
-1. THE Localization_Improvement_System SHALL preserve the existing template-to-satellite handedness correction.
-2. THE Localization_Improvement_System SHALL preserve the template convention `+x = vehicle left`.
-3. THE Localization_Improvement_System SHALL preserve the existing Spread_Gate position after pose fitting.
-4. WHEN finite projected spread is strictly below the frozen Spread_Gate boundary, THE Spread_Gate SHALL return `pass`.
-5. WHEN finite projected spread equals the frozen Spread_Gate boundary, THE Spread_Gate SHALL return `fail`.
-6. WHEN finite projected spread exceeds the frozen Spread_Gate boundary, THE Spread_Gate SHALL return `fail`.
-7. THE Localization_Improvement_System SHALL preserve `n_wheel_kp` as the count of observation-valid visible keypoints with Apollo-24 index `7`, `8`, `18`, or `19`.
-8. THE Mode_Selector SHALL exclude `n_wheel_kp` from every mode-eligibility predicate.
-9. THE Localization_Improvement_System SHALL classify reliability-aware multi-cue estimation as the core new localization algorithm.
-10. THE Localization_Improvement_System SHALL classify status propagation as supporting reliability-aware multi-cue work.
-11. THE Localization_Improvement_System SHALL classify near-horizon conditioning as supporting reliability-aware multi-cue work.
-12. THE Localization_Improvement_System SHALL classify measurement as supporting reliability-aware multi-cue work.
-13. THE Localization_Improvement_System SHALL classify conditional temporal fusion as supporting reliability-aware multi-cue work.
-14. WHEN multi-cue functionality is disabled, THE Compatibility_Layer SHALL reproduce every finite Frozen_Baseline satellite-coordinate component within absolute error `1e-9` pixels.
-15. WHEN multi-cue functionality is disabled, THE Compatibility_Layer SHALL reproduce every finite Frozen_Baseline heading within Angular_Difference `1e-9` degrees.
-16. WHEN multi-cue functionality is disabled, THE Compatibility_Layer SHALL reproduce every Frozen_Baseline status exactly.
-17. WHEN multi-cue functionality is disabled, THE Compatibility_Layer SHALL reproduce every Frozen_Baseline null value exactly.
-
-### Requirement 2: Create a Frozen Reproducible Baseline
-
-**User Story:** As an evaluator, I want an immutable and reproducible baseline, so that candidate improvements are compared against the same reference.
+**User Story:** As a maintainer, I want one implementation boundary and explicit baseline behavior, so that feasibility work does not duplicate production code or regress established conventions.
 
 #### Acceptance Criteria
 
-1. THE Measurement_Harness SHALL encode every Baseline_Manifest as Canonical_JSON.
-2. THE Measurement_Harness SHALL encode every Baseline_Identity_Payload as Canonical_JSON.
-3. THE Measurement_Harness SHALL compute every Baseline_ID as the Artifact_Hash of exact Baseline_Identity_Payload bytes.
-4. WHEN a Baseline_Manifest is loaded, THE Measurement_Harness SHALL recompute the Baseline_ID from exact Baseline_Identity_Payload bytes.
-5. IF a recorded `baseline_id` differs from the recomputed Baseline_ID, THEN THE Measurement_Harness SHALL reject the Baseline_Manifest with code `baseline_id_mismatch`.
-6. THE Baseline_Manifest SHALL record every field listed in the Baseline_Manifest glossary definition.
-7. THE Measurement_Harness SHALL generate Frozen_Baseline outputs with the handedness correction enabled.
-8. THE Measurement_Harness SHALL generate Frozen_Baseline outputs with the existing Spread_Gate enabled.
-9. WHEN a Frozen_Baseline is published, THE Measurement_Harness SHALL preserve exact Baseline_Manifest bytes under the published Baseline_ID.
-10. WHEN a Frozen_Baseline is published, THE Measurement_Harness SHALL preserve exact referenced-artifact bytes under the published Baseline_ID.
-11. IF a write would replace bytes published under a Baseline_ID, THEN THE Measurement_Harness SHALL reject the write with code `frozen_baseline_immutable`.
-12. IF a write would mutate bytes published under a Baseline_ID, THEN THE Measurement_Harness SHALL reject the write with code `frozen_baseline_immutable`.
-13. WHEN any Baseline_Manifest byte changes, THE Measurement_Harness SHALL assign the Baseline_ID recomputed from the changed Baseline_Identity_Payload.
-14. WHEN any referenced-artifact byte changes, THE Measurement_Harness SHALL assign the Baseline_ID recomputed from the changed Baseline_Identity_Payload containing the changed Artifact_Hash.
-15. WHEN a Frozen_Baseline artifact is read, THE Measurement_Harness SHALL verify exact artifact bytes against the recorded Artifact_Hash before use.
-16. IF Frozen_Baseline artifact verification fails, THEN THE Measurement_Harness SHALL reject the artifact with code `artifact_hash_mismatch`.
-17. WHEN every Comparability_Field matches the Frozen_Baseline in Canonical_JSON type, value, presence, and array order, THE Measurement_Harness SHALL classify the rerun as a Comparable_Rerun.
-18. IF any Comparability_Field differs from the Frozen_Baseline in Canonical_JSON type, value, presence, or array order, THEN THE Measurement_Harness SHALL classify the rerun as non-comparable.
-19. WHEN a rerun is non-comparable, THE Measurement_Harness SHALL report every differing Comparability_Field canonical path.
-20. WHEN a rerun is non-comparable, THE Measurement_Harness SHALL report baseline presence and rerun presence for every differing Comparability_Field.
-21. WHEN a rerun is non-comparable, THE Measurement_Harness SHALL report baseline value and rerun value for every differing Comparability_Field.
-22. WHEN a Comparable_Rerun completes, THE Measurement_Harness SHALL compare every rerun output Artifact_Hash with the same ordered Frozen_Baseline output Artifact_Hash.
-23. WHEN a Comparable_Rerun completes, THE Measurement_Harness SHALL reproduce every Frozen_Baseline scalar metric within absolute error `1e-9`.
-24. IF any Comparable_Rerun output Artifact_Hash differs from the same ordered Frozen_Baseline output Artifact_Hash, THEN THE Measurement_Harness SHALL classify artifact reproduction as failed.
-25. IF any Comparable_Rerun scalar metric differs from the Frozen_Baseline scalar metric by more than `1e-9`, THEN THE Measurement_Harness SHALL classify metric reproduction as failed.
-26. WHILE the Phase_0_Gate is incomplete, THE Measurement_Harness SHALL label every multi-cue acceptance result `preliminary`.
-27. WHILE the Phase_0_Gate is incomplete, THE Measurement_Harness SHALL prohibit every final multi-cue pass decision.
-28. WHILE the Phase_0_Gate is incomplete, THE Measurement_Harness SHALL prohibit every final multi-cue acceptance decision.
-29. IF `kee-cc` lacks a verified Frozen_Baseline, THEN THE Measurement_Harness SHALL keep the Phase_0_Gate failed.
-30. IF `taoyuan-tc` lacks a verified Frozen_Baseline, THEN THE Measurement_Harness SHALL keep the Phase_0_Gate failed.
-31. IF `kee-cc` lacks a sufficient Ground_Truth_Dataset, THEN THE Measurement_Harness SHALL keep the Phase_0_Gate failed.
-32. IF `taoyuan-tc` lacks a sufficient Ground_Truth_Dataset, THEN THE Measurement_Harness SHALL keep the Phase_0_Gate failed.
-33. IF `kee-cc` lacks a reproducible baseline metric report, THEN THE Measurement_Harness SHALL keep the Phase_0_Gate failed.
-34. IF `taoyuan-tc` lacks a reproducible baseline metric report, THEN THE Measurement_Harness SHALL keep the Phase_0_Gate failed.
-35. WHEN both Acceptance_Sites have a verified Frozen_Baseline, a sufficient Ground_Truth_Dataset, and a reproducible baseline metric report, THE Measurement_Harness SHALL mark the Phase_0_Gate `passed`.
-### Requirement 3: Establish Independent Ground Truth
+1. THE Localization_System SHALL define the repository subtree `trafficlab-project/**` as the exclusive Canonical_Implementation boundary for the estimator, coordinate-authority, and enrichment production implementation of this feature; `tools/build_scene.py` and the Scene_Export_Contract are named governed downstream exceptions bound by Requirement 7 and are the only production files this feature may modify outside that subtree.
+2. THE Localization_System SHALL define the repository subtrees `pifpaf/**` and `location/**` outside `trafficlab-project/**` as the complete Legacy_Input_Tree boundary.
+3. THE Localization_System SHALL treat every Legacy_Input_Tree as read-only input.
+4. WHEN the Localization_System reads a Legacy_Input_Tree artifact, THE Localization_System SHALL record the repository-relative source path and a deterministic content identity in replay provenance.
+5. THE Localization_System SHALL exclude Legacy_Input_Tree modules from production imports, writes, and runtime dispatch.
+6. THE Localization_System SHALL preserve the Vehicle_Template body-axis conventions.
+7. THE Localization_System SHALL preserve the applied template-to-satellite handedness correction in the Corrected_Legacy_Baseline.
+8. THE Localization_System SHALL preserve the Spread_Diagnostic computation used by the Corrected_Legacy_Baseline.
+9. WHEN the Pose_Optimizer is selected AND a spread boundary is enabled, THE Localization_System SHALL classify a fitted result with non-finite spread or spread greater than or equal to the frozen boundary as a Rejected_Result with reason `spread_rejected`; the Corrected_Legacy_Baseline status `extrapolated` maps to `spread_rejected` only through the Legacy_Status_Policy.
+10. WHEN the Spread_Diagnostic rejects a fitted result, THE Localization_System SHALL classify the fitted coordinate role as Diagnostic_Position.
+11. THE Localization_System SHALL classify existing `localize()` behavior as the Corrected_Legacy_Baseline rather than the Pose_Optimizer architecture.
+12. THE Localization_System SHALL classify existing `localize_reprojection()` behavior as a Frozen_Baseline rather than the Pose_Optimizer architecture.
+13. WHEN configuration flag `optimizer_disabled_selected` is true, THE Localization_System SHALL reproduce each finite Corrected_Legacy_Baseline coordinate component and heading with absolute circular error no greater than `1e-9` in the corresponding output units.
+14. WHEN configuration flag `optimizer_disabled_selected` is true, THE Localization_System SHALL reproduce every Corrected_Legacy_Baseline status, reason, null value, and non-finite classification exactly.
+15. WHEN configuration flag `optimizer_disabled_selected` is true, THE Localization_System SHALL emit the frozen compatible baseline schema.
+16. WHEN the Pose_Optimizer is selected, THE Pose_Optimizer SHALL generate, refine, score, deduplicate, and compare Pose_Hypotheses before selection.
+17. WHERE wheel-seeded initialization is enabled (default true) AND eligible Ground_Contact_Cues exist, THE Pose_Optimizer SHALL begin hypothesis generation with Wheel_Seeded_Hypotheses before Non_Wheel_Seeded_Hypotheses.
+18. WHEN a Non_Wheel_Seeded_Hypothesis has a strictly better frozen comparison value than every Wheel_Seeded_Hypothesis, THE Pose_Optimizer SHALL permit the Non_Wheel_Seeded_Hypothesis to win selection.
+19. THE Localization_System SHALL freeze Legacy_Status_Policy version `legacy-localize-v1` before any pilot: status `ok` with finite `sat_coords` maps to Accepted_Result with Authoritative_Position equal to `sat_coords` — a non-finite or absent heading sets `heading=null` with `heading_status='ambiguous'` and never withdraws position authority, because this repository consumes only the position half; status `extrapolated` maps to Rejected_Result with decisive reason `spread_rejected` and Diagnostic_Position equal to `sat_coords`; status `pre_gate_near_horizon` maps to Rejected_Result with decisive reason `pre_gate_near_horizon` and null Diagnostic_Position; status `ok` with non-finite `sat_coords` maps to Rejected_Result with reason `legacy_status_evidence_insufficient` and null Diagnostic_Position; status `failed_insufficient_kp`, `ambiguous_heading`, any unknown status, or an absent status maps to Rejected_Result with reason `legacy_status_evidence_insufficient` and Diagnostic_Position equal to `sat_coords` when finite.
+20. WHEN a Downstream_Consumer reads a record that carries legacy localization evidence (a `status` or `sat_coords`) but no new-contract authority fields, THE Downstream_Consumer SHALL apply Legacy_Status_Policy `legacy-localize-v1` by default and SHALL record the policy version applied; a consumer path on which no policy is resolvable SHALL be treated as a defect, not as missing localization.
+21. WHEN a record carries neither new-contract authority fields nor any legacy localization evidence, THE Localization_System SHALL classify it as a missing localization rather than a Rejected_Result, so that a default policy cannot convert an unobserved track into a rejection reason.
+22. THE Localization_System SHALL route a record to new-contract validation only when its `status` equals a defined localization status value, so that a legacy record carrying an incidental `decisive_gate` or `usable` key is still normalized through the Legacy_Status_Policy.
+23. THE Corrected_Legacy_Baseline SHALL support a frozen pre-localization observability pre-gate per Calibration_Profile (`CalibrationProfile.pre_gate`: a CCTV image-row bound or a homography-magnification `1/k` bound) that emits the legacy-schema status `pre_gate_near_horizon` (null `sat_coords`) before fitting; the pre-gate is disabled unless `pre_gate` is set for the site, and it never alters the output of a detection that passes it.
 
-**User Story:** As an accuracy reviewer, I want independently produced reference positions, so that evaluation measures correctness rather than internal consistency.
+### Requirement 2: Provide Detector-Independent Stored Replays
+
+**User Story:** As an estimator developer, I want reproducible detector-independent observations, so that the optimizer can be evaluated without coupling to PifPaf inference.
 
 #### Acceptance Criteria
 
-1. THE Ground_Truth_Dataset SHALL record every Ground_Truth_Metadata field for every reference position.
-2. THE Ground_Truth_Dataset SHALL express every reference position in metres in the calibrated satellite coordinate frame named by the recorded calibration identifier and Artifact_Hash.
-3. THE Ground_Truth_Dataset SHALL use the frozen vehicle reference-point definition for every reference position.
-4. WHEN annotation imagery is displayed, THE Ground_Truth_Dataset SHALL exclude every Ground_Truth_Contamination item from the annotation view.
-5. IF an independence declaration is false or missing, THEN THE Measurement_Harness SHALL classify the reference position as an Independence_Violation.
-6. IF source-artifact lineage includes a Haware baseline localization derivative, THEN THE Measurement_Harness SHALL classify the reference position as an Independence_Violation.
-7. IF source-artifact lineage includes a Haware candidate localization derivative, THEN THE Measurement_Harness SHALL classify the reference position as an Independence_Violation.
-8. IF Ground_Truth_Contamination is detected or declared, THEN THE Measurement_Harness SHALL classify the reference position as an Independence_Violation.
-9. IF source-artifact lineage cannot be verified from recorded Artifact_Hashes, THEN THE Measurement_Harness SHALL classify the reference position as an Independence_Violation.
-10. WHEN an Independence_Violation occurs, THE Measurement_Harness SHALL exclude the reference position from every acceptance partition with code `ground_truth_independence_violation`.
-11. WHEN a reference position lacks any Ground_Truth_Metadata field, THE Measurement_Harness SHALL exclude the reference position from every acceptance partition with code `missing_ground_truth_metadata`.
-12. THE Ground_Truth_Dataset SHALL freeze one absent-coordinate exclusion code before candidate evaluation.
-13. THE Ground_Truth_Dataset SHALL freeze one non-finite-coordinate exclusion code before candidate evaluation.
-14. THE Ground_Truth_Dataset SHALL freeze one duplicate-reference-identity exclusion code before candidate evaluation.
-15. WHEN a reference position lacks an `x` or `y` ground-truth coordinate component, THE Measurement_Harness SHALL exclude the reference position from every acceptance partition with the frozen absent-coordinate exclusion code.
-16. WHEN an `x` or `y` ground-truth coordinate component is non-finite, THE Measurement_Harness SHALL exclude the reference position from every acceptance partition with the frozen non-finite-coordinate exclusion code.
-17. WHEN two or more reference positions have identical site, frame identifier, and detection identifier values, THE Measurement_Harness SHALL exclude every reference position in the duplicate-reference-identity group from every acceptance partition with the frozen duplicate-reference-identity exclusion code.
-18. WHEN records in a duplicate-reference-identity group are permuted, THE Measurement_Harness SHALL preserve the excluded reference-position set and exclusion code exactly.
-19. WHEN annotation uncertainty is non-finite, THE Measurement_Harness SHALL exclude the reference position from every acceptance partition with code `invalid_ground_truth_uncertainty`.
-20. WHEN annotation uncertainty is negative, THE Measurement_Harness SHALL exclude the reference position from every acceptance partition with code `invalid_ground_truth_uncertainty`.
-21. WHEN annotation uncertainty exceeds the frozen per-record uncertainty limit, THE Measurement_Harness SHALL exclude the reference position from every acceptance partition with code `ground_truth_uncertainty_exceeded`.
-22. WHEN annotation uncertainty equals the frozen per-record uncertainty limit, THE Measurement_Harness SHALL retain the reference position subject to every other frozen inclusion rule.
-23. WHEN a reference position is excluded, THE Measurement_Harness SHALL record the site, frame identifier, detection identifier, failed field, failed rule, and exclusion code.
-24. THE Ground_Truth_Dataset SHALL freeze the per-record uncertainty limit before candidate evaluation.
-25. THE Ground_Truth_Dataset SHALL freeze every inclusion rule before candidate evaluation.
-26. THE Ground_Truth_Dataset SHALL freeze train, validation, and acceptance partitions before candidate evaluation.
-27. THE Ground_Truth_Dataset SHALL assign every detection to at most one partition.
-28. THE Ground_Truth_Dataset SHALL exclude every train record from the acceptance partition.
-29. THE Ground_Truth_Dataset SHALL exclude every validation record from the acceptance partition.
-30. THE Ground_Truth_Dataset SHALL assign a non-null track identifier to every Eligible_Detection in an acceptance partition.
-31. THE Ground_Truth_Dataset SHALL contain at least 30 Eligible_Detections after quality exclusions at `kee-cc`.
-32. THE Ground_Truth_Dataset SHALL contain at least 30 Eligible_Detections after quality exclusions at `taoyuan-tc`.
-33. THE Ground_Truth_Dataset SHALL contain at least 3 distinct non-null independently tracked vehicle identifiers after quality exclusions at `kee-cc`.
-34. THE Ground_Truth_Dataset SHALL contain at least 3 distinct non-null independently tracked vehicle identifiers after quality exclusions at `taoyuan-tc`.
-35. IF an Acceptance_Site has fewer than 30 Eligible_Detections after quality exclusions, THEN THE Measurement_Harness SHALL reject acceptance evaluation for the Acceptance_Site.
-36. IF an Acceptance_Site has fewer than 3 distinct non-null independently tracked vehicle identifiers after quality exclusions, THEN THE Measurement_Harness SHALL reject acceptance evaluation for the Acceptance_Site.
-37. IF acceptance evaluation is rejected for either Acceptance_Site, THEN THE Measurement_Harness SHALL keep the Phase_0_Gate failed.
-### Requirement 4: Enforce the Evidence Hierarchy and Acceptance Sites
+1. THE Acceptance_Profile SHALL freeze one provider-neutral MVP Observation_Adapter contract before pilot outcome evaluation.
+2. THE frozen Observation_Adapter contract SHALL define required and optional fields, field types, and numeric bounds (finite coordinates inside the image, confidence in `[0, 1]`).
+3. THE Acceptance_Profile SHALL freeze one provider-neutral MVP replay schema before pilot outcome evaluation.
+4. THE frozen replay schema SHALL define required and optional fields, field types, numeric bounds, schema version, and provenance fields.
+5. THE Observation_Adapter SHALL normalize every contract-conforming provider record into Image_Observations before hypothesis generation.
+6. THE Observation_Adapter SHALL preserve provider name, provider version, confidence, candidate semantic label, frame identity, detection identity, source provenance, and optional Real_Track_ID for each Image_Observation.
+7. IF one observation has a non-finite coordinate or confidence or violates an observation-level bound, THEN THE Observation_Adapter SHALL exclude that observation with a machine-readable observation-level reason.
+8. IF a record violates a record-level required field, type, identity, count, or provenance rule, THEN THE Observation_Adapter SHALL reject the complete record with a machine-readable record-level reason.
+9. IF a record contains duplicate observation identities, THEN THE Observation_Adapter SHALL reject the complete record with reason `duplicate_observation_id`.
+10. THE Observation_Adapter SHALL produce the same retained observations, exclusions, and reasons for every permutation of the input observations.
+11. THE Observation_Adapter SHALL expose PifPaf through exactly one MVP adapter implementation.
+12. THE Pose_Optimizer SHALL consume Image_Observations without importing an Observation_Provider implementation.
+13. THE Replay_Reader SHALL parse contract-conforming records from the frozen replay schema.
+14. IF one replay record violates the frozen replay schema, THEN THE Replay_Reader SHALL exclude only that replay record with a deterministic machine-readable reason.
+15. THE Replay_Writer SHALL accept raw or partially valid records, SHALL serialize them as sorted-key UTF-8 JSON, and SHALL return, alongside the payload, every per-record observation exclusion and reason it applied; IF the Replay_Writer would drop an observation without reporting it, THEN it SHALL instead reject the complete record. Silent thinning is prohibited at the write scope as well as the read scope.
+16. WHEN the Replay_Writer serializes a valid replay record and the Replay_Reader parses the result, THE parsed record SHALL equal the normalized input record by value.
+17. WHEN equivalent valid replay records differ only in unordered input presentation, THE Observation_Adapter SHALL normalize them to equal records by value.
+18. THE Localization_System SHALL treat a round-trip inequality under 2.16 as an implementation defect surfaced by tests, not as a record-level exclusion reason.
+19. THE Pilot_Harness SHALL use stored keypoint replays for each named Acceptance_Site.
+20. THE Pilot_Harness SHALL exclude any site absent from `AcceptanceProfile.acceptance_sites` from acceptance evidence.
+21. THE Pilot_Harness SHALL replay stored keypoints without rerunning Observation_Provider inference.
+22. WHEN provider labels enter hypothesis generation, THE Pose_Optimizer SHALL treat the labels as candidate evidence rather than confirmed correspondence truth.
+23. THE Pose_Optimizer SHALL retain provider labels as candidate evidence without promotion to confirmed correspondence truth at any confidence value.
 
-**User Story:** As a reviewer, I want a formal evidence hierarchy, so that proxy improvements cannot be mistaken for localization accuracy.
+### Requirement 3: Optimize Pose in CCTV Image Space
+
+**User Story:** As a localization user, I want pose estimated against the original image evidence, so that projection geometry and uncertain cue heights are represented coherently.
 
 #### Acceptance Criteria
 
-1. THE Measurement_Harness SHALL use Ground_Truth_Dataset Planar_Position_Error as the only primary accuracy evidence.
-2. THE Measurement_Harness SHALL classify ground-plane wheelbase consistency as secondary evidence.
-3. THE Measurement_Harness SHALL classify ground-plane track-width consistency as secondary evidence.
-4. WHEN two observations are Consecutive_Usable_Observations and planar displacement is strictly greater than the frozen nonzero-motion threshold, THE Measurement_Harness SHALL classify motion-course heading consistency as tertiary evidence.
-5. THE Measurement_Harness SHALL classify fit residual as an internal-consistency diagnostic.
-6. THE Measurement_Harness SHALL classify keypoint spread as an internal-consistency diagnostic.
-7. IF primary accuracy evidence fails for an Acceptance_Site, THEN THE Measurement_Harness SHALL reject the candidate for the Acceptance_Site.
-8. IF primary accuracy evidence fails for an Acceptance_Site, THEN THE Measurement_Harness SHALL prohibit Proxy_Metric evidence from changing the failed result.
-9. THE Measurement_Harness SHALL compute every acceptance metric separately for `kee-cc`.
-10. THE Measurement_Harness SHALL compute every acceptance metric separately for `taoyuan-tc`.
-11. THE Measurement_Harness SHALL exclude Diagnostic_Site records from every acceptance numerator.
-12. THE Measurement_Harness SHALL exclude Diagnostic_Site records from every acceptance denominator.
-13. THE Measurement_Harness SHALL exclude Diagnostic_Site records from every acceptance confidence interval.
-14. THE Measurement_Harness SHALL exclude Diagnostic_Site records from every acceptance pass-fail decision.
-15. WHERE a report contains a Diagnostic_Site record, THE Diagnostics_Recorder SHALL label the record `diagnostic_only=true`.
-16. IF a Diagnostic_Site record lacks `diagnostic_only=true`, THEN THE Diagnostics_Recorder SHALL reject the report as invalid.
-17. THE Measurement_Harness SHALL exclude Diagnostic_Site data from every acceptance-threshold selection.
-18. THE Measurement_Harness SHALL exclude every metric derived from Diagnostic_Site data from every acceptance-threshold tuning operation.
-### Requirement 5: Measure Accuracy, Coverage, and Risk
+1. WHEN the Pose_Optimizer evaluates a Pose_Hypothesis, THE Calibrated_Forward_Model SHALL transform the applicable Vehicle_Template points using only the candidate planar position, heading, and nuisance variables authorized by the frozen Calibration_Profile and Nuisance_Profile.
+2. WHEN the Pose_Optimizer evaluates a Pose_Hypothesis, THE Calibrated_Forward_Model SHALL project each transformed template point directly into CCTV image coordinates measured in pixels.
+3. WHEN a predicted template point has a proposed correspondence, THE Pose_Optimizer SHALL compute the residual directly between predicted and observed CCTV pixel coordinates.
+4. THE Pose_Optimizer SHALL refine Pose_Hypotheses by minimizing the frozen robust pixel-space reprojection objective.
+5. THE Pose_Optimizer SHALL derive every Authoritative_Position from the selected optimized Pose.
+6. THE Pose_Optimizer SHALL derive every accepted heading from the selected optimized Pose using the preserved heading convention.
+7. WHILE the Pose_Optimizer performs hypothesis generation, refinement, scoring, deduplication, or selection, THE Pose_Optimizer SHALL exclude independently inverse-lifted per-keypoint ground-plane targets from estimator inputs and objectives.
+8. WHILE the Pose_Optimizer performs hypothesis generation, refinement, scoring, deduplication, or selection, THE Pose_Optimizer SHALL exclude projected-point Procrustes from estimator inputs and objectives.
+9. WHILE the Pose_Optimizer performs hypothesis generation, refinement, scoring, deduplication, or selection, THE Pose_Optimizer SHALL exclude RoleConstraintGraph inputs, constraints, scores, and decisions.
+10. WHEN synthetic Image_Observations are generated by the Calibrated_Forward_Model from an in-domain Pose and the frozen minimum Support_Set, rank, conditioning, uncertainty, and uniqueness gates pass, THE Pose_Optimizer SHALL recover an equivalent Pose within the frozen synthetic position and heading tolerances.
+11. IF a synthetic case fails a frozen support, observability, conditioning, uncertainty, or uniqueness gate, THEN THE Pose_Optimizer SHALL classify the synthetic case as ineligible for recovery acceptance rather than count the case as a successful recovery.
 
-**User Story:** As a product owner, I want accuracy evaluated together with coverage and risk, so that abstention cannot create a misleading accuracy gain.
+### Requirement 4: Bound Height and Calibration Nuisance Inputs
+
+**User Story:** As an accuracy reviewer, I want physical uncertainty represented explicitly, so that no cue family receives unsupported geometric certainty.
 
 #### Acceptance Criteria
 
-1. THE Measurement_Harness SHALL construct one fixed Evaluation_Population from the frozen acceptance partition for each Acceptance_Site.
-2. THE Measurement_Harness SHALL use the identical ordered Evaluation_Population as the baseline denominator and candidate denominator at one Acceptance_Site.
-3. IF an Eligible_Detection joins zero reference positions, THEN THE Measurement_Harness SHALL fail site evaluation with code `missing_ground_truth_match`.
-4. IF an Eligible_Detection joins more than one reference position, THEN THE Measurement_Harness SHALL fail site evaluation with code `ambiguous_ground_truth_match`.
-5. IF site evaluation fails because of a ground-truth join, THEN THE Measurement_Harness SHALL retain the failed Eligible_Detection in the recorded fixed Evaluation_Population inventory.
-6. IF the baseline produces a localization-result count other than one for the site, frame identifier, and detection identifier of any Evaluation_Population record, THEN THE Measurement_Harness SHALL reject site evaluation.
-7. IF the candidate produces a localization-result count other than one for the site, frame identifier, and detection identifier of any Evaluation_Population record, THEN THE Measurement_Harness SHALL reject site evaluation.
-8. IF site evaluation is rejected because of baseline or candidate localization-result cardinality, THEN THE Measurement_Harness SHALL preserve the complete ordered fixed Evaluation_Population inventory.
-9. WHEN a Matched_Detection has a Usable_Localization, THE Measurement_Harness SHALL compute Planar_Position_Error from unrounded finite coordinates in the common calibrated frame.
-10. THE Measurement_Harness SHALL form the baseline Error_Sample only from baseline Usable_Localizations in the fixed Evaluation_Population.
-11. THE Measurement_Harness SHALL form the candidate Error_Sample only from candidate Usable_Localizations in the fixed Evaluation_Population.
-12. THE Measurement_Harness SHALL keep baseline and candidate Error_Samples separate.
-13. WHEN an Error_Sample is nonempty, THE Measurement_Harness SHALL report the Error_Sample count.
-14. WHEN an Error_Sample is nonempty, THE Measurement_Harness SHALL report the Error_Sample median Planar_Position_Error in metres.
-15. WHEN an Error_Sample is nonempty, THE Measurement_Harness SHALL report the Error_Sample Nearest_Rank_Percentile at `p=0.90` in metres.
-16. WHEN an Error_Sample is nonempty, THE Measurement_Harness SHALL report the Error_Sample maximum Planar_Position_Error in metres.
-17. IF a baseline Error_Sample is empty, THEN THE Measurement_Harness SHALL report baseline position-error statistics as null.
-18. IF a candidate Error_Sample is empty, THEN THE Measurement_Harness SHALL report candidate position-error statistics as null.
-19. IF a baseline Error_Sample is empty, THEN THE Measurement_Harness SHALL fail the accuracy gate for the Acceptance_Site.
-20. IF a candidate Error_Sample is empty, THEN THE Measurement_Harness SHALL fail the accuracy gate for the Acceptance_Site.
-21. THE Measurement_Harness SHALL compute baseline Usable_Coverage over the fixed Evaluation_Population denominator.
-22. THE Measurement_Harness SHALL compute candidate Usable_Coverage over the fixed Evaluation_Population denominator.
-23. THE Measurement_Harness SHALL include usable `fallback` records in overall Error_Samples.
-24. THE Measurement_Harness SHALL include usable `fallback` records in Usable_Coverage.
-25. THE Measurement_Harness SHALL include usable `fallback` records in Selective_Risk inputs.
-26. THE Measurement_Harness SHALL report every status count divided by the fixed Evaluation_Population count.
-27. THE Measurement_Harness SHALL report every Estimator_Mode count divided by the fixed Evaluation_Population count.
-28. THE Measurement_Harness SHALL report count, median, 90th-percentile error, and maximum separately for `single_family`, `complementary_multi_cue`, and `fallback`.
-29. IF a per-mode Error_Sample is empty, THEN THE Measurement_Harness SHALL report the per-mode position-error statistics as null.
-30. THE Measurement_Harness SHALL report Per_Mode_Coverage_Contribution separately for `single_family`, `complementary_multi_cue`, and `fallback`.
-31. THE Measurement_Harness SHALL verify that the three Per_Mode_Coverage_Contribution values sum to Usable_Coverage within absolute error `1e-12`.
-32. THE Measurement_Harness SHALL retain every usable non-finite-confidence record in the fixed Evaluation_Population denominator.
-33. THE Measurement_Harness SHALL include every usable non-finite-confidence record in Usable_Coverage.
-34. THE Measurement_Harness SHALL exclude every non-finite-confidence record from Selective_Risk retention.
-35. THE Measurement_Harness SHALL sort Selective_Risk inputs by descending finite confidence, ascending frame identifier, and ascending detection identifier.
-36. WHEN requested coverage is `c`, THE Measurement_Harness SHALL set Selective_Risk retained count to `k=ceil(cN)`.
-37. WHEN baseline and candidate each contain at least `k` finite-confidence usable Matched_Detections, THE Measurement_Harness SHALL classify requested coverage `c` as a Matched_Coverage_Point.
-38. WHEN requested coverage `c` is a Matched_Coverage_Point, THE Measurement_Harness SHALL compute baseline Selective_Risk from exactly the first `k` sorted baseline errors.
-39. WHEN requested coverage `c` is a Matched_Coverage_Point, THE Measurement_Harness SHALL compute candidate Selective_Risk from exactly the first `k` sorted candidate errors.
-40. IF baseline lacks `k` finite-confidence usable Matched_Detections at requested coverage `c`, THEN THE Measurement_Harness SHALL report baseline Selective_Risk at `c` as null.
-41. IF candidate lacks `k` finite-confidence usable Matched_Detections at requested coverage `c`, THEN THE Measurement_Harness SHALL report candidate Selective_Risk at `c` as null.
-42. IF no finite-confidence usable Matched_Detections exist for a system, THEN THE Measurement_Harness SHALL report the system Selective_Risk curve as empty.
-43. THE Measurement_Harness SHALL request Selective_Risk at `5` percentage-point increments beginning at `20%`.
-44. THE Measurement_Harness SHALL stop requested Selective_Risk points above the lower maximum finite-confidence usable coverage of baseline and candidate.
-45. IF either baseline or candidate lacks a Matched_Coverage_Point at `20%`, THEN THE Measurement_Harness SHALL fail the Selective_Risk gate for the Acceptance_Site.
-46. WHEN baseline and candidate median-error point estimates are non-null, THE Measurement_Harness SHALL compute a Paired_Track_Confidence_Interval for candidate-minus-baseline median error.
-47. WHEN baseline and candidate 90th-percentile-error point estimates are non-null, THE Measurement_Harness SHALL compute a Paired_Track_Confidence_Interval for candidate-minus-baseline 90th-percentile error.
-48. WHEN baseline and candidate Usable_Coverage point estimates are non-null, THE Measurement_Harness SHALL compute a Paired_Track_Confidence_Interval for candidate-minus-baseline Usable_Coverage.
-49. WHEN baseline and candidate point estimates for a per-mode position-error statistic are non-null, THE Measurement_Harness SHALL compute a Paired_Track_Confidence_Interval for the candidate-minus-baseline statistic.
-50. WHEN baseline and candidate Per_Mode_Coverage_Contribution point estimates are non-null, THE Measurement_Harness SHALL compute a Paired_Track_Confidence_Interval for candidate-minus-baseline Per_Mode_Coverage_Contribution.
-51. WHEN baseline and candidate Selective_Risk point estimates are non-null at a Matched_Coverage_Point, THE Measurement_Harness SHALL compute a Paired_Track_Confidence_Interval for the candidate-minus-baseline Selective_Risk value.
-52. THE Measurement_Harness SHALL apply the Paired_Track_Confidence_Interval procedure from the Glossary without baseline-candidate resampling divergence.
-53. THE Acceptance_Profile SHALL freeze replicate count, confidence level, random seed, percentile endpoints, and undefined-replicate handling.
-54. THE Measurement_Harness SHALL report metric name, site, mode or coverage point, point estimate, interval endpoints, replicate count, confidence level, and seed for every paired interval.
-55. IF either baseline or candidate point estimate is null for a required paired metric, THEN THE Measurement_Harness SHALL skip Paired_Track_Confidence_Interval computation for the metric.
-56. IF either baseline or candidate point estimate is null for a required paired metric, THEN THE Measurement_Harness SHALL report the metric interval as null.
-57. THE Acceptance_Profile SHALL require candidate median Planar_Position_Error to be at most `0.95` times the Frozen_Baseline median at each Acceptance_Site.
-58. THE Acceptance_Profile SHALL require candidate 90th-percentile Planar_Position_Error to be no greater than the Frozen_Baseline 90th percentile at each Acceptance_Site.
-59. THE Acceptance_Profile SHALL require candidate Usable_Coverage to be at least Frozen_Baseline Usable_Coverage minus `0.02` at each Acceptance_Site.
-60. THE Acceptance_Profile SHALL require candidate Selective_Risk to be no greater than Frozen_Baseline Selective_Risk at every Matched_Coverage_Point.
-61. IF any per-site accuracy gate fails, THEN THE Measurement_Harness SHALL reject the candidate.
-62. IF any per-site coverage gate fails, THEN THE Measurement_Harness SHALL reject the candidate.
-63. IF any per-site Selective_Risk gate fails, THEN THE Measurement_Harness SHALL reject the candidate.
-64. IF a pooled result passes while `kee-cc` fails, THEN THE Measurement_Harness SHALL reject the candidate.
-65. IF a pooled result passes while `taoyuan-tc` fails, THEN THE Measurement_Harness SHALL reject the candidate.
-### Requirement 6: Select and Weight Reliable Multi-Cue Constraints
+1. THE Cue_Evidence_Profile SHALL assign every Ground_Contact_Cue the finite Cue_Height_Interval `[0, 0]`.
+2. THE Cue_Evidence_Profile SHALL assign every non-ground Cue_Family a finite evidence-supported Cue_Height_Interval within the frozen physical bounds.
+3. IF a non-ground Cue_Family lacks documented evidence for a fixed height, THEN THE Cue_Evidence_Profile SHALL assign the Cue_Family a Cue_Height_Interval whose upper bound is greater than its lower bound.
+4. THE Nuisance_Profile SHALL define a finite closed lower and upper bound for every calibration quantity varied by the Pose_Optimizer.
+5. THE Nuisance_Profile SHALL define a finite closed lower and upper bound for every vehicle dimension varied by the Pose_Optimizer.
+6. WHEN the Pose_Optimizer evaluates a Pose_Hypothesis, THE Pose_Optimizer SHALL constrain every nuisance value to the applicable closed Nuisance_Profile interval.
+7. THE Pose_Optimizer SHALL propagate Cue_Height_Interval uncertainty into refinement or Observability_Diagnostics.
+8. THE Pose_Optimizer SHALL propagate varied calibration uncertainty into refinement or Observability_Diagnostics.
+9. WHERE wheel-seeded initialization is enabled (default true) AND a sufficient Ground_Contact_Cue subset passes the frozen evidence and geometry checks, THE Pose_Optimizer SHALL use `h=0` wheel geometry for the first initialization and generate a Wheel_Seeded_Hypothesis before non-wheel alternatives.
+10. WHERE non-wheel-seeded initialization is enabled (default true) AND sufficient non-ground observations pass the frozen evidence and geometry checks, THE Pose_Optimizer SHALL generate a Non_Wheel_Seeded_Hypothesis regardless of wheel presence, visibility, support, or outlier status.
+11. WHERE both seed classes are enabled AND Wheel_Seeded_Hypotheses and Non_Wheel_Seeded_Hypotheses pass the frozen validity rules, THE Pose_Optimizer SHALL keep both seed classes eligible for scoring and selection.
+12. IF Ground_Contact_Cues are rejected as outliers, THEN THE Pose_Optimizer SHALL continue generation, refinement, scoring, and selection for valid Non_Wheel_Seeded_Hypotheses.
+13. IF every wheel-seeded and non-wheel-seeded hypothesis fails the frozen validity rules, THEN THE Pose_Optimizer SHALL return a Rejected_Result whose decisive reason is chosen by the frozen precedence over all recorded hypothesis-level failures; `insufficient_valid_hypothesis` is decisive only when no other listed reason was recorded (for example zero hypotheses generated or every path `minimal_seed_failed`).
+14. WHERE the Cue_Evidence_Profile supports glass, windshield, roof, mirror, or another documented Cue_Family for the applicable site and view, THE Pose_Optimizer SHALL permit the supported Cue_Family to contribute to hypothesis generation and scoring.
+15. THE Pose_Optimizer SHALL exclude `wheel_only` from the estimator-mode contract.
+16. THE Pose_Optimizer SHALL exclude `wheel_weighted` from the estimator-mode contract; a wheel-weighted estimator is permitted only as a Diagnostic_Candidate under Requirement 12, implemented outside the Pose_Optimizer call graph.
+17. THE Pose_Optimizer SHALL exclude wheel count as a sufficient condition for an Accepted_Result.
+18. THE Pose_Optimizer SHALL retain visible wheel count only as a diagnostic value.
 
-**User Story:** As a localization engineer, I want estimator support selected from view-specific cue reliability and geometric observability, so that each visible keypoint family contributes only constraints supported by available evidence.
+### Requirement 5: Generate and Compare Multiple Explicit Hypotheses
+
+**User Story:** As an evaluator, I want semantic and geometric ambiguity represented as competing hypotheses, so that one detector labeling cannot silently determine pose.
 
 #### Acceptance Criteria
 
-1. THE Acceptance_Profile SHALL freeze the Observation_Validity_Profile before candidate evaluation.
-2. THE Observation_Validity_Profile SHALL define validity for every coordinate, confidence, identifier, and label consumed by mode selection.
-3. THE Observation_Validity_Profile SHALL freeze one Duplicate_Keypoint_Policy before candidate evaluation.
-4. WHEN duplicate keypoint identifiers are present, THE Mode_Selector SHALL apply the frozen Duplicate_Keypoint_Policy before evaluating Cue_Eligibility_Checks.
-5. IF duplicate keypoint values conflict under a rejecting Duplicate_Keypoint_Policy, THEN THE Mode_Selector SHALL return the duplicate-conflict reason code frozen by the Observation_Validity_Profile.
-6. WHEN equivalent duplicate keypoint records are permuted, THE Mode_Selector SHALL return the same observation-validity result.
-7. THE Geometry_Profile SHALL define `wheel_ground_contact`, `windshield_glass_corner`, `roof_corner`, `mirror`, and `other_documented` Cue_Families before candidate evaluation.
-8. THE Geometry_Profile SHALL assign every keypoint eligible for estimation to exactly one documented Cue_Family.
-9. THE Geometry_Profile SHALL assign every orientation-eligible keypoint to exactly one Height_Family.
-10. THE Geometry_Profile SHALL freeze candidate `orientation`, `position`, and `bearing` roles for every Cue_Family before candidate evaluation.
-11. THE Geometry_Profile SHALL freeze minimum visibility rules for every candidate cue constraint before candidate evaluation.
-12. THE Geometry_Profile SHALL freeze minimum projected baseline or leverage boundaries for every candidate cue constraint before candidate evaluation.
-13. THE Geometry_Profile SHALL freeze centered-template and centered-observation rank requirements for every candidate cue constraint that requires rank evaluation.
-14. THE Geometry_Profile SHALL freeze minimum per-keypoint confidence for every candidate cue constraint before candidate evaluation.
-15. THE Geometry_Profile SHALL freeze label and semantic-consistency rules for every Cue_Family before candidate evaluation.
-16. THE Geometry_Profile SHALL freeze Height_Family uncertainty rules for every nonzero-height candidate cue constraint before candidate evaluation.
-17. THE Geometry_Profile SHALL freeze versioned Site_View_Evidence gates before candidate evaluation.
-18. THE Geometry_Profile SHALL freeze fallback-evidence rules before candidate evaluation.
-19. THE Geometry_Profile SHALL freeze non-overlapping Estimator_Mode predicates before candidate evaluation.
-20. THE Geometry_Profile SHALL freeze deterministic mode priority before candidate evaluation.
-21. THE Geometry_Profile SHALL freeze a deterministic weighting function over Cue_Reliability_Factors before candidate evaluation.
-22. WHEN a minimum-bound cue value equals the associated frozen minimum boundary, THE Mode_Selector SHALL pass the associated Cue_Eligibility_Check.
-23. WHEN a minimum-bound cue value is below the associated frozen minimum boundary, THE Mode_Selector SHALL fail the associated Cue_Eligibility_Check.
-24. WHEN a cue constraint is evaluated, THE Mode_Selector SHALL evaluate visibility for the cue constraint.
-25. WHEN a cue constraint is evaluated, THE Mode_Selector SHALL evaluate projected baseline or leverage for the cue constraint's proposed role.
-26. WHEN a cue constraint is evaluated, THE Mode_Selector SHALL evaluate Projection_Conditioning_Metric values for every observation required by the cue constraint.
-27. WHEN a cue constraint is evaluated, THE Mode_Selector SHALL evaluate keypoint confidence for the cue constraint.
-28. WHEN a cue constraint is evaluated, THE Mode_Selector SHALL evaluate label and semantic consistency for the cue constraint.
-29. WHEN a nonzero-height cue constraint is evaluated, THE Mode_Selector SHALL evaluate Height_Family uncertainty for the cue constraint.
-30. WHEN a cue constraint is evaluated, THE Mode_Selector SHALL evaluate applicable Site_View_Evidence for the detection site and documented view region.
-31. WHEN every Cue_Eligibility_Check for a candidate cue constraint passes, THE Mode_Selector SHALL classify the cue constraint as reliability-eligible.
-32. WHEN any Cue_Eligibility_Check for a candidate cue constraint fails, THE Mode_Selector SHALL classify the cue constraint as reliability-ineligible.
-33. WHEN a cue constraint is reliability-eligible, THE Mode_Selector SHALL compute the cue constraint weight from the frozen weighting function and recorded Cue_Reliability_Factors.
-34. WHEN a cue constraint has stronger projected baseline or leverage under otherwise equal Cue_Reliability_Factors, THE Mode_Selector SHALL assign a weight no lower than the weaker cue constraint's weight.
-35. WHEN a cue constraint has greater Height_Family uncertainty under otherwise equal Cue_Reliability_Factors, THE Mode_Selector SHALL assign a weight no higher than the lower-uncertainty cue constraint's weight.
-36. WHEN a valid wheel or documented ground-contact cue has `h=0`, THE Mode_Selector SHALL classify the cue as a Zero_Height_Anchor candidate.
-37. WHEN a Zero_Height_Anchor is reliability-eligible for position, THE Reliability_Aware_Multi_Cue_Estimator SHALL prefer the Zero_Height_Anchor over a nonzero-height position cue with otherwise equal reliability evidence.
-38. WHEN the Reliability_Aware_Multi_Cue_Estimator projects a Zero_Height_Anchor, THE Reliability_Aware_Multi_Cue_Estimator SHALL use `eta=0` for the vertical-parallax correction term.
-39. THE Geometry_Profile SHALL classify mirror cues with a documented estimated-height prior and Height_Family uncertainty.
-40. THE Geometry_Profile SHALL reserve Zero_Height_Anchor classification for documented `h=0` ground-contact cues.
-41. WHEN a windshield or glass-corner cue has reliable camera-relative bearing evidence, THE Mode_Selector SHALL permit the cue to contribute a Position_Bearing_Constraint.
-42. WHEN a windshield or glass-corner pair has projected heading leverage below the frozen heading-leverage boundary, THE Mode_Selector SHALL classify the pair as orientation-ineligible.
-43. WHEN a short or predominantly lateral cue pair has projected heading leverage below the frozen heading-leverage boundary, THE Mode_Selector SHALL preserve any separately eligible Position_Bearing_Constraint from the pair.
-44. WHERE the site is `kee-cc`, WHEN Apollo-24 keypoint `front_up_right` index `0` is considered, THE Mode_Selector SHALL apply the frozen kee-cc semantic-misplacement Site_View_Evidence gate before assigning any constraint role.
-45. WHERE the site is `kee-cc`, IF Apollo-24 keypoint `front_up_right` index `0` fails the semantic-misplacement Site_View_Evidence gate, THEN THE Mode_Selector SHALL exclude index `0` from estimator support with a stable reason code.
-46. WHERE a site and view lack evidence of the kee-cc index `0` anomaly, THE Mode_Selector SHALL evaluate index `0` from the Site_View_Evidence applicable to that site and view.
-47. WHEN a Cue_Family contributes an Orientation_Constraint, THE Reliability_Aware_Multi_Cue_Estimator SHALL estimate the Orientation_Constraint only from keypoints in one Height_Family.
-48. WHEN orientation evidence exists in multiple Height_Families, THE Reliability_Aware_Multi_Cue_Estimator SHALL estimate one separate Orientation_Constraint per Height_Family before combining orientation evidence.
-49. WHEN separately estimated Orientation_Constraints from multiple Height_Families are combined, THE Reliability_Aware_Multi_Cue_Estimator SHALL weight the combination by each Height_Family's Effective_Eta uncertainty and recorded reliability evidence.
-50. IF a Height_Family lacks the frozen uncertainty information required for cross-family orientation combination, THEN THE Reliability_Aware_Multi_Cue_Estimator SHALL retain that family's Orientation_Constraint as diagnostic-only for the combination.
-51. WHEN one reliability-eligible Cue_Family constrains orientation and another reliability-eligible Cue_Family constrains position or bearing, THE Mode_Selector SHALL permit a `complementary_multi_cue` Primary_Support_Path.
-52. WHEN exactly one reliability-eligible Cue_Family supplies every required pose constraint, THE Mode_Selector SHALL select `single_family`.
-53. WHEN two or more reliability-eligible Cue_Families supply complementary required pose constraints, THE Mode_Selector SHALL select `complementary_multi_cue`.
-54. WHEN zero wheel keypoints are visible and a non-wheel Primary_Support_Path is reliability-eligible, THE Mode_Selector SHALL select the applicable `single_family` or `complementary_multi_cue` mode.
-55. WHEN zero wheel keypoints are visible and no Primary_Support_Path is reliability-eligible, THE Mode_Selector SHALL evaluate the frozen fallback-evidence predicate.
-56. WHEN every Primary_Support_Path is ineligible and fallback evidence passes every required evidence and conditioning check, THE Mode_Selector SHALL select `fallback`.
-57. WHEN every Primary_Support_Path is ineligible and fallback evidence fails any required evidence check, THE Mode_Selector SHALL select `none`.
-58. IF any required conditioning value for a selected support path is non-finite, THEN THE Mode_Selector SHALL return Typed_Validation_Failure code `invalid_conditioning_metric`.
-59. IF any required conditioning value for a selected support path is non-finite, THEN THE Mode_Selector SHALL prohibit Fallback_Path substitution for the detection.
-60. IF Estimator_Mode predicates overlap for any Observation_Validity_Profile-valid input, THEN THE Mode_Selector SHALL fail Geometry_Profile validation before detection evaluation.
-61. THE Mode_Selector SHALL derive every mode decision from keypoint identifiers, keypoint values, Cue_Reliability_Factors, and frozen profile evidence.
-62. THE Mode_Selector SHALL exclude input iteration order from every mode decision.
-63. WHEN equivalent keypoint records are permuted, THE Mode_Selector SHALL preserve Estimator_Mode exactly.
-64. WHEN equivalent keypoint records are permuted, THE Mode_Selector SHALL preserve the selection-reason code exactly.
-65. THE Mode_Selector SHALL record every Cue_Eligibility_Check value, threshold, and outcome for every candidate cue constraint.
-66. THE Mode_Selector SHALL record every Cue_Reliability_Factor and resulting weight used for every candidate cue constraint.
-67. THE Mode_Selector SHALL record each selected cue's Cue_Family, Height_Family, and constraint role.
-68. THE Mode_Selector SHALL record one stable machine-readable selection-reason code for every detection.
-69. THE Mode_Selector SHALL use `n_wheel_kp` only as a diagnostic output.
-70. WHEN two detections have equal `n_wheel_kp` and different cue reliability evidence, THE Mode_Selector SHALL evaluate each detection from the detection's cue reliability evidence.
-### Requirement 7: Ensure Correct Weighted Estimation
+1. THE Acceptance_Profile SHALL freeze a finite maximum generated-hypothesis count per replay record.
+2. WHEN sufficient labeled observations exist, THE Pose_Optimizer SHALL include a Normal_Semantics_Hypothesis path in the authorized hypothesis combinations.
+3. WHEN the frozen ambiguity trigger identifies plausible front/rear reversal, THE Pose_Optimizer SHALL include a Reversed_Semantics_Hypothesis path in the authorized hypothesis combinations.
+4. WHEN the frozen ambiguity trigger identifies a plausible 180-degree pose alternative, THE Pose_Optimizer SHALL include the 180-degree alternative as a distinct semantic path.
+5. WHEN the Cue_Evidence_Profile authorizes multiple robust cue subsets, THE Pose_Optimizer SHALL include each authorized cue subset in the authorized hypothesis combinations.
+6. WHERE wheel-seeded initialization is enabled (default true) AND sufficient Ground_Contact_Cues exist, THE Pose_Optimizer SHALL include Wheel_Seeded_Hypotheses in the authorized hypothesis combinations.
+7. WHERE non-wheel-seeded initialization is enabled (default true) AND sufficient non-ground evidence exists, THE Pose_Optimizer SHALL include Non_Wheel_Seeded_Hypotheses in the authorized hypothesis combinations.
+8. WHEN authorized semantic paths, cue subsets, and seed classes exist, THE Pose_Optimizer SHALL cross the applicable semantic paths, cue subsets, and seed classes under the frozen finite hypothesis budget.
+9. IF the authorized cross product exceeds the frozen hypothesis budget, THEN THE Pose_Optimizer SHALL apply the frozen deterministic budget-allocation rule and record every omitted combination with reason `hypothesis_budget_exceeded`.
+10. THE Pose_Optimizer SHALL score every valid Pose_Hypothesis with the same frozen Robust_Reprojection_Score definition and parameter values.
+11. THE Pose_Optimizer SHALL record semantic path, correspondence mapping, cue subset, seed class, initialization source, nuisance values, support, score, and rejection reason for every evaluated Pose_Hypothesis.
+12. THE Pose_Optimizer SHALL record one terminal path state for every authorized semantic-path, cue-subset, and seed-class combination, including generated, invalid, refined, scored, merged, rejected, selected, or budget-excluded.
+13. WHEN two optimized hypotheses represent the same pose within the frozen equivalence tolerances, THE Pose_Optimizer SHALL merge the hypotheses by the frozen permutation-invariant equivalence rule before computing Hypothesis_Margin.
+14. WHEN hypotheses are merged, THE Pose_Optimizer SHALL preserve the provenance and terminal path state of every merged initialization, cue subset, seed class, and semantic path.
+15. WHEN provider semantics conflict with a lower-scoring supported hypothesis, THE Pose_Optimizer SHALL retain both interpretations in diagnostics.
+16. WHEN two valid unique hypotheses have equal comparison values within the frozen ambiguity tolerance AND their maximum pairwise position distance exceeds `position_ambiguity_tolerance_m` (frozen, default `0.25` m, inclusive at the boundary, and never greater than half the median-error Minimum_Effect_Of_Interest), THE Pose_Optimizer SHALL return a Rejected_Result with reason `ambiguous_equal_score`.
+17. WHEN equal-score hypotheses are serialized for diagnostics, THE Pose_Optimizer SHALL apply the frozen canonical diagnostic order without using the order to authorize a pose.
+18. IF no Pose_Hypothesis satisfies the frozen support and validity rules, THEN THE Pose_Optimizer SHALL return a Rejected_Result whose decisive reason follows the rule of Requirement 4.13.
+19. WHEN two or more valid unique hypotheses are tied within the frozen ambiguity tolerance AND their maximum pairwise position distance is within `position_ambiguity_tolerance_m`, THE Pose_Optimizer SHALL return an Accepted_Result in Position_Equivalent_Ambiguity: THE Authoritative_Position SHALL be the position of the lowest-score canonical representative rather than an average of the tied poses, THE heading SHALL be null with `heading_status='ambiguous'`, THE reported position uncertainty SHALL include the within-cluster position dispersion, and THE result SHALL be Rejected if that combined uncertainty then reaches the frozen uncertainty boundary.
+20. IF the tied hypotheses form two or more position clusters separated by more than `position_ambiguity_tolerance_m`, THEN THE Pose_Optimizer SHALL return a Rejected_Result with reason `ambiguous_equal_score` regardless of heading agreement.
 
-**User Story:** As an algorithm reviewer, I want mathematically correct weighting, so that reliability weighting does not bias the estimated center through inconsistent centering.
+### Requirement 6: Enforce Deterministic Robustness, Conditioning, and Ambiguity Gates
+
+**User Story:** As a downstream user, I want outliers and non-identifiable poses rejected explicitly, so that a numerically returned pose is not mistaken for a trustworthy localization.
 
 #### Acceptance Criteria
 
-1. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL require `len(Q)=len(P)=len(w)`.
-2. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL require at least two positive-weight correspondences.
-3. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL require every `Q_i` and `P_i` to contain exactly two components.
-4. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL require every point component to be finite.
-5. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL require every weight to be finite and nonnegative.
-6. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL require positive total weight `W`.
-7. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL exclude every zero-weight point from `q_bar`.
-8. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL exclude every zero-weight point from `p_bar`.
-9. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL exclude every zero-weight point from covariance `H`.
-10. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL exclude every zero-weight point from the weighted objective.
-11. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL exclude every zero-weight point from geometry-rank evaluation.
-12. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL compute `q_bar = sum_i(w_i Q_i)/W` over positive-weight points.
-13. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL compute `p_bar = sum_i(w_i P_i)/W` over positive-weight points.
-14. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL compute `H = sum_i(w_i (Q_i-q_bar)(P_i-p_bar)^T)` over positive-weight points.
-15. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL compute a rotation satisfying `R^T R = I`.
-16. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL compute a rotation satisfying `det(R)=+1`.
-17. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL minimize `sum_i(w_i ||P_i-(R Q_i+t)||^2)` at fixed scale.
-18. WHERE Weighted_Procrustes_Estimator is selected, THE Weighted_Procrustes_Estimator SHALL compute `t = p_bar - R q_bar`.
-19. WHEN every weight is multiplied by one finite positive scalar and every scaled weight and scaled total weight `W` remain finite, THE Weighted_Procrustes_Estimator SHALL preserve every fitted-position component within absolute error `1e-9` pixels.
-20. WHEN every weight is multiplied by one finite positive scalar and every scaled weight and scaled total weight `W` remain finite, THE Weighted_Procrustes_Estimator SHALL preserve fitted heading within Angular_Difference `1e-9` degrees.
-21. WHEN any zero-weight correspondence is added, THE Weighted_Procrustes_Estimator SHALL preserve every fitted-position component within absolute error `1e-9` pixels.
-22. WHEN any zero-weight correspondence is added, THE Weighted_Procrustes_Estimator SHALL preserve fitted heading within Angular_Difference `1e-9` degrees.
-23. IF `len(Q)`, `len(P)`, and `len(w)` are unequal, THEN THE Weighted_Procrustes_Estimator SHALL return Typed_Validation_Failure code `invalid_shape`.
-24. IF fewer than two positive-weight correspondences remain, THEN THE Weighted_Procrustes_Estimator SHALL return Typed_Validation_Failure code `invalid_shape`.
-25. IF any point coordinate is non-finite, THEN THE Weighted_Procrustes_Estimator SHALL return Typed_Validation_Failure code `non_finite_coordinate`.
-26. IF any weight is negative or non-finite, THEN THE Weighted_Procrustes_Estimator SHALL return Typed_Validation_Failure code `invalid_weight`.
-27. IF total weight is zero, THEN THE Weighted_Procrustes_Estimator SHALL return Typed_Validation_Failure code `zero_total_weight`.
-28. IF total weight `W` is non-finite, THEN THE Weighted_Procrustes_Estimator SHALL return Typed_Validation_Failure code `numeric_failure`.
-29. IF positive-weight geometry fails the selected mode rank requirement, THEN THE Weighted_Procrustes_Estimator SHALL return Typed_Validation_Failure code `degenerate_geometry`.
-30. IF positive-weight correspondences produce an Ambiguous_Fit, THEN THE Weighted_Procrustes_Estimator SHALL return Typed_Validation_Failure code `degenerate_geometry`.
-31. IF any fitted rotation component is non-finite, THEN THE Weighted_Procrustes_Estimator SHALL return Typed_Validation_Failure code `numeric_failure`.
-32. IF any fitted translation component is non-finite, THEN THE Weighted_Procrustes_Estimator SHALL return Typed_Validation_Failure code `numeric_failure`.
-33. IF fitted residual or heading is non-finite, THEN THE Weighted_Procrustes_Estimator SHALL return Typed_Validation_Failure code `numeric_failure`.
-34. WHEN any Typed_Validation_Failure occurs, THE Weighted_Procrustes_Estimator SHALL omit an Authoritative_Position.
-### Requirement 8: Define Primary Modes, Fallback, Abstention, and Coordinate Semantics
+1. THE Acceptance_Profile SHALL freeze each permitted minimal observation configuration and the minimum support count for each configuration.
+2. THE Acceptance_Profile SHALL freeze the maximum sampled-candidate count, maximum refinement-iteration count, convergence rule, and candidate-retention count.
+3. THE Acceptance_Profile SHALL freeze the residual support boundary and whether residual equality at the boundary is included in the Support_Set.
+4. THE Acceptance_Profile SHALL freeze the robust loss family, robust loss parameters, residual scale, support rule, and Robust_Reprojection_Score parameters.
+5. THE Acceptance_Profile SHALL freeze optimization parameter units, parameter scaling, and finite lower and upper bounds.
+6. THE Acceptance_Profile SHALL freeze the Jacobian definition, local-curvature definition, numeric rank tolerance, Conditioning_Metric formula and boundary, and covariance or uncertainty formula and boundaries.
+7. THE Robust_Procedure SHALL generate pose candidates only from frozen minimal observation configurations.
+8. THE Robust_Procedure SHALL stop candidate generation and refinement at the frozen candidate and iteration limits.
+9. THE Robust_Procedure SHALL refine retained candidates with the frozen robust nonlinear pixel-space objective.
+10. WHERE an evidence-equivalent robust procedure replaces minimal sampling and nonlinear refinement, THE Acceptance_Profile SHALL freeze the replacement procedure before held-out evaluation.
+11. THE Robust_Procedure SHALL use the deterministic seed recorded in the Acceptance_Profile.
+12. THE Robust_Procedure SHALL process normalized observations and authorized hypothesis paths in the stable order frozen in the Acceptance_Profile.
+13. WHEN an Image_Observation falls outside the frozen robust support boundary under the frozen equality policy, THE Pose_Optimizer SHALL exclude the Image_Observation from the applicable Support_Set.
+14. THE Pose_Optimizer SHALL record every excluded observation and exclusion residual in hypothesis diagnostics.
+15. IF a Pose_Hypothesis has fewer supporting observations than the frozen minimum, THEN THE Pose_Optimizer SHALL reject the Pose_Hypothesis with reason `insufficient_support`.
+16. THE Pose_Optimizer SHALL compute the frozen image-residual Jacobian and local-curvature diagnostics for every converged Pose_Hypothesis.
+17. THE Pose_Optimizer SHALL report frozen rank and Conditioning_Metric values in Observability_Diagnostics.
+18. THE Pose_Optimizer SHALL report Pose covariance or bounded position and heading uncertainty under the frozen formula in Observability_Diagnostics.
+19. IF the optimized system fails the frozen rank requirement, THEN THE Pose_Optimizer SHALL reject the Pose_Hypothesis with reason `unobservable_pose`.
+20. IF the Conditioning_Metric reaches or exceeds the frozen rejection boundary, THEN THE Pose_Optimizer SHALL reject the Pose_Hypothesis with reason `ill_conditioned_pose`.
+21. IF Pose uncertainty reaches or exceeds a frozen rejection boundary, THEN THE Pose_Optimizer SHALL reject the Pose_Hypothesis with reason `pose_uncertainty_exceeded`.
+22. WHEN the initial unique valid hypothesis set contains exactly one Pose_Hypothesis, THE Pose_Optimizer SHALL evaluate selection without requiring a Hypothesis_Margin after later gate evaluation.
+23. WHEN the initial unique valid hypothesis set contains at least two Pose_Hypotheses, THE Pose_Optimizer SHALL require the frozen Hypothesis_Margin over the next-best unique valid hypothesis even if later gate evaluation rejects all but one hypothesis.
+24. IF the selected hypothesis lacks the required frozen Hypothesis_Margin, THEN THE Pose_Optimizer SHALL return a Rejected_Result with reason `ambiguous_hypotheses`.
+25. IF optimization produces a non-finite parameter, prediction, residual, derivative, score, covariance, or uncertainty value, THEN THE Pose_Optimizer SHALL return a Rejected_Result with reason `non_finite_optimization`.
+26. IF optimization fails the frozen convergence rule, THEN THE Pose_Optimizer SHALL reject the Pose_Hypothesis with reason `optimization_not_converged`.
+27. THE Acceptance_Profile SHALL freeze a total precedence order for every decisive rejection reason with `insufficient_support` at the highest precedence.
+28. WHEN multiple required rejection gates fail, THE Pose_Optimizer SHALL report as decisive the failed reason with highest frozen precedence and retain the remaining failures as diagnostics.
+29. WHEN a required rejection gate fails, THE Pose_Optimizer SHALL exclude tie-breakers and diagnostic order from changing the Rejected_Result into an Accepted_Result.
+30. WHEN identical replay records, Acceptance_Profile, code revision, and runtime dependency identities are used, THE Pose_Optimizer SHALL reproduce exactly the normalized observations, hypothesis path states, selected hypothesis, Pose values, Support_Set, status, decisive reason, and diagnostics compared by value.
+31. THE Pose_Optimizer SHALL permit non-decisive diagnostic reason codes on a valid Pose_Hypothesis without changing the hypothesis validity state.
+32. THE Acceptance_Profile SHALL freeze the Validity_Gate_Set that forms the initial unique valid hypothesis set; for the MVP it is exactly {support, non-finite, convergence}, and rank, conditioning, uncertainty, and spread gates are evaluated on the selected representative after margin latching.
+33. THE Acceptance_Profile SHALL freeze the robust loss as applied per scalar residual component (SciPy `least_squares` semantics) for the refinement objective, the Robust_Reprojection_Score, and the observability weights alike, so that one definition governs all three; image-space rotation invariance of the loss is explicitly not an MVP property, and the support rule remains per observation on `r_j = ||p_j - y_j||`.
+34. WHEN a converged Pose_Hypothesis has numeric rank zero, THE Pose_Optimizer SHALL report `unobservable_pose`, SHALL report the Conditioning_Metric as null rather than a sentinel value, and SHALL NOT evaluate the `ill_conditioned_pose` gate for that hypothesis.
 
-**User Story:** As a downstream consumer, I want explicit primary-mode, fallback, and abstention semantics, so that reliable and reduced-confidence estimates remain distinguishable from unsafe estimates.
+### Requirement 7: Preserve Coordinate Safety and Propagate Status Downstream
 
-#### Acceptance Criteria
-
-1. THE Reliability_Aware_Multi_Cue_Estimator SHALL evaluate status-producing stages in Gate_Order.
-2. WHEN multiple failure conditions are present, THE Reliability_Aware_Multi_Cue_Estimator SHALL assign the status mapped to the earliest failed Gate_Order stage.
-3. WHEN a Gate_Order stage fails, THE Reliability_Aware_Multi_Cue_Estimator SHALL mark every later Gate_Order stage `not_evaluated`.
-4. IF fewer than two observation-valid pose observations remain, THEN THE Reliability_Aware_Multi_Cue_Estimator SHALL emit status `failed_insufficient_kp`.
-5. IF fewer than two observation-valid pose observations remain, THEN THE Reliability_Aware_Multi_Cue_Estimator SHALL emit Estimator_Mode `none`.
-6. IF observation count is sufficient and no support path passes the cue-eligibility stage, THEN THE Reliability_Aware_Multi_Cue_Estimator SHALL emit status `abstained`.
-7. IF observation count is sufficient and no support path passes the cue-eligibility stage, THEN THE Reliability_Aware_Multi_Cue_Estimator SHALL emit Estimator_Mode `none`.
-8. WHEN a selected Primary_Support_Path has a finite conditioning value equal to or above the Near_Horizon_Threshold, THE Reliability_Aware_Multi_Cue_Estimator SHALL emit status `near_horizon`.
-9. WHEN a selected Primary_Support_Path has a finite conditioning value equal to or above the Near_Horizon_Threshold, THE Reliability_Aware_Multi_Cue_Estimator SHALL prohibit Fallback_Path evaluation.
-10. WHEN a selected Fallback_Path has a finite conditioning value equal to or above the Near_Horizon_Threshold, THE Reliability_Aware_Multi_Cue_Estimator SHALL emit status `near_horizon`.
-11. IF a selected support path has a non-finite conditioning value, THEN THE Reliability_Aware_Multi_Cue_Estimator SHALL emit status `abstained` with reason code `invalid_conditioning_metric`.
-12. WHEN a selected support path fails fit validation, THE Reliability_Aware_Multi_Cue_Estimator SHALL emit status `abstained`.
-13. WHEN a selected support path fails numeric validation, THE Reliability_Aware_Multi_Cue_Estimator SHALL emit status `abstained`.
-14. WHEN finite projected spread is strictly below the Spread_Gate boundary, THE Reliability_Aware_Multi_Cue_Estimator SHALL continue to usable mode completion.
-15. WHEN finite projected spread equals or exceeds the Spread_Gate boundary, THE Reliability_Aware_Multi_Cue_Estimator SHALL emit status `extrapolated`.
-16. WHEN a fitted pose fails the Spread_Gate, THE Reliability_Aware_Multi_Cue_Estimator SHALL prohibit Fallback_Path substitution.
-17. WHEN the Fallback_Path returns a valid pose and passes every later usability gate, THE Reliability_Aware_Multi_Cue_Estimator SHALL emit status `fallback`.
-18. WHEN the Fallback_Path returns a valid pose and passes every later usability gate, THE Reliability_Aware_Multi_Cue_Estimator SHALL emit Estimator_Mode `fallback`.
-19. WHEN a `single_family` Primary_Support_Path returns a valid pose and passes every later usability gate, THE Reliability_Aware_Multi_Cue_Estimator SHALL emit status `ok`.
-20. WHEN a `single_family` Primary_Support_Path returns a valid pose and passes every later usability gate, THE Reliability_Aware_Multi_Cue_Estimator SHALL emit Estimator_Mode `single_family`.
-21. WHEN a `complementary_multi_cue` Primary_Support_Path returns a valid pose and passes every later usability gate, THE Reliability_Aware_Multi_Cue_Estimator SHALL emit status `ok`.
-22. WHEN a `complementary_multi_cue` Primary_Support_Path returns a valid pose and passes every later usability gate, THE Reliability_Aware_Multi_Cue_Estimator SHALL emit Estimator_Mode `complementary_multi_cue`.
-23. WHEN status is `ok` or `fallback`, THE Reliability_Aware_Multi_Cue_Estimator SHALL set `usable=true`.
-24. WHEN status is `ok` or `fallback`, THE Reliability_Aware_Multi_Cue_Estimator SHALL populate a finite Authoritative_Position.
-25. WHEN status is an Unusable_Localization status, THE Reliability_Aware_Multi_Cue_Estimator SHALL set `usable=false`.
-26. WHEN status is an Unusable_Localization status, THE Reliability_Aware_Multi_Cue_Estimator SHALL set every Authoritative_Position field to null.
-27. WHEN status is an Unusable_Localization status, THE Reliability_Aware_Multi_Cue_Estimator SHALL emit Estimator_Mode `none`.
-28. WHERE an unusable computed coordinate is retained, THE Reliability_Aware_Multi_Cue_Estimator SHALL store the coordinate only as a Diagnostic_Position.
-29. WHERE a Diagnostic_Position is retained, THE Reliability_Aware_Multi_Cue_Estimator SHALL label the coordinate `diagnostic_only=true`.
-30. WHEN the Reliability_Aware_Multi_Cue_Estimator emits a status, THE Reliability_Aware_Multi_Cue_Estimator SHALL record the earliest decisive Gate_Order stage.
-31. WHEN the Reliability_Aware_Multi_Cue_Estimator emits a status, THE Reliability_Aware_Multi_Cue_Estimator SHALL record one stable machine-readable reason code.
-32. WHEN an Unusable_Localization is emitted, THE Reliability_Aware_Multi_Cue_Estimator SHALL prevent every later stage from promoting a Diagnostic_Position to an Authoritative_Position.
-### Requirement 9: Gate Near-Horizon Ill-Conditioning
-
-**User Story:** As a localization consumer, I want unstable near-horizon projections rejected before fitting, so that small pixel errors do not become large ground-plane errors.
+**User Story:** As a scene consumer, I want rejected localizations unable to influence spatial outputs, so that diagnostics cannot become accidental authority.
 
 #### Acceptance Criteria
 
-1. THE Localization_Improvement_System SHALL compute one Projection_Conditioning_Metric for every observation required by a candidate mode.
-2. THE Projection_Conditioning_Metric SHALL depend only on calibrated projection geometry and the observation coordinate.
-3. THE Acceptance_Profile SHALL freeze the Projection_Conditioning_Metric equation before candidate evaluation.
-4. THE Acceptance_Profile SHALL freeze one Near_Horizon_Threshold per calibrated projection identifier before candidate evaluation.
-5. WHEN a required Projection_Conditioning_Metric is finite and strictly below the Near_Horizon_Threshold, THE Mode_Selector SHALL pass the observation conditioning check.
-6. WHEN a required Projection_Conditioning_Metric equals the exact representable Near_Horizon_Threshold, THE Mode_Selector SHALL reject the candidate mode before pose fitting.
-7. WHEN a required Projection_Conditioning_Metric exceeds the Near_Horizon_Threshold, THE Mode_Selector SHALL reject the candidate mode before pose fitting.
-8. IF a required Projection_Conditioning_Metric is non-finite, THEN THE Mode_Selector SHALL return Typed_Validation_Failure code `invalid_conditioning_metric`.
-9. IF a required Projection_Conditioning_Metric is non-finite, THEN THE Mode_Selector SHALL prohibit Fallback_Path substitution for the detection.
-10. WHEN every reliability-eligible mode is rejected only by projection conditioning, THE Reliability_Aware_Multi_Cue_Estimator SHALL emit status `near_horizon`.
-11. THE Localization_Improvement_System SHALL evaluate projection conditioning before pose fitting.
-12. THE Localization_Improvement_System SHALL evaluate the Spread_Gate after projection and pose fitting.
-13. WHEN pose fitting reaches the Spread_Gate, THE Localization_Improvement_System SHALL record the conditioning outcome separately from the Spread_Gate outcome.
-14. WHEN projection conditioning rejects a support path before fitting, THE Localization_Improvement_System SHALL record the Spread_Gate outcome as `not_evaluated`.
-15. WHEN the Projection_Conditioning_Metric is the greatest representable finite value below the Near_Horizon_Threshold, THE Mode_Selector SHALL pass conditioning.
-16. WHEN the Projection_Conditioning_Metric is the least representable finite value above the Near_Horizon_Threshold, THE Mode_Selector SHALL reject conditioning.
-17. THE Diagnostics_Recorder SHALL record every computed conditioning value.
-18. THE Diagnostics_Recorder SHALL record every conditioning value's Near_Horizon_Threshold.
-19. THE Diagnostics_Recorder SHALL record every conditioning value's calibrated projection identifier.
-20. THE Diagnostics_Recorder SHALL record the conditioning outcome for every candidate mode.
-### Requirement 10: Propagate Status Through Enrichment and Scene Building
+1. WHEN the Pose_Optimizer returns an Accepted_Result, THE Localization_System SHALL set usability to true, provide a finite Authoritative_Position, and set Diagnostic_Position to null; the heading MAY be null when `heading_status='ambiguous'` and a null heading SHALL NOT invalidate the Accepted_Result.
+2. WHEN the Pose_Optimizer returns a Rejected_Result, THE Localization_System SHALL set usability to false and Authoritative_Position to null.
+3. WHEN a Rejected_Result retains a finite fitted coordinate, THE Localization_System SHALL store the fitted coordinate only as a Diagnostic_Position.
+4. IF a localization record combines an accepted status with unusable state, a null or non-finite Authoritative_Position, or a non-null Diagnostic_Position, THEN THE Localization_System SHALL reject the new record with reason `inconsistent_coordinate_state` and preserve every previously emitted output record unchanged.
+5. IF a localization record combines a rejected status with usable state or a non-null Authoritative_Position, THEN THE Localization_System SHALL reject the new record with reason `inconsistent_coordinate_state` and preserve every previously emitted output record unchanged.
+6. THE Localization_System SHALL record status, usability, decisive gate, and machine-readable reason for every localization attempt.
+7. THE Localization_System SHALL propagate status, usability, Authoritative_Position, and Diagnostic_Position through replay output and compatibility mappings.
+8. WHEN a Downstream_Consumer receives an Accepted_Result, THE Downstream_Consumer SHALL use only Authoritative_Position for spatial computation.
+9. WHEN a Downstream_Consumer receives a Rejected_Result, THE Downstream_Consumer SHALL exclude the result from enrichment position, velocity, scene extent, interpolation, collider, and collision geometry.
+10. THE Downstream_Consumer SHALL exclude Diagnostic_Position from every spatial computation.
+11. THE Localization_System SHALL permit Diagnostic_Position in debugging visualization and non-spatial quality analysis.
+12. WHEN a rejected or missing localization interrupts a Real_Track_ID sequence, THE Downstream_Consumer SHALL terminate the current velocity and interpolation segment at the last preceding Accepted_Result.
+13. WHILE a Real_Track_ID sequence is interrupted by rejected or missing localization, THE Downstream_Consumer SHALL exclude velocity propagation and positional interpolation across the interruption.
+14. WHEN a Downstream_Consumer reports accepted and rejected records, THE Downstream_Consumer SHALL group counts by status and decisive reason.
+15. WHEN compatibility normalization reads a legacy record, THE Localization_System SHALL apply the explicit Legacy_Status_Policy of Requirement 1.19, recorded by identity in the Acceptance_Profile when one exists.
+16. IF a legacy record lacks enough information to assign authoritative safety, THEN THE Localization_System SHALL classify the legacy coordinate as diagnostic-only.
+17. WHEN `tools/build_scene.py` scans a track, THE scene builder SHALL treat any object lacking a non-null `position_m` derived from an Authoritative_Position (new contract or `legacy-localize-v1` policy) as missing, SHALL never read `diagnostic_position_sat_px`, and SHALL copy `localization_counts` (per collider track: accepted, rejected by reason, missing) into `scene.json` provenance.
+18. WHEN a collider track in the Scene_Export_Contract is interrupted by more than `scene_export.max_gap_frames` (default `5`) consecutive rejected or missing samples, THE scene builder (`tools/build_scene.py`, sole owner of segmentation) SHALL split the track into segments, SHALL select the segment containing the `--source-collision` frame, SHALL refuse the build when that frame falls inside a gap for any collider (a scene whose collision moment is not covered by both colliders cannot support a collision conclusion; `--diagnostic-scene` may still produce a build, which SHALL be marked `diagnostic_only: true` in `scene.json` and SHALL NOT be used for any collision claim), SHALL record the selected `segment: {start_frame, end_frame}` per collider in `scene.json`, and SHALL never bridge samples across a segment boundary; the Three.js player receives one contiguous segment per collider and is otherwise unchanged. This segment rule is distinct from the velocity/interpolation gap rule of 7.12–7.13, which breaks at every rejected or missing sample.
+19. IF a selected collider segment's accepted-sample share is below `scene_export.min_accepted_share` (default `0.5`), THEN the scene builder SHALL refuse the build unless `--allow-low-pass-rate` is given, and SHALL print the share and the dominant rejection reason.
 
-**User Story:** As a scene author, I want localization status honored by every downstream stage, so that extrapolated or abstained positions cannot affect reconstructed collisions.
+### Requirement 8: Restrict Motion Evidence to Genuine Tracks
 
-#### Acceptance Criteria
-
-1. WHEN an input localization has status `ok` or `fallback`, THE Enrichment_Pipeline SHALL derive `position_m` only from the Authoritative_Position.
-2. WHEN an input localization has an Unusable_Localization status, THE Enrichment_Pipeline SHALL set `position_m` to null.
-3. WHEN an input localization has an Unusable_Localization status, THE Enrichment_Pipeline SHALL set `velocity_mps` to null.
-4. WHEN two observations are Consecutive_Usable_Observations, THE Enrichment_Pipeline SHALL compute Velocity_Mps from the Glossary equation.
-5. WHEN a Track_Interruption occurs, THE Enrichment_Pipeline SHALL terminate the current track segment before the interruption.
-6. WHEN a Track_Interruption occurs, THE Enrichment_Pipeline SHALL start a new track segment after the interruption.
-7. WHEN a Track_Interruption occurs, THE Enrichment_Pipeline SHALL omit velocity across the interruption.
-8. WHEN a usable observation is the first usable observation after a Track_Interruption, THE Enrichment_Pipeline SHALL set `velocity_mps` to null.
-9. WHEN an unusable observation lies between two usable observations, THE Enrichment_Pipeline SHALL omit velocity between the two usable observations.
-10. WHEN a frame gap exceeds the frozen maximum frame gap, THE Enrichment_Pipeline SHALL omit velocity across the frame gap.
-11. WHEN timestamps are non-increasing, THE Enrichment_Pipeline SHALL omit velocity for the timestamp pair.
-12. WHEN track identifiers differ, THE Enrichment_Pipeline SHALL omit velocity for the track-identifier pair.
-13. WHEN either track identifier is null, THE Enrichment_Pipeline SHALL omit velocity for the track-identifier pair.
-14. THE Enrichment_Pipeline SHALL preserve localization status in enriched output.
-15. THE Enrichment_Pipeline SHALL preserve Estimator_Mode in enriched output.
-16. THE Enrichment_Pipeline SHALL preserve usability in enriched output.
-17. THE Enrichment_Pipeline SHALL preserve confidence in enriched output.
-18. THE Enrichment_Pipeline SHALL preserve the diagnostic-reason code in enriched output.
-19. WHEN an observation has an Unusable_Localization status, THE Scene_Builder SHALL exclude the observation from track positions.
-20. WHEN an observation has an Unusable_Localization status, THE Scene_Builder SHALL exclude the observation from collider eligibility.
-21. WHEN an observation has only a Diagnostic_Position, THE Scene_Builder SHALL exclude the Diagnostic_Position from every spatial calculation.
-22. THE Scene_Builder SHALL report accepted observation counts by status and Estimator_Mode.
-23. THE Scene_Builder SHALL report excluded observation counts by status and Estimator_Mode.
-24. IF a requested collider has zero usable observations, THEN THE Scene_Builder SHALL return Typed_Validation_Failure code `no_usable_collider_observations`.
-25. IF a requested collider has zero usable observations, THEN THE Scene_Builder SHALL include the requested track identifier in the Typed_Validation_Failure.
-26. IF a requested collider has zero usable observations, THEN THE Scene_Builder SHALL include status counts in the Typed_Validation_Failure.
-27. WHEN `status` is absent from a supported legacy record and a legacy-status policy is selected, THE Compatibility_Layer SHALL apply the selected legacy-status policy.
-28. WHEN a legacy-status policy is applied, THE Compatibility_Layer SHALL record `legacy_status_policy` in output metadata.
-29. IF `status` is absent and no legacy-status policy is selected, THEN THE Compatibility_Layer SHALL return Typed_Validation_Failure code `legacy_status_policy_required`.
-### Requirement 11: Apply Temporal Fusion Only Conditionally
-
-**User Story:** As an evaluator, I want temporal fusion introduced only when single-frame improvements are insufficient, so that smoothing cannot conceal unresolved estimator errors.
+**User Story:** As an evaluator, I want temporal evidence based only on genuine identities, so that frame-local display IDs cannot create false motion support or invalid uncertainty estimates.
 
 #### Acceptance Criteria
 
-1. THE Temporal_Fusion_Module SHALL remain disabled by default.
-2. WHILE any Single_Frame_Prerequisite_Gates criterion fails, THE Measurement_Harness SHALL prohibit temporal-fusion candidate evaluation.
-3. WHILE any Single_Frame_Prerequisite_Gates criterion remains unevaluated, THE Measurement_Harness SHALL prohibit temporal-fusion candidate evaluation.
-4. WHEN every Single_Frame_Prerequisite_Gates criterion passes and at least one Requirement 5 candidate-improvement target remains unmet, THE Measurement_Harness SHALL permit temporal-fusion candidate evaluation.
-5. WHEN every Requirement 5 candidate-improvement target passes without temporal fusion, THE Measurement_Harness SHALL classify temporal fusion as unnecessary for `haware-localization-accuracy`.
-6. WHEN temporal-fusion candidate evaluation is permitted, THE Measurement_Harness SHALL assign a candidate identifier distinct from every single-frame candidate identifier.
-7. WHEN temporal-fusion candidate evaluation is permitted, THE Measurement_Harness SHALL record the source single-frame candidate identifier in Fusion_Provenance.
-8. WHEN temporal fusion is enabled, THE Temporal_Fusion_Module SHALL combine observations only with equal non-null track identifiers.
-9. WHEN temporal fusion is enabled, THE Temporal_Fusion_Module SHALL combine observations only within one uninterrupted track segment.
-10. WHEN a frame gap exceeds the frozen maximum frame gap, THE Temporal_Fusion_Module SHALL start a new fusion segment.
-11. WHEN temporal fusion encounters an Unusable_Localization, THE Temporal_Fusion_Module SHALL preserve the source status for the frame.
-12. WHEN temporal fusion encounters an Unusable_Localization, THE Temporal_Fusion_Module SHALL preserve `usable=false` for the frame.
-13. WHEN temporal fusion encounters an Unusable_Localization, THE Temporal_Fusion_Module SHALL preserve a null Authoritative_Position for the frame.
-14. WHEN temporal fusion evaluates a Usable_Localization, THE Temporal_Fusion_Module SHALL preserve the complete source localization record unchanged.
-15. WHEN temporal fusion evaluates a Usable_Localization, THE Temporal_Fusion_Module SHALL retain the unfused Authoritative_Position.
-16. WHEN temporal fusion changes a usable position, THE Temporal_Fusion_Module SHALL retain the fused position separately from the unfused Authoritative_Position.
-17. WHEN temporal fusion changes a usable position, THE Temporal_Fusion_Module SHALL record every Fusion_Provenance field.
-18. WHEN temporal fusion leaves a usable position unchanged, THE Temporal_Fusion_Module SHALL record a fusion-status reason code.
-19. IF any Fusion_Provenance field is missing, THEN THE Measurement_Harness SHALL reject the temporal-fusion candidate.
-20. THE Measurement_Harness SHALL apply every Requirement 5 accuracy gate to a temporal-fusion candidate.
-21. THE Measurement_Harness SHALL apply every Requirement 5 coverage gate to a temporal-fusion candidate.
-22. THE Measurement_Harness SHALL apply every Requirement 5 Selective_Risk gate to a temporal-fusion candidate.
-23. IF temporal fusion reduces Usable_Coverage relative to the unfused single-frame source candidate separately identified in Fusion_Provenance on the identical fixed Evaluation_Population at `kee-cc`, THEN THE Measurement_Harness SHALL reject the temporal-fusion candidate.
-24. IF temporal fusion reduces Usable_Coverage relative to the unfused single-frame source candidate separately identified in Fusion_Provenance on the identical fixed Evaluation_Population at `taoyuan-tc`, THEN THE Measurement_Harness SHALL reject the temporal-fusion candidate.
-25. IF temporal fusion increases 90th-percentile Planar_Position_Error relative to the unfused single-frame source candidate separately identified in Fusion_Provenance on the identical fixed Evaluation_Population at `kee-cc`, THEN THE Measurement_Harness SHALL reject the temporal-fusion candidate.
-26. IF temporal fusion increases 90th-percentile Planar_Position_Error relative to the unfused single-frame source candidate separately identified in Fusion_Provenance on the identical fixed Evaluation_Population at `taoyuan-tc`, THEN THE Measurement_Harness SHALL reject the temporal-fusion candidate.
-### Requirement 12: Provide Replayable Observability and Diagnostics
+1. THE Observation_Adapter SHALL distinguish Real_Track_ID from Pseudo_Track_ID in every normalized record.
+2. IF an identifier is constructed from a frame-local detection index in the `500+` range, THEN THE Observation_Adapter SHALL classify the identifier as a Pseudo_Track_ID.
+3. IF an identifier has missing or inconsistent tracker name, tracker version, Source_Sequence, association provenance, or cross-frame evidence, THEN THE Observation_Adapter SHALL classify the identifier as a Pseudo_Track_ID.
+4. WHEN an identifier has consistent tracker name, tracker version, Source_Sequence, association provenance, and occurrence in more than one frame, THE Observation_Adapter SHALL classify the identifier as a Real_Track_ID regardless of numeric range.
+5. THE Pilot_Harness SHALL exclude every Pseudo_Track_ID from track counts, track clustering, track-clustered intervals, motion metrics, power calculations, bootstrap clusters, and partition grouping.
+6. THE Pilot_Harness SHALL require tracker name, tracker version, Source_Sequence, association provenance, and more-than-one-frame evidence for every Real_Track_ID used by the pilot.
+7. IF a claimed Real_Track_ID occurs in only one frame, THEN THE Pilot_Harness SHALL reclassify the identity as a Pseudo_Track_ID with reason `unverified_track_identity`.
+8. WHERE Motion_Tie_Breaker is explicitly enabled in the Acceptance_Profile, THE Pose_Optimizer SHALL compute motion diagnostics only from Real_Track_ID motion that passes the frozen duration, displacement, and course-stability rules.
+9. WHEN valid unique hypotheses are tied within the frozen ambiguity tolerance, THE Pose_Optimizer SHALL preserve the required ambiguity rejection regardless of Motion_Tie_Breaker output.
+10. THE Motion_Tie_Breaker SHALL exclude every Rejected_Result and every Pseudo_Track_ID from motion computation.
+11. WHERE Motion_Tie_Breaker is disabled, THE Pose_Optimizer SHALL complete hypothesis evaluation without temporal evidence.
+12. WHERE the Acceptance_Profile permits a named non-track analysis, THE Pilot_Harness SHALL permit a frame-local detection without a Real_Track_ID only in that named non-track analysis.
+13. THE Pilot_Harness SHALL exclude a frame-local detection without a Real_Track_ID from acceptance metrics, clustered uncertainty, power, motion, and partition evidence.
+14. THE replay producer (`scripts/eval_haware_replay.py` and `trafficlab/io/replay_writer.py`) SHALL emit, for every tracker-matched detection, `tracker_name`, `tracker_version` (library version plus content identity of the tracker configuration), `source_sequence` (video path plus content identity), and `association_provenance` (the bbox-matching rule and its threshold), so that the one-way importer can classify ByteTrack identities as Real_Track_ID; synthesized `500+` identifiers remain frame-local Pseudo_Track_IDs.
 
-**User Story:** As an operator, I want complete localization provenance, so that failures and estimator-path distributions can be diagnosed without rerunning inference.
+### Requirement 9: Establish Independent Evidence and Disjoint Partitions
+
+**User Story:** As an accuracy reviewer, I want independent references and leak-free partitions, so that pilot and held-out results measure localization rather than circular agreement.
 
 #### Acceptance Criteria
 
-1. THE Diagnostics_Recorder SHALL record one ordered per-detection record for every localization attempt.
-2. THE Diagnostics_Recorder SHALL include rejected localization attempts in ordered per-detection records.
-3. THE Diagnostics_Recorder SHALL record status, usability, Estimator_Mode, selection-reason code, failure-reason code, and earliest decisive Gate_Order stage for every detection.
-4. THE Diagnostics_Recorder SHALL record localization confidence for every detection.
-5. THE Diagnostics_Recorder SHALL record every input keypoint identifier, label, coordinate, confidence, weight, and original order required for deterministic replay.
-6. THE Diagnostics_Recorder SHALL record total observation-valid keypoint count for every detection.
-7. THE Diagnostics_Recorder SHALL record `n_wheel_kp` for every detection.
-8. THE Diagnostics_Recorder SHALL record visible Cue_Family membership and candidate constraint roles for every evaluated cue constraint.
-9. THE Diagnostics_Recorder SHALL record every Cue_Eligibility_Check value, threshold, and outcome for every evaluated cue constraint.
-10. THE Diagnostics_Recorder SHALL record every Cue_Reliability_Factor, cue weight, fallback-evidence value, fallback threshold, and fallback outcome used for every detection.
-11. THE Diagnostics_Recorder SHALL record every Projection_Conditioning_Metric value, Near_Horizon_Threshold, calibrated projection identifier, and outcome for every candidate support path.
-12. WHEN a detection reaches the Spread_Gate, THE Diagnostics_Recorder SHALL record projected spread, Spread_Gate boundary, and Spread_Gate outcome.
-13. WHEN an earlier Gate_Order stage fails, THE Diagnostics_Recorder SHALL record every skipped later gate as `not_evaluated`.
-14. THE Diagnostics_Recorder SHALL record every coordinate with coordinate role and `diagnostic_only` value.
-15. THE Diagnostics_Recorder SHALL record Baseline_ID, Acceptance_Profile identifier, Acceptance_Profile Artifact_Hash, Geometry_Profile version, estimator version, source revision, effective-configuration Artifact_Hash, template Artifact_Hash, and calibration Artifact_Hash for every evaluated detection.
-16. THE Diagnostics_Recorder SHALL record site, frame identifier, detection identifier, track identifier, source timestamp, schema version, evaluation-run identifier, and ordered-record index for every detection.
-17. THE Diagnostics_Recorder SHALL record the Artifact_Hash of every source detection input.
-18. THE Diagnostics_Recorder SHALL use one immutable versioned Diagnostics_Report_Schema frozen before candidate evaluation.
-19. THE Diagnostics_Recorder SHALL aggregate counts and rates by site.
-20. THE Diagnostics_Recorder SHALL aggregate counts and rates by status.
-21. THE Diagnostics_Recorder SHALL aggregate counts and rates by Estimator_Mode.
-22. THE Diagnostics_Recorder SHALL aggregate counts and rates by frozen conditioning band.
-23. THE Diagnostics_Recorder SHALL aggregate counts and rates by Cue_Family, Height_Family, constraint role, and frozen cue-reliability class.
-24. THE Diagnostics_Report_Schema SHALL define the exact ordered-record denominator predicate for every aggregate rate field.
-25. WHEN an aggregate rate denominator is nonzero, THE Diagnostics_Recorder SHALL compute the aggregate rate as the matching ordered-record count divided by the ordered-record count selected by the frozen denominator predicate.
-26. IF an aggregate rate denominator is zero, THEN THE Diagnostics_Recorder SHALL report the rate as null or omit the rate field exactly as specified by the frozen Diagnostics_Report_Schema.
-27. IF a required diagnostic field is missing, THEN THE Diagnostics_Recorder SHALL reject the report with a field-path validation error.
-28. IF a finite-required diagnostic number is non-finite, THEN THE Diagnostics_Recorder SHALL reject the report with a field-path validation error.
-29. THE Diagnostics_Recorder SHALL produce the machine-readable report from ordered per-detection records.
-30. THE Diagnostics_Recorder SHALL produce the human-readable summary from the same ordered per-detection records used for the machine-readable report.
-31. WHEN referenced replay artifacts match recorded Artifact_Hashes, THE Diagnostics_Recorder SHALL regenerate diagnostics without keypoint inference.
-32. WHEN diagnostics are regenerated from hash-matching replay artifacts, THE Diagnostics_Recorder SHALL reproduce every mode decision exactly.
-33. WHEN diagnostics are regenerated from hash-matching replay artifacts, THE Diagnostics_Recorder SHALL reproduce every gate outcome exactly.
-34. WHEN diagnostics are regenerated from hash-matching replay artifacts, THE Diagnostics_Recorder SHALL reproduce every status, usability value, reason code, and coordinate role exactly.
-35. WHEN diagnostics are regenerated from hash-matching replay artifacts, THE Diagnostics_Recorder SHALL reproduce the Canonical_JSON machine-readable report Artifact_Hash exactly.
-36. WHEN diagnostics are regenerated from hash-matching replay artifacts, THE Diagnostics_Recorder SHALL reproduce every human-readable summary value exactly.
-37. IF any replay artifact fails Artifact_Hash verification, THEN THE Diagnostics_Recorder SHALL reject replay with code `diagnostic_replay_artifact_mismatch`.
-38. WHEN any threshold changes, THE Diagnostics_Recorder SHALL record the previous threshold value.
-39. WHEN any threshold changes, THE Diagnostics_Recorder SHALL record the new threshold value.
-40. WHEN any threshold changes, THE Diagnostics_Recorder SHALL record the change reason.
-41. WHEN any threshold changes, THE Diagnostics_Recorder SHALL record the evaluation-run identifier.
-### Requirement 13: Preserve Opt-In Backward Compatibility
+1. THE Pilot_Harness SHALL require exactly one independently created Independent_Ground_Truth match for each Eligible_Detection used in position-error metrics.
+2. THE Pilot_Harness SHALL record site, frame identity, detection identity, Real_Track_ID, Reference_Point conformance (annotated point identity and, where the annotated point is not the Reference_Point itself, the GT_Annotation_Protocol conversion version used), coordinates, units, calibration identity, source provenance, annotator provenance, independence attestation, GT_Annotation_Protocol version, annotation medium, repeat-annotation group, and uncertainty for each Independent_Ground_Truth record.
+3. THE Pilot_Harness SHALL express Independent_Ground_Truth coordinates as Reference_Point coordinates in the Metric_Frame, frozen in the pre-outcome per-site ground-truth validation policy and carried unchanged into the Acceptance_Profile.
+4. IF ground-truth creation used a baseline output, candidate output, Haware coordinate, Haware overlay, or derived localization artifact, THEN THE Pilot_Harness SHALL exclude the complete matching group with reason `ground_truth_contamination`; the frozen CalibrationSnapshot identified in the Acceptance_Profile is a permitted GT-creation input and is not a derived localization artifact.
+5. IF ground-truth lineage, source provenance, annotator provenance, or independence attestation is missing or inconsistent, THEN THE Pilot_Harness SHALL exclude the complete matching group with reason `ground_truth_independence_unverified`.
+6. IF a ground-truth coordinate or uncertainty value is missing, non-finite, or outside the frozen eligible range, THEN THE Pilot_Harness SHALL exclude the complete matching group with a machine-readable reason.
+7. WHEN multiple ground-truth records share a site, frame, and detection identity, THE Pilot_Harness SHALL exclude the complete duplicate group under the frozen permutation-invariant duplicate rule.
+8. WHEN zero or more than one eligible Independent_Ground_Truth match remains for a detection, THE Pilot_Harness SHALL exclude the detection from position-error metrics with reason `ground_truth_match_count_invalid`.
+9. THE Pilot_Harness SHALL assign every record belonging to one Real_Track_ID to exactly one of the Pilot_Partition or Held_Out_Partition.
+10. THE Pilot_Harness SHALL assign every record belonging to one Source_Sequence to exactly one of the Pilot_Partition or Held_Out_Partition.
+11. IF whole-track and whole-Source_Sequence assignment cannot satisfy every frozen leakage-control rule, THEN THE Pilot_Harness SHALL fail partition creation with reason `partition_assignment_conflict` and require resolution before outcome evaluation.
+12. THE Pilot_Harness SHALL record Independent_View membership for every Eligible_Detection.
+13. THE Pilot_Harness SHALL freeze ground-truth match groups, eligibility, Real_Track_ID memberships, Source_Sequence memberships, Independent_View memberships, partition identities and, where a held-out Source_Sequence is not yet acquired, its acquisition rule, before reading baseline or candidate outcomes.
+14. THE Pilot_Harness SHALL maintain separate ground-truth, track, Source_Sequence, view, partition, metric, and decision namespaces for each named Acceptance_Site.
+15. THE Pilot_Harness SHALL exclude Diagnostic_Site records from Pilot_Feasibility_Gate and held-out acceptance decisions.
+16. WHEN Diagnostic_Site records are added, removed, or reordered, THE Pilot_Harness SHALL preserve every Acceptance_Site decision exactly.
+17. THE Pilot_Harness SHALL evaluate each named Acceptance_Site independently.
+18. THE Pilot_Harness SHALL exclude pooled cross-site metrics from overriding a failed or insufficient site result.
+19. IF detected ground-truth contamination cannot be excluded from the applicable matching group, THEN THE Pilot_Harness SHALL halt the affected site evaluation with reason `ground_truth_contamination_exclusion_failed`.
+20. THE Pilot_Harness SHALL require, at each Acceptance_Site, that the Pilot_Partition and the Held_Out_Partition contain no Source_Sequence sharing a Capture_ID (the held-out evidence must come from a different recording session, not from another span of the same capture); IF a site has fewer than two Capture_IDs, THEN THE Pilot_Harness SHALL report that site as `insufficient_data` with reason `held_out_capture_unavailable` and the per-site shortfall (currently: one checked-in capture per site). Within-capture Source_Sequence splitting is permitted only for analysis inside one partition, never to manufacture a held-out partition.
+21. THE Pilot_Harness SHALL permit the Held_Out_Partition to be populated by a Capture_ID acquired after the Pilot_Partition is frozen, provided its identity is recorded in the Acceptance_Profile before any held-out outcome is read and its outcomes have never been exposed.
+22. THE Pilot_Harness SHALL accept only Independent_Ground_Truth records whose recorded GT_Annotation_Protocol version equals the version frozen in the Acceptance_Profile.
+23. THE Pilot_Harness SHALL derive Independent_Ground_Truth uncertainty as a measured band-level quantity: the RMS disagreement over the repeat-annotated subset of each `(site, scene_region)` band is that band's `annotation_uncertainty_m`, every record in the band inherits it, and a repeat-annotated record additionally carries its own observed disagreement as `record_disagreement_m` (diagnostic). THE Pilot_Harness SHALL reject a band whose repeat-annotated subset is smaller than the frozen minimum with reason `gt_uncertainty_unmeasured`, SHALL reject any record carrying an asserted uncertainty not derived this way, and SHALL treat the frozen eligible range in 9.6 as a cap on the measured band value.
+24. BEFORE population freeze, THE Pilot_Harness SHALL run the outcome-blind calibration health check of design §8 per Acceptance_Site — track-width in-band fraction `F_width >= 0.40` (primary), parallax amplification `A_max = z_cam / (z_cam - h_max) <= 1.6`, and conditional camera-height consistency `r_zcam <= 0.25` — reading only replay geometry, never ground truth, baseline, candidate, or localization status; THE Pilot_Harness SHALL classify a site failing any gate as `site_calibration_unfit`, and a site below the frozen minimum sample counts as `site_calibration_health_insufficient_data` (which is not a failure).
+25. WHERE a named Acceptance_Site is `site_calibration_unfit` or lacks data availability, THE Localization_System SHALL permit substitution only by a site from the frozen candidate-site pool, only on those outcome-independent grounds, and only before any baseline or candidate outcome is read; THE Localization_System SHALL create a new Acceptance_Profile, population, and run identity when `acceptance_sites` changes, and SHALL exclude any substitution justified by an observed effect, error, or coverage value.
+26. THE Pilot_Harness SHALL admit Independent_Ground_Truth produced by the calibration-independent medium (satellite or surveyed references) for both absolute-accuracy reporting and effect estimation, and SHALL admit GT produced by the calibration-conditional medium (CCTV wheel-contact annotation lifted through the frozen CalibrationSnapshot) for effect estimation and feasibility only.
+27. WHEN any Acceptance_Site uses calibration-conditional GT, THE Pilot_Harness SHALL mark that site's per-arm absolute error values `calibration_conditional=true`, SHALL exclude any absolute-accuracy claim and any extrapolation beyond the evaluated Calibration_Profile, and SHALL run the calibration sensitivity sweep of Requirement 9.5c before the site may return anything other than `insufficient_data`.
+28. THE calibration sensitivity sweep SHALL, for every calibration perturbation in the outcome-blind frozen perturbation set (nominal, each authorized calibration parameter at each of its bounded interval endpoints one at a time, and `256` seeded Sobol samples of the bounded box), **rebuild the calibration-conditional GT and rerun both the baseline and the candidate under that perturbation** rather than reuse fixed GT or existing arm outputs, and SHALL apply the full 10.34 classification to each perturbation: `go` requires every perturbation to classify `go`; any disagreement in classification across perturbations yields `insufficient_data`; unanimous failure yields `no_go`.
+29. THE calibration sensitivity sweep SHALL be exempt from the Batch_Runtime_Envelope, which bounds one production localization pass and not a frozen offline analysis.
 
-**User Story:** As an integrator, I want opt-in behavior and stable data contracts, so that existing Haware consumers continue to operate during rollout.
+### Requirement 10: Run the Smallest Credible Offline Pilot
+
+**User Story:** As a project owner, I want a bounded baseline-versus-optimizer pilot, so that feasibility is established before investment in generalized platform capabilities.
 
 #### Acceptance Criteria
 
-1. WHEN the versioned multi-cue configuration flag is absent, THE Compatibility_Layer SHALL keep multi-cue functionality disabled.
-2. WHEN the versioned multi-cue configuration flag is `false`, THE Compatibility_Layer SHALL keep multi-cue functionality disabled.
-3. WHEN the versioned multi-cue configuration flag contains the documented enabled value, THE Compatibility_Layer SHALL enable multi-cue functionality.
-4. IF the multi-cue configuration flag has an unsupported version, THEN THE Compatibility_Layer SHALL return Typed_Validation_Failure code `invalid_multi_cue_configuration` before record processing.
-5. IF the multi-cue configuration flag has an unsupported type or value, THEN THE Compatibility_Layer SHALL return Typed_Validation_Failure code `invalid_multi_cue_configuration` before record processing.
-6. THE Compatibility_Layer SHALL preserve Apollo-24 template indices.
-7. THE Compatibility_Layer SHALL preserve Apollo-24 template dimensions.
-8. THE Compatibility_Layer SHALL preserve coordinate convention `+x = vehicle left`.
-9. THE Compatibility_Layer SHALL preserve coordinate convention `+y = up`.
-10. THE Compatibility_Layer SHALL preserve coordinate convention `+z = rear`.
-11. THE Compatibility_Layer SHALL preserve the meaning of `sat_coords`.
-12. THE Compatibility_Layer SHALL preserve the meaning of `heading`.
-13. THE Compatibility_Layer SHALL preserve the meaning of `confidence`, `n_keypoints`, and `n_wheel_kp`.
-14. THE Compatibility_Layer SHALL preserve the meaning of `status`, `p_sat`, and `spread_m`.
-15. THE Schema_Compatibility_Profile SHALL define required fields, optional fields, types, enum domains, nullability, and deterministic mappings for every supported schema version.
-16. WHERE multi-cue functionality is enabled, THE Compatibility_Layer SHALL emit an explicit multi-cue schema version listed in the Schema_Compatibility_Profile.
-17. WHERE multi-cue functionality is enabled, THE Compatibility_Layer SHALL emit versioned usability, Estimator_Mode, status-reason, cue-role, cue-family, and diagnostic fields required by the emitted schema version.
-18. WHERE multi-cue functionality is enabled, THE Compatibility_Layer SHALL preserve the semantic meaning of every legacy field emitted by the emitted schema version.
-19. WHERE multi-cue functionality is disabled, THE Compatibility_Layer SHALL emit the Frozen_Baseline legacy schema.
-20. WHERE multi-cue functionality is disabled, THE Compatibility_Layer SHALL omit every field classified as multi-cue-only by the Schema_Compatibility_Profile.
-21. WHEN multi-cue functionality is disabled, THE Compatibility_Layer SHALL satisfy Requirement 1 disabled-mode parity tolerances.
-22. WHEN a supported-schema record is serialized and deserialized, THE Compatibility_Layer SHALL preserve every required field name exactly.
-23. WHEN a supported-schema record is serialized and deserialized, THE Compatibility_Layer SHALL preserve every required field type exactly.
-24. WHEN a supported-schema record is serialized and deserialized, THE Compatibility_Layer SHALL preserve every finite numeric value within absolute error `1e-12`.
-25. WHEN a supported-schema record is serialized and deserialized, THE Compatibility_Layer SHALL preserve every enum value exactly.
-26. WHEN a supported-schema record is serialized and deserialized, THE Compatibility_Layer SHALL preserve every null value exactly.
-27. WHEN a supported-schema record is serialized and deserialized, THE Compatibility_Layer SHALL preserve array order exactly.
-28. WHEN a supported-schema record is serialized and deserialized, THE Compatibility_Layer SHALL preserve object-key meaning exactly.
-29. WHEN a supported legacy record is read, THE Compatibility_Layer SHALL produce a valid internal record without multi-cue-only fields.
-30. WHEN a supported internal legacy record is written to the originating schema version, THE Compatibility_Layer SHALL satisfy every supported-schema round-trip rule.
-31. IF a supported-schema record lacks a required field, THEN THE Compatibility_Layer SHALL return Typed_Validation_Failure code `missing_required_schema_field` with the field path.
-32. IF a supported-schema field has an invalid type, enum value, or nullability, THEN THE Compatibility_Layer SHALL return Typed_Validation_Failure code `invalid_schema_field` with the field path.
-33. IF an input schema version is unsupported, THEN THE Compatibility_Layer SHALL fail before record-payload processing.
-34. IF an input schema version is unsupported, THEN THE Compatibility_Layer SHALL return Typed_Validation_Failure code `unsupported_schema_version`.
-35. IF an input schema version is unsupported, THEN THE Compatibility_Layer SHALL include the observed version in the Typed_Validation_Failure.
-36. IF an input schema version is unsupported, THEN THE Compatibility_Layer SHALL include the ordered supported-version list in the Typed_Validation_Failure.
-### Requirement 14: Preserve Calibration Identifiability Boundaries
+1. THE Pilot_Harness SHALL run the Corrected_Legacy_Baseline and the Pose_Optimizer on the same ordered Eligible_Detections at each Acceptance_Site.
+2. THE Pilot_Harness SHALL preserve the fixed pre-outcome Eligible_Detection denominator when either system returns an Accepted_Result or a Rejected_Result.
+3. WHEN an Accepted_Result and matching Independent_Ground_Truth exist, THE Pilot_Harness SHALL compute planar position error in metres as the Euclidean distance in the Metric_Frame between the Authoritative_Position Reference_Point (unrounded) and the Independent_Ground_Truth Reference_Point.
+4. THE Pilot_Harness SHALL report baseline and optimizer accepted counts and rejected counts at each Acceptance_Site.
+5. THE Pilot_Harness SHALL report, at each Acceptance_Site, (a) each arm's median and nearest-rank p90 planar position error over its own Accepted_Result set, labelled descriptive and non-comparable across arms, (b) both arms' median and nearest-rank p90 planar position error over the Paired_Accepted_Set, and (c) Usable_Coverage; error statistics are pooled over Eligible_Detections per site, and per-Real_Track_ID median error is additionally reported as a diagnostic.
+6. THE Pilot_Harness SHALL define median-error and p90-error effects as candidate minus baseline computed over the Paired_Accepted_Set, where a negative value denotes lower candidate error.
+7. THE Pilot_Harness SHALL define Usable_Coverage effect as candidate minus baseline, where a positive value denotes higher candidate coverage.
+8. THE Pilot_Harness SHALL report the signed median-error, p90-error, and Usable_Coverage effects at each Acceptance_Site.
+9. WHEN at least `8` independent genuine Real_Track_ID clusters are present in the cluster universe applicable to an effect — tracks contributing at least one Paired_Accepted_Set detection for the error effects, all Eligible tracks for the coverage effect — THE Pilot_Harness SHALL report a whole-track cluster-bootstrap Effect_Interval for that effect; the minimum is evaluated per effect and is distinct from the evidence-derived required track count of 10.22.
+10. IF an effect has fewer than `8` clusters in its applicable universe, THEN THE Pilot_Harness SHALL mark that Effect_Interval and site sufficiency as `insufficient_data`; the single permitted interval method is fixed by 10.38.
+11. THE Pilot_Harness SHALL report the number of independent genuine Real_Track_ID clusters represented at each Acceptance_Site.
+12. THE Pilot_Harness SHALL report Eligible_Detection coverage by Independent_View at each Acceptance_Site.
+13. THE Pilot_Harness SHALL report ground-truth uncertainty distribution at each Acceptance_Site.
+14. THE Pilot_Harness SHALL report selected optimizer outcomes separately by Wheel_Seeded_Hypothesis and Non_Wheel_Seeded_Hypothesis provenance.
+15. THE Pilot_Harness SHALL run a full optimizer configuration, a wheel-seeded-initialization-disabled ablation, and a non-wheel-seeded-initialization-disabled ablation at each Acceptance_Site.
+16. WHEN the wheel-seeded-initialization-disabled ablation is compared with the full optimizer, THE Pilot_Harness SHALL vary only the `wheel_seeded_enabled` setting of the optimizer contract.
+17. WHEN the non-wheel-seeded-initialization-disabled ablation is compared with the full optimizer, THE Pilot_Harness SHALL vary only the `non_wheel_seeded_enabled` setting of the optimizer contract; production and default configurations SHALL keep both settings enabled.
+18. THE Pilot_Harness SHALL preserve the same replay inputs, candidate parameters, robust score, support rules, seed, and metric definitions across the full optimizer and both ablations.
+19. THE Pilot_Harness SHALL record candidate configuration, Calibration_Profile, Cue_Evidence_Profile, Nuisance_Profile, replay identity, baseline identity, code revision, runtime dependency identities, and deterministic seed for every pilot run.
+20. THE Pilot_Harness SHALL freeze the Pilot_Statistics_Method (power-analysis method, confidence level, clustering unit, effect definitions, methodological validity minimum of clusters, and the feasibility rule shape), the Minimum_Effect_Of_Interest for each required effect with its written justification, and the sufficiency decision rule before reading baseline or candidate outcomes.
+21. THE Pilot_Harness SHALL derive pilot data-sufficiency findings from observed independent-track coverage, Independent_View coverage (including at least one near-field and one far-field `scene_region` band each holding no fewer than the methodological validity minimum of clusters), ground-truth uncertainty, effect variance, the frozen Minimum_Effect_Of_Interest, and the frozen power-analysis method.
+22. THE Pilot_Harness SHALL derive required sample size and genuine-track coverage from pilot-observed track-clustered effect variance and the frozen Minimum_Effect_Of_Interest rather than from the observed effect estimate or fixed preclaimed counts (this does not preclude the fixed methodological validity minimum of 10.9).
+23. THE Pilot_Harness SHALL derive median-error and p90-error thresholds from Pilot_Partition evidence rather than fixed `5%` or `2%` improvement values.
+24. THE Pilot_Harness SHALL derive Usable_Coverage thresholds from Pilot_Partition evidence rather than fixed `5%` or `2%` allowance values.
+25. THE Pilot_Harness SHALL classify the Pilot_Feasibility_Gate as `no_go` when either Acceptance_Site fails the frozen pilot data-sufficiency rule.
+26. THE Pilot_Harness SHALL classify the Pilot_Feasibility_Gate as `no_go` when pilot effect estimates and Effect_Intervals fail the frozen feasibility decision rule.
+27. WHEN the Pilot_Feasibility_Gate is `no_go`, THE Pilot_Harness SHALL report both evidence gaps and failed feasibility conditions.
+28. WHEN both sites satisfy the frozen pilot sufficiency and feasibility rules, THE Pilot_Harness SHALL classify the Pilot_Feasibility_Gate as `go`.
+29. THE Pilot_Harness SHALL treat selective-risk analysis as diagnostic rather than a required MVP acceptance gate; a Paired_Accepted_Set comparison is a fixed-population paired comparison and is not selective-risk analysis.
+30. WHEN the evidence inventory contains only current checked-in data, THE Pilot_Harness SHALL classify final acceptance evidence as `insufficient_data`.
+31. WHEN the evidence inventory contains only current checked-in data, THE Pilot_Harness SHALL exclude a claim of proven localization improvement.
+32. THE Pilot_Harness SHALL require a validated Real_Track_ID for every Eligible_Detection at both Acceptance_Sites.
+33. THE Pilot_Harness SHALL report Paired_Accepted_Set size, its share of each arm's accepted count, and its share of the fixed Eligible_Detection denominator, at each Acceptance_Site.
+34. THE frozen feasibility rule SHALL classify the median-error Effect_Interval `[L, U]` against the Minimum_Effect_Of_Interest by this trichotomy: `U <= -MEI` is `go` (superiority by the material margin — this subsumes `U < 0`, so no separate superiority condition exists); `L > -MEI` is `no_go` (precise but immaterial, and this covers an interval lying entirely above zero); `L <= -MEI < U` is `insufficient_data` (the interval straddles the decision boundary). Site feasibility additionally requires Usable_Coverage non-inferiority (Effect_Interval lower bound above minus the pilot-derived allowance of 10.24) and the sufficiency rule of 10.21. THE p90-error effect SHALL be reported as secondary and SHALL NOT gate any decision. Pilot `go` requires both named Acceptance_Sites (10.28).
+35. THE pilot report SHALL show each arm's error-versus-coverage operating point and SHALL print the cluster count and replicate count next to every Effect_Interval.
+36. THE Pilot_Harness SHALL report achieved power at the frozen Minimum_Effect_Of_Interest, never at the observed effect.
+37. THE Pilot_Harness SHALL derive per-site held-out thresholds by the frozen rule of the Pilot_Statistics_Method: the median-error threshold is the pilot Effect_Interval upper bound, and the held-out site passes when its median-error interval satisfies the same trichotomy of 10.34 at the frozen MEI and its point estimate is at or below the threshold; the coverage allowance is the half-width of the pilot coverage-effect Effect_Interval. THE Acceptance_Profile SHALL NOT freeze a p90-error threshold.
+38. THE Pilot_Harness SHALL compute every Effect_Interval by one method only: `4096` seeded whole-track bootstrap resamples that draw `n_tracks` Real_Track_IDs with replacement and equal probability, carry every detection of a drawn track (a track drawn twice contributes its detections twice), and **recompute the detection-level statistic on each resample** rather than aggregating per-track effects; the interval is the nearest-rank percentile interval at the frozen confidence level. Exact sign-flip enumeration is not used, because inverting it into an interval is undefined.
 
-**User Story:** As a calibration reviewer, I want effective parallax mismatch separated from physical camera height, so that evaluation does not claim an unidentifiable calibration result.
+## Held-Out Acceptance Requirements
 
-#### Acceptance Criteria
+### Requirement 11: Freeze Acceptance Before Held-Out Evaluation
 
-1. THE Calibration_Analyzer SHALL estimate Effective_Eta separately for every Acceptance_Site and documented keypoint-height family.
-2. THE Calibration_Analyzer SHALL represent Effective_Eta as `eta = h / z_cam`.
-3. THE Calibration_Analyzer SHALL record site and height-family identifier with every Effective_Eta estimate.
-4. THE Calibration_Analyzer SHALL record height prior and height-prior uncertainty with every Effective_Eta estimate.
-5. THE Calibration_Analyzer SHALL represent every Effective_Eta_Interval with finite lower and upper bounds.
-6. THE Calibration_Analyzer SHALL require `lower <= upper` for every Effective_Eta_Interval.
-7. THE Calibration_Analyzer SHALL require every Effective_Eta point estimate to be finite.
-8. THE Calibration_Analyzer SHALL require every Effective_Eta point estimate to satisfy `lower <= eta <= upper` for the associated Effective_Eta_Interval.
-9. WHEN only image observations and height priors are available, THE Calibration_Analyzer SHALL classify `h` and `z_cam` as not separately identifiable.
-10. WHEN `h = 0` and Effective_Eta equals zero, THE Calibration_Analyzer SHALL classify `z_cam` as unidentifiable from the zero-height family.
-11. WHEN `lower <= 0 <= upper`, THE Calibration_Analyzer SHALL classify the Effective_Eta_Interval as including zero.
-12. WHEN `upper < 0` or `lower > 0`, THE Calibration_Analyzer SHALL classify the Effective_Eta_Interval as excluding zero.
-13. WHEN independently measured `h` is positive, Effective_Eta is positive, and the Effective_Eta_Interval lower bound is positive, THE Calibration_Analyzer SHALL compute candidate `Jointly_Identified_Z_Cam = h / eta`.
-14. WHEN candidate Jointly_Identified_Z_Cam is finite and positive, THE Calibration_Analyzer SHALL include Jointly_Identified_Z_Cam in authoritative calibration outputs.
-15. IF candidate Jointly_Identified_Z_Cam is non-finite or non-positive, THEN THE Calibration_Analyzer SHALL omit Jointly_Identified_Z_Cam from authoritative calibration outputs.
-16. IF an Effective_Eta_Interval upper bound is negative, THEN THE Calibration_Analyzer SHALL omit Jointly_Identified_Z_Cam from authoritative calibration outputs.
-17. WHEN independently measured Direct_Z_Cam is finite and positive, THE Calibration_Analyzer SHALL compute candidate `h = eta * z_cam`.
-18. WHEN candidate `h = eta * z_cam` is finite and positive, THE Calibration_Analyzer SHALL include derived `h` in authoritative calibration outputs.
-19. IF candidate `h = eta * z_cam` is non-finite or non-positive, THEN THE Calibration_Analyzer SHALL omit derived `h` from authoritative calibration outputs.
-20. WHEN Direct_Z_Cam is supplied by independent metrology, THE Calibration_Analyzer SHALL label Direct_Z_Cam `metrology_derived`.
-21. WHEN Jointly_Identified_Z_Cam is authoritative, THE Calibration_Analyzer SHALL label the value `jointly_identified_z_cam`.
-22. WHEN independent metrology provides uncertainty, THE Calibration_Analyzer SHALL propagate uncertainty by the frozen uncertainty procedure.
-23. WHEN independent metrology omits uncertainty, THE Calibration_Analyzer SHALL label the identified parameter `uncertainty_unavailable`.
-24. IF an Effective_Eta_Interval includes zero, THEN THE Calibration_Analyzer SHALL omit Jointly_Identified_Z_Cam from authoritative calibration outputs.
-25. IF independent metrology is absent, THEN THE Calibration_Analyzer SHALL omit Direct_Z_Cam from authoritative calibration outputs.
-26. THE Calibration_Analyzer SHALL prohibit pooling Effective_Eta estimates across sites for an authoritative estimate.
-27. THE Calibration_Analyzer SHALL prohibit pooling Effective_Eta estimates across height families for an authoritative estimate.
-28. THE Diagnostics_Recorder SHALL use distinct field names for Effective_Eta, configured `z_cam`, Direct_Z_Cam, and Jointly_Identified_Z_Cam.
-29. THE Measurement_Harness SHALL exclude Effective_Eta improvement as evidence of Direct_Z_Cam correction.
-30. THE Measurement_Harness SHALL evaluate reliability-aware multi-cue position accuracy independently of every Direct_Z_Cam claim.
-### Requirement 15: Verify Executable Correctness Properties
-
-**User Story:** As a maintainer, I want automated correctness properties, so that estimator and pipeline invariants hold across broad generated input sets.
+**User Story:** As an independent reviewer, I want thresholds fixed before held-out outcomes are visible, so that the final result is not tuned to the evaluation set.
 
 #### Acceptance Criteria
 
-1. THE Validation_Suite SHALL execute every property-based criterion with seeds `104729`, `130363`, `155921`, and `196613`.
-2. THE Validation_Suite SHALL execute at least 100 generated cases per property per PBT_Profile seed.
-3. THE Validation_Suite SHALL generate point counts, coordinates, transforms, weights, separations, and rank conditions within every PBT_Profile range.
-4. WHEN a property fails, THE Validation_Suite SHALL record the property name, PBT_Profile version, seed, generated-case index, minimized counterexample, and exact replay command.
-5. WHEN a recorded failing seed and minimized counterexample are replayed, THE Validation_Suite SHALL reproduce the same property failure without generating new cases.
-6. WHEN a nondegenerate noise-free synthetic wheel pose is generated, THE Validation_Suite SHALL recover every position component within absolute error `1e-9` pixels.
-7. WHEN a nondegenerate noise-free synthetic wheel pose is generated, THE Validation_Suite SHALL recover heading within Angular_Difference `1e-9` degrees.
-8. WHEN a PBT_Profile translation is applied to every observation, THE Validation_Suite SHALL verify equal translation of every usable Estimator_Mode position within absolute error `1e-9` pixels.
-9. WHEN a PBT_Profile translation is applied to every observation, THE Validation_Suite SHALL preserve status exactly.
-10. WHEN a PBT_Profile translation is applied to every observation, THE Validation_Suite SHALL preserve Estimator_Mode exactly.
-11. WHEN a PBT_Profile rotation is applied to every source and observation point about one origin, THE Validation_Suite SHALL verify rotation equivariance of every usable position within absolute error `1e-9` pixels.
-12. WHEN a PBT_Profile rotation is applied to every source and observation point about one origin, THE Validation_Suite SHALL verify the matching heading change within Angular_Difference `1e-9` degrees.
-13. WHEN generated keypoint records are permuted, THE Validation_Suite SHALL preserve Estimator_Mode, status, usability, and reason code exactly.
-14. WHEN generated keypoint records are permuted, THE Validation_Suite SHALL preserve center components within absolute error `1e-9` pixels.
-15. WHEN generated keypoint records are permuted, THE Validation_Suite SHALL preserve heading within Angular_Difference `1e-9` degrees.
-16. WHERE Weighted_Procrustes_Estimator is enabled, THE Validation_Suite SHALL verify positive uniform weight-scale invariance over PBT_Profile weights and multipliers.
-17. WHERE Weighted_Procrustes_Estimator is enabled, THE Validation_Suite SHALL verify `t = p_bar - R q_bar` over generated nondegenerate point sets.
-18. WHERE Weighted_Procrustes_Estimator is enabled, THE Validation_Suite SHALL verify zero-weight-point invariance for centroids, covariance, objective, rank, position, and heading.
-19. WHEN a generated detection has zero visible wheels and a reliability-eligible non-wheel Primary_Support_Path, THE Validation_Suite SHALL verify the frozen `single_family` or `complementary_multi_cue` result.
-20. WHEN a generated detection has zero visible wheels and no reliability-eligible Primary_Support_Path, THE Validation_Suite SHALL verify the frozen fallback-or-none result.
-21. WHEN a generated cue constraint has projected baseline or leverage below the frozen role boundary, THE Validation_Suite SHALL verify exclusion of the cue constraint from that role.
-22. WHEN generated cue constraints satisfy every applicable Cue_Eligibility_Check, THE Validation_Suite SHALL verify the Geometry_Profile mode and weight result.
-23. WHEN an Ambiguous_Fit is generated, THE Validation_Suite SHALL verify Typed_Validation_Failure code `degenerate_geometry`.
-24. WHEN an Unusable_Localization passes through enrichment, THE Validation_Suite SHALL verify null Authoritative_Position, `position_m`, and `velocity_mps`.
-25. WHEN an Unusable_Localization passes through scene scanning, THE Validation_Suite SHALL verify exclusion from track positions and collider eligibility.
-26. WHEN an Unusable_Localization is serialized and deserialized in a supported schema, THE Validation_Suite SHALL preserve unusable status and null Authoritative_Position.
-27. WHERE temporal fusion is enabled, WHEN an Unusable_Localization passes through temporal fusion, THE Validation_Suite SHALL preserve unusable status, `usable=false`, and null Authoritative_Position.
-28. WHEN every supported status and Estimator_Mode combination is serialized and deserialized, THE Validation_Suite SHALL verify every Requirement 13 round-trip rule.
-29. WHEN multi-cue functionality is disabled, THE Validation_Suite SHALL verify every Requirement 1 disabled-mode parity rule.
-30. WHEN non-finite keypoints are generated, THE Validation_Suite SHALL verify Typed_Validation_Failure code `non_finite_coordinate`.
-31. WHEN negative weights are generated, THE Validation_Suite SHALL verify Typed_Validation_Failure code `invalid_weight`.
-32. WHEN non-finite weights are generated, THE Validation_Suite SHALL verify Typed_Validation_Failure code `invalid_weight`.
-33. WHEN zero-total weights are generated, THE Validation_Suite SHALL verify Typed_Validation_Failure code `zero_total_weight`.
-34. WHEN unsupported schemas are generated, THE Validation_Suite SHALL verify Typed_Validation_Failure code `unsupported_schema_version`.
-35. WHEN malformed status values are generated, THE Validation_Suite SHALL verify a typed status-validation failure.
-36. WHEN calibration identifiers are missing, THE Validation_Suite SHALL verify a typed calibration-validation failure.
-37. WHEN a generated report substitutes any Proxy_Metric for Planar_Position_Error, THE Validation_Suite SHALL verify candidate rejection.
-38. WHEN Diagnostic_Site records are added to an acceptance input, THE Validation_Suite SHALL preserve every acceptance numerator, denominator, confidence interval, and pass-fail result exactly.
-39. WHEN Diagnostic_Site records are removed from an acceptance input, THE Validation_Suite SHALL preserve every acceptance numerator, denominator, confidence interval, and pass-fail result exactly.
-40. WHEN Diagnostic_Site records are permuted within an acceptance input, THE Validation_Suite SHALL preserve every acceptance numerator, denominator, confidence interval, and pass-fail result exactly.
-41. WHEN an Unusable_Localization contains a finite Diagnostic_Position, THE Validation_Suite SHALL verify null Authoritative_Position outputs for enrichment, velocity, scene, collider, and fusion processing.
-42. WHEN finite spread is the greatest representable value below the Spread_Gate boundary, THE Validation_Suite SHALL verify Spread_Gate acceptance.
-43. WHEN finite spread equals the exact representable Spread_Gate boundary, THE Validation_Suite SHALL verify Spread_Gate rejection.
-44. WHEN finite spread is the least representable value above the Spread_Gate boundary, THE Validation_Suite SHALL verify Spread_Gate rejection.
-45. WHEN a Projection_Conditioning_Metric is the greatest representable value below the Near_Horizon_Threshold, THE Validation_Suite SHALL verify conditioning acceptance.
-46. WHEN a Projection_Conditioning_Metric equals the exact representable Near_Horizon_Threshold, THE Validation_Suite SHALL verify conditioning rejection.
-47. WHEN a Projection_Conditioning_Metric is the least representable value above the Near_Horizon_Threshold, THE Validation_Suite SHALL verify conditioning rejection.
-48. WHEN a minimum geometry value equals the frozen minimum boundary, THE Validation_Suite SHALL verify geometry acceptance.
-49. WHEN a minimum geometry value is below the frozen minimum boundary, THE Validation_Suite SHALL verify geometry rejection.
-50. WHEN fixed Evaluation_Population matching is missing or ambiguous, THE Validation_Suite SHALL verify site-evaluation failure without denominator shrinkage.
-51. WHEN baseline and candidate usable subsets differ, THE Validation_Suite SHALL verify separate Error_Samples over one fixed Evaluation_Population denominator.
-52. WHEN finite-confidence Selective_Risk inputs are empty, THE Validation_Suite SHALL verify an empty curve and null requested-point values.
-53. WHEN fallback outputs are usable, THE Validation_Suite SHALL verify fallback participation in overall accuracy, coverage, and Selective_Risk.
-54. WHEN a safety gate rejects a detection, THE Validation_Suite SHALL verify that no later Fallback_Path produces a usable result.
-55. WHILE the Phase_0_Gate is incomplete, THE Validation_Suite SHALL verify that no final multi-cue pass decision is emitted.
-56. WHILE the Phase_0_Gate is incomplete, THE Validation_Suite SHALL verify that no final multi-cue acceptance decision is emitted.
-57. WHEN duplicate ground-truth reference identities are generated, THE Validation_Suite SHALL verify exclusion of every reference position in each duplicate-reference-identity group with the frozen duplicate-reference-identity exclusion code.
-58. WHEN records in a generated duplicate-reference-identity group are permuted, THE Validation_Suite SHALL preserve the excluded reference-position set and exclusion code exactly.
-59. WHEN uniformly scaled weights remain finite and scaled total weight `W` is non-finite, THE Validation_Suite SHALL verify Typed_Validation_Failure code `numeric_failure`.
-60. WHEN a usable observation is generated as the first usable observation after a Track_Interruption, THE Validation_Suite SHALL verify null `velocity_mps`.
-61. WHEN Effective_Eta equals zero, THE Validation_Suite SHALL verify omission of Jointly_Identified_Z_Cam from authoritative calibration outputs.
-62. WHEN Effective_Eta is positive, the Effective_Eta_Interval lower bound is positive, independently measured `h` is positive, and `h / eta` is finite, THE Validation_Suite SHALL verify inclusion of Jointly_Identified_Z_Cam in authoritative calibration outputs.
-63. WHEN generated cue records are permuted, THE Validation_Suite SHALL preserve selected Cue_Families, constraint roles, Cue_Eligibility_Check outcomes, and cue weights exactly.
-64. WHEN generated windshield or glass-corner cues have reliable bearing evidence and insufficient heading leverage, THE Validation_Suite SHALL verify an eligible Position_Bearing_Constraint and an ineligible Orientation_Constraint.
-65. WHEN generated mirror cues are evaluated, THE Validation_Suite SHALL verify application of the mirror Height_Family uncertainty model and exclusion from Zero_Height_Anchor classification.
-66. WHERE the generated site is `kee-cc`, WHEN `front_up_right` index `0` fails the frozen semantic-misplacement gate, THE Validation_Suite SHALL verify exclusion of index `0` from estimator support.
-67. WHERE a generated site and view lack evidence of the kee-cc index `0` anomaly, THE Validation_Suite SHALL verify evaluation under the generated site-view evidence rather than the kee-cc gate.
-68. WHEN generated orientation evidence belongs to one Height_Family, THE Validation_Suite SHALL verify heading invariance under one common finite Effective_Eta perturbation applied to that Height_Family.
-69. WHEN generated orientation evidence belongs to multiple Height_Families, THE Validation_Suite SHALL verify separate per-family Orientation_Constraints before uncertainty-aware combination.
-70. WHEN generated Height_Families have unequal Effective_Eta errors, THE Validation_Suite SHALL verify that raw cross-family point pooling is absent from orientation estimation.
-71. WHEN one generated Cue_Family supplies reliable orientation and another generated Cue_Family supplies reliable position or bearing, THE Validation_Suite SHALL verify selection of `complementary_multi_cue`.
-72. WHEN generated Zero_Height_Anchor and nonzero-height position cues have otherwise equal reliability evidence, THE Validation_Suite SHALL verify preference for the Zero_Height_Anchor.
-73. WHEN generated cue constraints differ only in projected baseline or leverage, THE Validation_Suite SHALL verify a nondecreasing weight as projected baseline or leverage increases.
-74. WHEN generated cue constraints differ only in Height_Family uncertainty, THE Validation_Suite SHALL verify a nonincreasing weight as Height_Family uncertainty increases.
+1. WHEN the Pilot_Feasibility_Gate is `go`, THE Pilot_Harness SHALL extend the Acceptance_Profile with per-site held-out thresholds and commit it before reading any Held_Out_Partition outcome.
+2. THE Acceptance_Profile SHALL identify the exact Pose_Optimizer code revision, candidate configuration, Calibration_Profile, Cue_Evidence_Profile, Nuisance_Profile, replay schema, robust procedure, runtime dependency identities, and deterministic seed evaluated on the Held_Out_Partition.
+3. THE Acceptance_Profile SHALL freeze per-site median-error (Paired_Accepted_Set) and Usable_Coverage thresholds derived from Pilot_Partition evidence before reading any held-out outcome; p90-error is reported, never thresholded (Requirement 10.34).
+4. THE Acceptance_Profile SHALL freeze required Effect_Interval decision rules before reading any held-out outcome.
+5. THE Acceptance_Profile SHALL freeze conditioning, observability, uncertainty, support, spread, uniqueness, hypothesis-budget, scoring, deterministic-order, and decisive-rejection boundaries before reading any held-out outcome.
+6. THE Acceptance_Profile SHALL record the pilot effect estimate, uncertainty, sufficiency result, power result at the frozen Minimum_Effect_Of_Interest, and decision rationale supporting each final threshold.
+7. THE Acceptance_Profile SHALL exclude Held_Out_Partition outcomes from every threshold rationale.
+8. IF any Acceptance_Site fails a frozen held-out threshold or returns `no_go` under the 10.34 trichotomy, THEN THE Pilot_Harness SHALL report the final decision as `no_go`.
+9. IF no Acceptance_Site fails and any Acceptance_Site has insufficient held-out data under the frozen sufficiency rule, THEN THE Pilot_Harness SHALL report the final decision as `insufficient_data`.
+10. WHEN both Acceptance_Sites satisfy every frozen held-out rule, THE Pilot_Harness SHALL report the final decision as `go`.
+11. WHEN held-out conditions include both threshold failure and insufficient data, THE Pilot_Harness SHALL apply decision precedence `no_go` over `insufficient_data` over `go`.
+12. THE Pilot_Harness SHALL report per-site median error and p90 error (own-set descriptive and Paired_Accepted_Set), Usable_Coverage, signed effect estimates, Effect_Intervals, genuine Real_Track_ID coverage, and Independent_View coverage for held-out evaluation.
+13. THE Pilot_Harness SHALL exclude pooled metrics from overriding an Acceptance_Site result.
+14. THE Pilot_Harness SHALL exclude proxy metrics from overriding an Independent_Ground_Truth result.
+15. THE Pilot_Harness SHALL exclude Diagnostic_Site outcomes from every held-out decision.
+16. THE Pilot_Harness SHALL read held-out outcomes only from a command that takes the git commit SHA of the committed Acceptance_Profile file as an argument, and SHALL record that SHA and the profile content digest in the held-out report.
+17. THE Pilot_Harness SHALL append one entry `{profile_sha, held_out_dataset_digest, exposed_at}` to the append-only exposure ledger `evidence/haware/held_out_ledger.jsonl` before emitting any held-out outcome, and SHALL never rewrite or delete an existing entry.
+18. IF the ledger already contains an entry whose `held_out_dataset_digest` equals the requested dataset and whose `profile_sha` differs from the requested SHA, THEN THE Pilot_Harness SHALL refuse the run with reason `held_out_dataset_already_exposed` and SHALL require a Held_Out_Partition whose digest is absent from the ledger.
+19. WHEN the requested `(profile_sha, held_out_dataset_digest)` pair is already present in the ledger, THE Pilot_Harness SHALL reproduce the recorded decision rather than evaluate a second time.
+
+## Diagnostic Candidate and Runtime Requirements
+
+### Requirement 12: Run Diagnostic Candidate Arms Without Authority
+
+**User Story:** As the owner of the earlier weighted-Procrustes proposal, I want it measured side by side under the same evidence, so that its value is settled by data rather than discarded by fiat, without ever becoming production behavior by accident.
+
+#### Acceptance Criteria
+
+1. THE Pilot_Harness SHALL run every Diagnostic_Candidate named in the Acceptance_Profile on the same ordered Eligible_Detections and against the same Independent_Ground_Truth as the Corrected_Legacy_Baseline and the Pose_Optimizer, at each Acceptance_Site.
+2. THE Pilot_Harness SHALL report for each Diagnostic_Candidate the same per-site descriptive statistics, Paired_Accepted_Set effects against the Corrected_Legacy_Baseline, Usable_Coverage, and provenance as for the Pose_Optimizer.
+3. THE Pilot_Harness SHALL exclude every Diagnostic_Candidate from the Pilot_Feasibility_Gate, from every held-out decision, and from any improvement claim.
+4. THE Localization_System SHALL implement each Diagnostic_Candidate in one named module outside the Pose_Optimizer call graph (`trafficlab/measurement/haware_diagnostic_candidates.py`), SHALL exclude it from production dispatch, and SHALL classify every Diagnostic_Candidate output as non-authoritative.
+5. THE MVP Diagnostic_Candidate `wheel_weighted_procrustes` SHALL reuse the Corrected_Legacy_Baseline handedness correction, template, and spread diagnostic, SHALL apply the frozen diagonal weight `w_wheel` (`PilotPolicy.diagnostic_candidate_params['wheel_weighted_procrustes']['w_wheel']`, default `4.0`) to `WHEEL_KP_IDX` in the fixed-scale Procrustes cross-covariance with weighted centroids `q̄ = Σ w_i q_i / Σ w_i`, and SHALL fall back to the unweighted full-point fit with a recorded `fallback=true` flag when `n_wheel_kp < 2`.
+
+### Requirement 13: Bound the Background Batch Runtime
+
+**User Story:** As the product owner, I want the whole video localized in the background within a known bound, so that hypothesis budgets are chosen against a real envelope rather than cut later under time pressure.
+
+#### Acceptance Criteria
+
+1. THE Acceptance_Profile SHALL freeze a Batch_Runtime_Envelope of at most `10` seconds of wall-clock per second of source video (600 s for a 60 s clip) for localizing one complete source video (all detections, all frames) with the Pose_Optimizer on the reference machine recorded in the profile as a structured record (CPU model, core count, RAM, OS, Python/NumPy/SciPy/BLAS versions) with `OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=1`, single process.
+2. THE Pilot_Harness SHALL record wall-clock time, source-video duration, total detection count, and per-detection mean and p95 optimizer time for every pilot run and SHALL report `wall_s / video_s`; because pilot runs cover only Eligible_Detections, a pilot figure is an indicative lower bound and SHALL be labelled `partial_population=true`.
+3. WHEN the exact candidate is frozen, THE Localization_System SHALL measure the Batch_Runtime_Envelope by localizing one complete named reference source video end to end on the reference machine — every frame and every detection, including I/O, observation normalization, frames with no detection, and process start-up — and SHALL record the measured `wall_s / video_s` in the Acceptance_Profile.
+4. IF the measured full-video value exceeds the Batch_Runtime_Envelope, THEN THE Localization_System SHALL withhold production authorization with reason `runtime_envelope_exceeded` even when the held-out decision is `go`; the envelope is a production-authorization gate and never alters an accuracy metric, effect, or held-out decision.
+5. WHEN a hypothesis budget or refinement limit is chosen for the Acceptance_Profile, THE Localization_System SHALL record the measured runtime that justifies it.
+6. THE Localization_System SHALL impose no per-frame or real-time latency requirement anywhere in this feature.
+
+## Scope boundary and later phases
+
+This section replaces the former Requirements 12 and 13 (production hardening and deferred-capability governance), which were decision rules rather than testable system behaviour.
+
+- The Pose_Optimizer is default-off and non-authoritative until the exact candidate returns held-out `go` at both named Acceptance_Sites. A `go` authorizes only the two sites named in that Acceptance_Profile; a site that was substituted out receives no production authorization. Until then the Corrected_Legacy_Baseline (through `legacy-localize-v1`) is the production path, and Optimizer_Disabled_Mode parity (Requirement 1.13–1.15) must hold.
+- Production authorization is scoped to the Calibration_Profile and Cue_Evidence_Profile identities evaluated; a site without frozen profiles dispatches to the Corrected_Legacy_Baseline. Authorization additionally requires the measured full-video Batch_Runtime_Envelope (Requirement 13.3–13.4) to be met.
+- The hardening review that follows a `go` verifies the compatibility mapping into `sat_coords`/`position_m` consumed by `scripts/filter_and_enrich_output.py` and `tools/build_scene.py`, disabled-mode parity, and coordinate-authority safety. It does not retune or generalize the estimator.
+- Each Deferred_Capability (detector replacement or retraining, generalized learned reliability, a full multi-provider schema platform, exhaustive artifact management, calibration identification or re-estimation, temporal or multi-sensor fusion, selective-risk acceptance) is out of scope for this specification and needs its own requirements and design, motivated by a measured pilot limitation. Temporal fusion, if ever specified, must consume only Real_Track_ID inputs and must keep every single-frame Rejected_Result non-authoritative.
