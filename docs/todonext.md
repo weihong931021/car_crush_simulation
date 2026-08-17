@@ -69,6 +69,44 @@ sha256 相同，scene.json 僅 `0.70` vs `0.7` 的浮點格式差異）。
       `tools/tests/test_build_scene_edges.py`（新增 8 測，套件期望 OK + expected failures=5）、
       `threejs/lib/tests/contract-gaps.test.js`（新增 4 測，其中 3 個 todo；套件期望 fail 0）
 
+### 播放器全功能實測與修正（2026-08-17）
+
+Playwright 逐一操作三個場景的每個按鈕／拉桿／鏡頭／手機版（冒煙全綠但實際操作抓到一批），
+Codex review 後修正並回歸（JS 86/86、verify_scenes 全過）：
+
+- [x] **12 s 模擬視野假象**：`simulate` 改跑到兩車走完路徑（保險上限 180 s，回傳
+      `endTime`／`horizonReached`）；`solve` 把 horizonReached 當「未證明安全」，
+      test1 汽車 ×0.5 由假的「未碰撞」變成正確的「碰撞於 15.50 s」、安全車速 ×≤0.65 → ×≤0.30
+- [x] 求安全車速：結果隨滑桿過期、改相對目前滑桿而非 ×1、按下先顯示「計算中」
+- [x] 鏡頭 preset 依兩車軌跡包圍盒取景（`actionBounds`）；頂視圖依視窗比例 fit、
+      不再改 `camera.up`（OrbitControls 建構時抓死，改了在極點左鍵拖曳無反應）
+- [x] 播到底再播從頭；改車速後幀數超出回開頭；未碰撞播到錯車後 4 s 為止
+- [x] 對外 demo 定調：秒數取代幀號、同 label 車 A/B、藏 km/h／class／id（`?debug=1` 顯示）、
+      路徑改 30 cm 貼地色帶、開場切到第二台車進場前 2 s（test1 從 4.30 s 起播）
+- [x] test1 底圖：試過 `image_enhance` 去車高清版**更糟**（Gemini 只抓 2 台、留污漬），
+      已還原；committed 的 `scenes/test1/ground.png` 就是增強版，**勿重產**（CLAUDE.md 有記）
+- [ ] 台北民生 `scenes/taipei-cm/`：資料不撞（80 s 內最近 7.2 m）、底圖糊、track 1 壞
+      ——待決定拿掉或用 kee-cc／taoyuan-tc 重出
+- [ ] 視窗 resize 後不重新 fit 鏡頭；背景車（extras）用 GLB 原始比例（Codex 提的兩個小風險）
+
+**底圖工作台（`satellite_pipeline/webapp.py`，①②）實測到的 bug（使用者決定先修播放器，
+這些待處理；③ 標註另開 spec）**：對已鎖定代號再擷取會靜默覆蓋（locked 消失、clean 圖被刪）、
+重新整理全丟沒有「打開既有代號」、鎖 30 m 滑桿顯示 29 m 與上限提示永不出現（floor 取整）、
+降 zoom 重抓後滑桿仍停 40 m、去車隨機（同圖 9 台→1 台）且銳化放大 Google 浮水印、favicon 404。
+
+### 對外簡報圖（2026-08-17）
+
+`docs/diagrams/`：三張 16:9 SVG＋預覽頁 `index.html`＋產生器 `make_diagrams.py`（改字或座標後
+重跑即同步三張），生圖 prompt 在 `image-gen-prompts.md`。artifact：
+<https://claude.ai/code/artifact/54df9b6f-0938-4881-b820-34928efc8cd8>
+
+- 圖 A `architecture-overview.svg`「兩種資料，合成一個 3D 現場」（概念、非技術觀眾）
+- 圖 B `user-flow-overview.svg`「三次人工，其餘自動」（六步流程、人工三處）
+- 圖 C `system-architecture-flow.svg` 元件級技術架構（RAG 教學圖語法：圖示＋編號流程
+  ①→⑪、淺藍核心區、外部服務盒、資料源在底部）
+- 視覺語彙三張共用：交通號誌三色（藍＝系統／主流程、琥珀＝人工／準備、綠＝產出），
+  說明文字帶白色光暈、圓形站號徽章、連線只走水平／垂直
+
 ## 路徑產生器 haware（2026-07-28 接管）
 
 > 決策與完整證據：`docs/decisions/2026-07-27-haware-localizer-parity-bug.md`

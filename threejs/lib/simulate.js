@@ -18,6 +18,15 @@ const MU = 0.7;
 
 const STOP_SPEED_MPS = 0.05; // 自由體階段視為「已停止」的速度門檻
 
+// 模擬視野的保險上限（秒）。正常情況主迴圈在「兩車都走完路徑」時就提早結束，這個上限
+// 只擋蠕行到走不完的車（速度剖面被 path.js 夾在 0.01 m/s 的極端資料）。
+// 歷史教訓：舊版寫死 12s，test1 汽車 ×0.5 就被回報「未碰撞、最近距離落在 t=12.00」，
+// 實際 15.5s 撞上；連 solve 的「×≤0.65 可避開」也全是視野截斷的假象。撞到上限時
+// 回傳 horizonReached=true，呼叫端必須明講「N 秒內未碰撞」而不是「未碰撞」。
+// 180s：讓 ×0.25 的慢車也有機會走完 ~40 m 路徑（solve 的掃描下限就是 0.25），
+// 又不至於讓 0.01 m/s 的病態資料把 solve 拖成幾秒鐘的長迴圈。
+const DEFAULT_MAX_TIME = 180;
+
 // 轉向率上限（單車模型的寬鬆版）：車輛的 yaw 速率物理上受 v/L·tan(δmax) 限制——
 // 幾乎不動的車不可能原地擺頭。路徑切線在蠕行段被殘噪主導，若直接把切線當車身朝向，
 // 車會邊滑邊擺（「飄」）。對「輸出樣本與碰撞 OBB 用的 heading」施加此限制：
@@ -261,7 +270,7 @@ function finalizeCollision({ vehA, kA, vehB, kB, dt, maxTime, impactTime,
 // startT：該車第一筆證據的時刻（秒）。在 startT 之前車輛尚未進場——不前進、不參與
 // 碰撞偵測與最近間距、不輸出樣本。忽略它會讓晚出現的車提早出發、先騎到衝突點
 // 「停著等撞」（test1 機車實際 t≈6.3s 才進場，未修正前被提早了 6.3 秒）。
-export function simulate({ vehicles, kA, kB, dt = 1 / 60, maxTime = 12 }) {
+export function simulate({ vehicles, kA, kB, dt = 1 / 60, maxTime = DEFAULT_MAX_TIME }) {
   const [vehA, vehB] = vehicles;
 
   if (!(vehA.path.length > 0) || !(vehB.path.length > 0)) {
@@ -280,6 +289,7 @@ export function simulate({ vehicles, kA, kB, dt = 1 / 60, maxTime = 12 }) {
   let sA = 0, sB = 0, t = 0;
   let collided = false, impactTime = null, contact = null;
   let minGap = Infinity, minGapTime = 0;
+  let horizonReached = false;
 
   const ov0 = bothPresent(0)
     ? overlap(obbAt(vehA, p0A.x, p0A.z, p0A.heading), obbAt(vehB, p0B.x, p0B.z, p0B.heading))
@@ -301,6 +311,8 @@ export function simulate({ vehicles, kA, kB, dt = 1 / 60, maxTime = 12 }) {
     // hA/hB：施加轉向率上限後的車身朝向（輸出樣本與碰撞 OBB 一律用它，不直接用路徑切線）。
     let hA = p0A.heading;
     let hB = p0B.heading;
+    const bothDone = () => bothPresent(t)
+      && sA >= vehA.path.length - 1e-9 && sB >= vehB.path.length - 1e-9;
     while (t < maxTime) {
       const dtStep = Math.min(dt, maxTime - t);
       if (dtStep <= 1e-12) break;
@@ -341,9 +353,10 @@ export function simulate({ vehicles, kA, kB, dt = 1 / 60, maxTime = 12 }) {
       if (tNext >= startTB) samplesB.push({ t, x: pBNext.x, z: pBNext.z, heading: hB });
 
       // 兩車都已出現且走完路徑（advance 會把 s 夾在 path.length）→ 之後不會再變化，提早結束。
-      if (bothPresent(tNext)
-        && sA >= vehA.path.length - 1e-9 && sB >= vehB.path.length - 1e-9) break;
+      if (bothDone()) break;
     }
+    // 迴圈因 t 觸頂而結束、且兩車還沒走完 → 視野被保險上限截斷，結論不完整。
+    if (!collided && t >= maxTime - 1e-9 && !bothDone()) horizonReached = true;
   }
 
   return {
@@ -352,6 +365,13 @@ export function simulate({ vehicles, kA, kB, dt = 1 / 60, maxTime = 12 }) {
     contact,
     minGap: collided ? 0 : minGap,
     minGapTime,
+    // 碰撞時主迴圈在撞擊瞬間 break，之後的自由體樣本由 finalizeCollision 補上，
+    // 實際結束時刻要看樣本尾端；未碰撞時就是主迴圈停下的 t（不看樣本——某車 startT
+    // 若晚於上限，它的起始樣本 t 會超過實際模擬終點）。
+    endTime: collided
+      ? Math.max(t, samplesA[samplesA.length - 1].t, samplesB[samplesB.length - 1].t)
+      : t,
+    horizonReached,
     tracks: [{ samples: samplesA }, { samples: samplesB }],
   };
 }

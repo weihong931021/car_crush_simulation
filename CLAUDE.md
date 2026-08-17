@@ -67,6 +67,24 @@ expectedFailure 在補完實作後全部以 unexpected success 現形，才轉�
 
 **產品決定（2026-07 內部會議）**：demo 呈現到碰撞瞬間為止，碰後彈開不播
 （`main.js` 以 impactTime 截斷；物理照算，要恢復播放拿掉 cutT 即可）。
+未碰撞時播到錯車後 4 s 為止（模擬本身跑到兩車走完路徑，慢車設定可達上百秒）。
+
+**模擬視野（2026-08-17 修）**：`simulate()` 舊版寫死 `maxTime=12`，慢速情境會回報
+「未碰撞・最近距離落在 t=12.00」的假象（test1 汽車 ×0.5 其實 15.5 s 撞上），連 solve 的
+「×≤0.65 可避開」都是假的。現在預設跑到**兩車都走完路徑**為止、保險上限 180 s；回傳
+`endTime` 與 `horizonReached`（觸頂且未走完＝結論不完整），`solve.js` 把 horizonReached
+當「未證明安全」不列入安全區間並回報 `horizonTruncated`。**`minGapTime` 剛好等於上限
+就是視野截斷的訊號。**
+
+**對外 demo 呈現（2026-08-17 定調）**：觀眾是非技術人——預設不顯示任何絕對 km/h、
+class、track id（`?debug=1` 才顯示），只顯示倍率 ×k；時間軸顯示秒數不顯示幀號；兩台同
+label 的車自動加 A/B；鏡頭 preset 以兩車軌跡包圍盒取景（`actionBounds`），不是地面中心。
+`OrbitControls` 建構時就把 `camera.up` 抓死，之後改它不理——頂視圖不要動 up，改成從正上方
+往南偏 0.5°，否則相機落在極點左鍵拖曳完全沒反應。
+
+**對外簡報圖**：`docs/diagrams/`（三張 16:9 SVG：概念架構／使用流程／元件級技術架構），
+由 `make_diagrams.py` 產生——**改字改座標請改產生器再重跑**，不要手改 SVG；生圖 prompt 在
+`image-gen-prompts.md`。
 
 **資料陷阱**：追蹤器位置在碰撞前 0.5s 會凍結（bbox 重疊+平滑假象），位移回推的
 絕對速度不可靠——UI 滑桿因此用「實錄剖面倍率 ×k」語意，km/h 僅供參考顯示。
@@ -196,7 +214,10 @@ vs kee-cc 1.29×），而且有**獨立的 homography 度量缺陷**——用 h=
 
   test1 就是這樣做的：`sat_test1.png` 1676×1148 @34.41px/m → 48.71×33.36m，與
   `scene.json` 的 `size_m` **完全相同**；`ground.png` 1515×1038 是它的 0.904 倍縮放
-  （31.10 = 34.41×0.904）。taipei-cm 同樣吻合（1190×1258 @27.85 → 42.72×45.16m，
+  （31.10 = 34.41×0.904）。**但 `scenes/test1/ground.png` 是幾何相同、畫質遠好於
+  `sat_test1.png` 的增強版**（2026-08-17 實測：拿 `sat_test1.png` 或它的 `image_enhance`
+  輸出換掉它會明顯變糊，Gemini 對整張圖只抓到 2 台車、inpaint 還留下污漬）——**不要重產
+  test1 的 ground.png**。taipei-cm 同樣吻合（1190×1258 @27.85 → 42.72×45.16m，
   軌跡 x 9.0–33.2、y 15.7–43.1 完全落在範圍內）。
 
   **陷阱**：`--sat-dir`（satellite_pipeline 新擷取的 Google 圖）是**另一張不同取景的圖**，
