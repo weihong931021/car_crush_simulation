@@ -15,7 +15,36 @@ lat/lon
 
 ---
 
-## 用法
+## 網頁版（2026-08-16，spec `docs/specs/2026-08-16-web-onboarding-flow-design.md`）
+
+```bash
+python3 satellite_pipeline/webapp.py        # → http://127.0.0.1:8765/
+```
+
+零依賴（stdlib http.server），輸出與 CLI 同一個 `output/<code>/`。流程：
+
+1. 輸入經緯度＋代號 → **擷取原圖**：由高到低探測可用 zoom（空白圖磚自動降級）、抓整張 1280²
+2. 滑桿選底圖大小（≤ 涵蓋範圍純前端裁中央、零延遲；要更大按「降 zoom 重抓」，解析度減半）
+3. **鎖定並去車銳化**：raw 裁中央 → Gemini 偵測＋inpaint → 2x 銳化（選配 genai HD）→ 人眼檢視
+   - 去車放在鎖定**之後**是實測結果：Gemini 對整張 1280² 只抓到 7 台、對 728² 裁切抓到 38 台
+   - Gemini 偵測有隨機性（同一張圖 5／13 台）→ 「再跑一次去車」可重抽，不必重擷取
+4. 鎖定後 `meta.json` 帶 `locked: true`，`size_m`／`px_per_meter` 就是後續標註的座標系，不可再改
+   （要改就重新擷取，會整組覆蓋）
+
+`meta.json` 新欄位：`decar_status`（`ok`／`no_vehicles`／`no_key`／`failed`）——降級不再與
+「真的沒車」同值，前端據此警示；`size_m` 不再可能是 `null`（不裁切時寫實際涵蓋公尺數）；
+鎖定後帶 `locked: true`。
+
+實機驗證（台南永康）：zoom 21 → 29.11 px/m 涵蓋 43.97 m（約 1 秒）；按「降 zoom 重抓」
+→ zoom 20 → 14.56 px/m 涵蓋 87.93 m（解析度減半、範圍加倍）；鎖定 25 m 含去車銳化約 12 秒。
+同一張圖重跑去車三次得 5／13／4 台——**Gemini 偵測有隨機性**，所以有「再跑一次去車」。
+
+> **標註只能對著 `sat_clean`**：`sat_genai` 是生圖重畫，實測位移中位數 0.20–0.30 m
+> （見下方「生圖的幾何代價」）。拿它當標註底圖 = 把 0.2 m 誤差烙進座標系。
+
+---
+
+## 用法（CLI）
 
 ```bash
 # 設 key（擇一）：環境變數 或 satellite_pipeline/.env
@@ -139,6 +168,7 @@ python3 satellite_pipeline/pipeline.py --code .. --skip-capture   # 只重新增
 | 檔案 | 角色 |
 | --- | --- |
 | `pipeline.py` | 一鍵編排 |
+| `webapp.py` + `web/index.html` | 網頁版（擷取 → 選大小 → 鎖定去車 → 檢視），API：`/api/capture`、`/api/lock`、`/api/enhance`、`/api/state/<code>` |
 | `map_capture.py` | Google Static API 擷取 |
 | `image_enhance.py` | Gemini 去車 + 銳化高清化；`--genai` 生圖（gemini／openai 雙供應商）|
 | `measure_genai_drift.py` | 量生圖模型的幾何漂移（分塊相位相關）|

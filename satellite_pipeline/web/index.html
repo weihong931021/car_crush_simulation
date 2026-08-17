@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>底圖工作台</title>
+<style>
+  :root{
+    --paper:#E9ECF0; --panel:#FFFFFF; --ink:#16202A; --muted:#5B6672; --line:#CBD2DA;
+    --teal:#0E7C86; --teal-ink:#0A5B62; --tape:#F2B705; --warn:#B45309; --warn-bg:#FEF3C7;
+    --bad:#B42318; --bad-bg:#FEE4E2; --ok:#067647; --ok-bg:#DCFAE6;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,"PingFang TC","Noto Sans TC",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 var(--sans)}
+  header{display:flex;align-items:baseline;gap:18px;padding:18px 28px 12px;border-bottom:1px solid var(--line)}
+  header h1{margin:0;font-size:20px;font-weight:600;letter-spacing:.02em}
+  .steps{display:flex;gap:6px;font-size:13px;color:var(--muted)}
+  .steps span{padding:2px 10px;border-radius:999px;border:1px solid var(--line)}
+  .steps span.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  main{display:grid;grid-template-columns:320px 1fr;gap:20px;padding:20px 28px;max-width:1400px}
+  @media (max-width:900px){main{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px}
+  h2{margin:0 0 12px;font-size:13px;font-weight:600;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+  label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+  input[type=text],input[type=number]{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font:14px var(--mono);color:var(--ink);background:#FAFBFC}
+  input:focus-visible,button:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .check{display:flex;align-items:center;gap:8px;margin-top:14px;font-size:14px}
+  button{font:600 14px var(--sans);padding:10px 16px;border-radius:8px;border:1px solid transparent;cursor:pointer}
+  button.primary{background:var(--teal);color:#fff}
+  button.primary:hover{background:var(--teal-ink)}
+  button.ghost{background:transparent;color:var(--teal-ink);border-color:var(--line)}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .full{width:100%;margin-top:16px}
+  .hint{font-size:12.5px;color:var(--muted);margin-top:8px}
+  .status{margin-top:12px;font-size:13px;min-height:20px}
+  .status.busy::before{content:"";display:inline-block;width:10px;height:10px;border:2px solid var(--teal);border-right-color:transparent;border-radius:50%;margin-right:8px;vertical-align:-1px;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.status.busy::before{animation:none}}
+  .banner{padding:8px 12px;border-radius:6px;font-size:13px;margin-top:10px}
+  .banner.warn{background:var(--warn-bg);color:var(--warn)}
+  .banner.bad{background:var(--bad-bg);color:var(--bad)}
+  .banner.ok{background:var(--ok-bg);color:var(--ok)}
+
+  /* 取景器 */
+  .tabs{display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap;align-items:center}
+  .tabs button{padding:6px 12px;font-weight:500;background:transparent;border-color:var(--line);color:var(--muted)}
+  .tabs button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .tabs .meta{margin-left:auto;font:12.5px var(--mono);color:var(--muted)}
+  .stage{position:relative;background:#0F1417;border-radius:8px;overflow:hidden;aspect-ratio:1/1;max-height:70vh;margin:auto}
+  .stage canvas{display:block;width:100%;height:100%}
+  .empty{position:absolute;inset:0;display:grid;place-items:center;color:#8B95A0;font-size:14px;text-align:center;padding:20px}
+  .readouts{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:14px}
+  .ro{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+  .ro b{display:block;font:600 20px/1.2 var(--mono);color:var(--ink)}
+  .ro span{font-size:12px;color:var(--muted)}
+  .sizer{margin-top:16px;display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center}
+  .sizer input[type=range]{width:100%;accent-color:var(--tape)}
+  .sizer output{font:600 18px var(--mono);min-width:5ch;text-align:right}
+  .actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<header>
+  <h1>底圖工作台</h1>
+  <div class="steps"><span id="s1" class="on">① 輸入</span><span id="s2">② 確認鎖定</span><span>③ 標註</span><span>④ 呈現</span></div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>地點</h2>
+    <div class="row">
+      <div><label for="lat">緯度</label><input id="lat" type="text" inputmode="decimal" placeholder="23.026901"></div>
+      <div><label for="lon">經度</label><input id="lon" type="text" inputmode="decimal" placeholder="120.249615"></div>
+    </div>
+    <label for="code">地點代號（英數、-、_）</label>
+    <input id="code" type="text" placeholder="tainan_yongkang">
+    <button id="go" class="primary full">擷取底圖</button>
+    <p class="hint">以經緯度為中心抓該地點可用的最高 zoom（≈29 px/m、單張約 44 m）的原圖。大小在右側用滑桿決定，縮小不必重抓；鎖定時才對裁好的範圍去車銳化（小圖偵測準得多）。</p>
+    <div id="status" class="status"></div>
+    <div id="notes"></div>
+  </section>
+
+  <section class="card">
+    <div class="tabs" id="tabs">
+      <span class="meta" id="zoomMeta"></span>
+    </div>
+    <div class="stage">
+      <canvas id="cv" width="1024" height="1024"></canvas>
+      <div class="empty" id="empty">輸入經緯度後按「擷取底圖」，衛星圖會顯示在這裡</div>
+    </div>
+    <div class="readouts">
+      <div class="ro"><b id="roSize">—</b><span>底圖邊長 (m)</span></div>
+      <div class="ro"><b id="roPpm">—</b><span>解析度 (px/m)</span></div>
+      <div class="ro"><b id="roPx">—</b><span>輸出邊長 (px)</span></div>
+      <div class="ro"><b id="roCover">—</b><span>本次可用上限 (m)</span></div>
+    </div>
+    <div class="sizer">
+      <span>底圖大小</span>
+      <input id="size" type="range" min="10" max="44" step="1" value="40" disabled>
+      <output id="sizeOut">40 m</output>
+    </div>
+    <div id="sizeNote"></div>
+    <label class="check"><input id="genai" type="checkbox"> 鎖定時同時產 Gemini HD 版（較慢、需人眼驗標線）</label>
+    <div class="actions">
+      <button id="lock" class="primary" disabled>鎖定這個大小並去車銳化</button>
+      <button id="bigger" class="ghost" disabled>需要更大範圍：降 zoom 重抓</button>
+      <button id="redo" class="ghost" disabled>再跑一次去車</button>
+    </div>
+    <div id="lockedNote"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const state = { code:null, meta:null, variants:{}, coverage:0, tab:null, img:null };
+const TAB_LABEL = { "sat_raw.png":"原圖", "sat_clean.png":"去車銳化", "sat_genai.png":"Gemini HD" };
+
+function setStatus(msg, busy=false){ $("status").textContent = msg; $("status").className = "status" + (busy?" busy":""); }
+function banner(el, kind, html){ el.innerHTML = html ? `<div class="banner ${kind}">${html}</div>` : ""; }
+
+async function api(path, body){
+  const r = await fetch(path, { method: body ? "POST" : "GET", headers:{"Content-Type":"application/json"}, body: body && JSON.stringify(body) });
+  const j = await r.json();
+  if(!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+$("go").onclick = () => capture();
+$("bigger").onclick = () => capture((state.meta?.zoom || 21) - 1);
+
+async function capture(zoom){
+  const lat = parseFloat($("lat").value), lon = parseFloat($("lon").value), code = $("code").value.trim();
+  if(!isFinite(lat) || !isFinite(lon)) return setStatus("緯度／經度要是數字");
+  if(!/^[A-Za-z0-9_-]+$/.test(code)) return setStatus("地點代號只能用英數、-、_");
+  $("go").disabled = true; $("bigger").disabled = true; $("lock").disabled = true;
+  setStatus(zoom ? `以 zoom ${zoom} 重抓原圖中…` : "擷取衛星圖原圖中…", true);
+  banner($("notes"), "", ""); banner($("lockedNote"), "", "");
+  try{
+    const st = await api("/api/capture", { lat, lon, code, zoom });
+    applyState(st);
+    setStatus("原圖擷取完成。拖滑桿決定大小，再按鎖定去車。");
+  }catch(e){ setStatus("失敗：" + e.message); }
+  finally{ $("go").disabled = false; }
+}
+
+function applyState(st){
+  state.code = st.code; state.meta = st.meta; state.variants = st.variants; state.coverage = st.coverage_m;
+  $("s1").classList.remove("on"); $("s2").classList.add("on");
+  $("zoomMeta").textContent = `${st.meta.zoom_probe || "zoom "+st.meta.zoom} · ${st.meta.px_per_meter} px/m`;
+  // 去車狀態警示（降級不能靜默）；鎖定前還沒去車，不顯示
+  const ds = st.meta.decar_status;
+  const msg = { no_key:"沒有 GEMINI_API_KEY，這張圖<strong>沒有去車</strong>", failed:"Gemini 去車失敗，這張圖<strong>沒有去車</strong>（只銳化）",
+                no_vehicles:"Gemini 沒偵測到車輛（可能真的沒車，也可能漏偵測）", ok:`已去除 ${st.meta.vehicles_removed} 台車，請切「去車銳化」分頁檢視品質` }[ds];
+  banner($("notes"), ds==="ok" ? "ok" : (ds==="no_vehicles" ? "warn" : "bad"), ds ? msg : "");
+  // tabs
+  const tabs = $("tabs"); tabs.querySelectorAll("button").forEach(b=>b.remove());
+  const names = Object.keys(st.variants);
+  const preferred = names.includes("sat_genai.png") ? "sat_genai.png" : names.includes("sat_clean.png") ? "sat_clean.png" : names[0];
+  names.forEach(n => {
+    const b = document.createElement("button"); b.textContent = TAB_LABEL[n] || n;
+    b.onclick = () => showTab(n); b.dataset.name = n; tabs.insertBefore(b, $("zoomMeta"));
+  });
+  // slider
+  const s = $("size"), maxM = Math.floor(st.coverage_m);
+  s.max = maxM; s.disabled = !!st.meta.locked;
+  if(st.meta.locked) s.value = st.meta.size_m; else if(+s.value > maxM) s.value = maxM;
+  $("roCover").textContent = st.coverage_m.toFixed(1);
+  $("bigger").disabled = !!st.meta.locked || st.meta.zoom <= 19;
+  $("lock").disabled = !!st.meta.locked;
+  $("redo").disabled = !st.meta.locked;
+  if(st.meta.locked) banner($("lockedNote"), "ok",
+    `已鎖定 <b>${st.meta.size_m} m</b> @ ${st.meta.px_per_meter} px/m（${st.meta.img_w}×${st.meta.img_h} px raw）。` +
+    `這組數字就是後續標註的座標系。品質不行就改參數重新「擷取底圖」。<br>下一步：<code>tools/build_scene.py --sat-dir satellite_pipeline/output/${st.code} …</code>`);
+  showTab(preferred);
+}
+
+function showTab(name){
+  state.tab = name;
+  $("tabs").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.name === name));
+  const im = new Image();
+  im.onload = () => { state.img = im; $("empty").style.display = "none"; draw(); };
+  im.src = state.variants[name].url;
+}
+
+$("size").oninput = draw;
+
+function draw(){
+  const cv = $("cv"), ctx = cv.getContext("2d");
+  const size = +$("size").value; $("sizeOut").textContent = size + " m";
+  if(!state.img || !state.meta) return;
+  const m = state.meta, locked = !!m.locked;
+  const W = cv.width;
+  ctx.fillStyle = "#0F1417"; ctx.fillRect(0,0,W,W);
+  ctx.drawImage(state.img, 0, 0, W, W);
+  // 裁切框：以 raw 像素為準換算成 canvas 比例（鎖定後圖已裁好，框就是整張）
+  const frac = locked ? 1 : Math.min(1, size / state.coverage);
+  const side = W * frac, off = (W - side) / 2;
+  if(!locked){
+    ctx.fillStyle = "rgba(15,20,23,.55)";
+    ctx.fillRect(0,0,W,off); ctx.fillRect(0,off+side,W,off); ctx.fillRect(0,off,off,side); ctx.fillRect(off+side,off,off,side);
+  }
+  ctx.strokeStyle = "#F2B705"; ctx.lineWidth = 3; ctx.strokeRect(off+1.5, off+1.5, side-3, side-3);
+  // 角標
+  ctx.lineWidth = 6; const L = 28;
+  [[off,off,1,1],[off+side,off,-1,1],[off,off+side,1,-1],[off+side,off+side,-1,-1]].forEach(([x,y,dx,dy])=>{
+    ctx.beginPath(); ctx.moveTo(x, y+dy*L); ctx.lineTo(x,y); ctx.lineTo(x+dx*L, y); ctx.stroke();
+  });
+  // 比例尺 10 m
+  const ppmCanvas = W / state.coverage, bar = 10 * ppmCanvas;
+  ctx.fillStyle = "#fff"; ctx.fillRect(24, W-40, bar, 4);
+  ctx.font = "600 18px ui-monospace, Menlo, monospace"; ctx.fillText("10 m", 24, W-50);
+  // 讀數
+  const ppm = m.px_per_meter;
+  $("roSize").textContent = locked ? m.size_m : size;
+  $("roPpm").textContent = ppm.toFixed(2);
+  $("roPx").textContent = Math.round((locked ? m.size_m : size) * ppm);
+  const note = $("sizeNote");
+  if(!locked && size >= state.coverage - 0.5) banner(note, "warn", `已到本次擷取上限 ${state.coverage.toFixed(1)} m。要更大請「降 zoom 重抓」，解析度會減半（約 ${(ppm/2).toFixed(1)} px/m）。`);
+  else banner(note, "", "");
+}
+
+$("redo").onclick = async () => {
+  $("redo").disabled = true; setStatus("重新偵測車輛 → 去車銳化中…（Gemini 每次結果不同）", true);
+  try{ applyState(await api("/api/enhance", { code: state.code, genai: $("genai").checked })); setStatus("去車完成。請檢視品質。"); }
+  catch(e){ setStatus("失敗：" + e.message); $("redo").disabled = false; }
+};
+
+$("lock").onclick = async () => {
+  const size = +$("size").value;
+  if(!confirm(`鎖定 ${size} m？鎖定後大小與座標尺度不可再改（要改就重新擷取）。`)) return;
+  $("lock").disabled = true; setStatus("裁切 → 偵測車輛 → 去車銳化中…" + ($("genai").checked ? "（含 Gemini HD，會久一點）" : ""), true);
+  try{ applyState(await api("/api/lock", { code: state.code, size_m: size, genai: $("genai").checked })); setStatus("已鎖定並去車。請檢視品質。"); }
+  catch(e){ setStatus("鎖定失敗：" + e.message); $("lock").disabled = false; }
+};
+</script>
+</body>
+</html>

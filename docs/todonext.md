@@ -291,6 +291,32 @@ ground.px_per_meter = meta.px_per_meter × 縮放比    （不縮放時就是 me
 
 ## Track A：衛星圖自動化 pipeline（→ `satellite_pipeline/` 模組，✅ 已完成）
 
+> **2026-08-16 網頁化進場流程**：spec `docs/specs/2026-08-16-web-onboarding-flow-design.md`
+> （① 輸入經緯度/影片/大小 → ② 底圖自動截圖＋去車、滑桿調大小、人工確認鎖定 →
+> ③ 標註 → ④ Three.js）。底圖大小改由使用者輸入、太大可縮小不重截；② 鎖定的圖就是
+> 校正參考圖，`--sat-dir` 只限合成軌跡的限制在此流程下消失。
+
+### ①② 底圖網頁工作台（✅ 2026-08-16 完成，2026-08-17 實機驗證）
+
+`satellite_pipeline/webapp.py` + `web/index.html`，`python3 satellite_pipeline/webapp.py`
+→ <http://127.0.0.1:8765/>。stdlib http.server，零依賴，輸出與 CLI 共用 `output/<code>/`。
+
+- [x] 探測可用 zoom（空白圖磚自動降級）＋抓整張 1280² 原圖
+- [x] 滑桿選大小：≤ 涵蓋範圍純前端裁中央（零延遲），超過按「降 zoom 重抓」
+      （實測 zoom 21 → 43.97 m @29.11px/m；zoom 20 → 87.93 m @14.56px/m）
+- [x] 鎖定＝裁切 + 去車 + 2x 銳化，之後才人眼驗品質；`locked: true` 後不可再改大小
+- [x] `decar_status` 讓去車降級不再靜默（前端紅／黃／綠橫幅）
+- [x] 「再跑一次去車」——Gemini 偵測有隨機性（同圖三次 5／13／4 台）
+- [x] 離線測試 `tests/test_webapp.py` 10 測（TDD 先紅後綠）；全套 26 測綠
+- 順手修掉的兩個既有坑：`size_m: null` → 寫實際涵蓋公尺數（`pick_sat` 不再 TypeError）、
+      `map_capture` 拆出 `finish_capture()` 讓裁切／meta 規則可離線測
+
+**接 ③ 標註的硬約束**：對應點只能標在 `sat_clean`（位移 0.00 m），不可標在 `sat_genai`
+（生圖重畫，位移 0.20–0.30 m，見 `measure_genai_drift.py`）。
+
+待補（不擋 ③ 開工）：網頁端寫死預設 provider（gemini）、CLI `pipeline.py` 一鍵仍不含 genai、
+Gemini 呼叫無 timeout／重試、`--strict`（去車失敗非零退出）未做。
+
 ### 已完成（2025-06）
 
 - **圖源鎖定**：Google Maps Static API `zoom=21 scale=2` = 29 px/m（此地點上限）

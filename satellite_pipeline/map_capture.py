@@ -69,6 +69,18 @@ def capture(lat: float, lon: float, code: str, zoom: int = 21,
 
     from PIL import Image
     img = Image.open(io.BytesIO(data)).convert("RGB")
+    return finish_capture(img, lat, lon, code, zoom, scale, size_m)
+
+
+def finish_capture(img, lat: float, lon: float, code: str, zoom: int, scale: int,
+                   size_m: float | None, out_dir: Path | None = None) -> dict:
+    """抓到的整張圖 → （選配）裁中央 → 存 sat_raw.png + meta.json。
+
+    與網路抓圖拆開，讓裁切／meta 規則可以離線測試，也讓 webapp 能對同一張圖重複套用。
+    size_m 為 None 時 meta.size_m 寫**實際涵蓋公尺數**（img_w / ppm）而不是 null——
+    下游 build_scene.pick_sat 拿 size_m 當除數，null 會直接 TypeError。
+    """
+    validate_code(code)
     ppm = px_per_meter(lat, zoom, scale)
 
     if size_m:
@@ -76,9 +88,11 @@ def capture(lat: float, lon: float, code: str, zoom: int = 21,
         w, h = img.size
         half = side // 2
         cx, cy = w // 2, h // 2
-        img = img.crop((cx - half, cy - half, cx + half, cy + half))
+        img = img.crop((cx - half, cy - half, cx - half + side, cy - half + side))
+    else:
+        size_m = img.size[0] / ppm
 
-    out_dir = OUTPUT_DIR / code
+    out_dir = Path(out_dir) if out_dir else OUTPUT_DIR / code
     out_dir.mkdir(parents=True, exist_ok=True)
     img_path = out_dir / "sat_raw.png"
     img.save(img_path)

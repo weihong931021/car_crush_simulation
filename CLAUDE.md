@@ -34,7 +34,7 @@ spec：`docs/specs/2026-07-20-collision-simulation-design.md`。前向模擬 + O
 ```bash
 node --test threejs/lib/tests/*.test.js                     # 期望 fail 0（todo 3 是已知缺口）
 python3 -m unittest discover -s tools/tests                  # 期望 OK（23 測，已無 expected failure）
-python3 -m unittest discover -s satellite_pipeline/tests     # 代號驗證 + 產生程式碼跳脫
+python3 -m unittest discover -s satellite_pipeline/tests     # 代號驗證 + 增強幾何 + 網頁鎖定流程 + 生圖尺寸（26 測）
 (cd trafficlab-project && .venv-pifpaf/bin/python -m unittest discover -s tests)  # haware 手性回歸
 node tools/verify_scenes.mjs                                 # 全場景 headless 冒煙，期望全過
 ```
@@ -133,6 +133,36 @@ trajectory.json **sha256 位元組級相同**。
 
 實證有效：taipei-cm 的 track 53 可用率 83%、track 1 掛 ⚠（0 個輪點、0% 可用率）——
 這與獨立量測的 heading 誤差 3.10° vs 90.23° 完全一致，**不需要 ground truth 就挑得出好 track**。
+
+### 底圖網頁工作台（2026-08-16，spec `docs/specs/2026-08-16-web-onboarding-flow-design.md`）
+
+```bash
+python3 satellite_pipeline/webapp.py     # → http://127.0.0.1:8765/
+```
+
+網頁化進場流程的 ①②（輸入經緯度 → 底圖確認鎖定），stdlib http.server 零依賴，
+輸出與 CLI 共用 `output/<code>/`。三條必記的規則：
+
+- **去車在裁切之後**：Gemini 對整張 1280² 只偵測到 7 台車、對裁好的 728² 偵測到 38 台。
+  所以「擷取」只抓原圖，選好大小按「鎖定」時才去車——順序反了偵測率掉一個量級
+- **`locked: true` 之後 `size_m`／`px_per_meter` 就是座標系**，要改只能重新擷取（整組覆蓋）
+- **標註只能對著 `sat_clean`**：`sat_genai` 是生圖重畫，實測位移中位數 0.20 m（gemini）／
+  0.30 m（gpt-image-2），`sat_clean` 是 0.00 m。標在 genai 上＝把 0.2m 誤差烙進 G-projection。
+  量法：`satellite_pipeline/measure_genai_drift.py`（分塊相位相關）
+- `meta.decar_status`（ok／no_vehicles／no_key／failed）讓去車降級不再靜默；Gemini 偵測有
+  隨機性（同圖三次 5／13／4 台），前端有「再跑一次去車」
+
+**地面圖增強的安全邊界**：`image_enhance.py --input/--output` 走的是
+「Gemini 偵測車框 → cv2 inpaint 去車 → UnsharpMask 銳化 → LANCZOS 整數倍放大」，
+**只動局部像素與像素密度，不動幾何**，所以 `size_m` 不變、只有 `px_per_meter` 乘上倍率。
+函式內有最後一道 assert，尺寸若不是精確整數倍會直接 raise。
+**`--genai` 不可用於此路徑**（生圖模型重畫整張，路面內容會被改寫），CLI 會直接擋下。
+`--genai-provider` 預設 `gemini`（實測較忠於原圖）；選 `openai` 時成本（1280×1280 實測）
+low $0.033／medium $0.089／high 約 $0.28 一張，輸入那份約 $0.026 不隨 quality 變。
+
+`--sat-dir`（satellite_pipeline 新擷取的圖）只適用於**在衛星座標系合成的軌跡**
+（tainan_yongkang），真實影片用它會錯位——satellite_pipeline 的定位是合成場景的地面來源，
+不是真實影片的地面來源。
 
 ### 路徑產生器 haware（2026-07-28 起由本 repo 接管，不再是隊友專屬）
 
