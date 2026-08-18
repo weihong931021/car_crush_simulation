@@ -10,6 +10,10 @@ from typing import Any, Iterable
 import numpy as np
 from scipy.signal import savgol_filter
 
+from trafficlab.motion.localization_authority import (
+    authoritative_position,
+    has_real_track_motion_authority,
+)
 from trafficlab.trajectory.io import (
     default_smooth_output_path,
     frames_from_data,
@@ -48,11 +52,15 @@ def _valid_point(value: Any) -> bool:
 def _collect_tracks(
     frames: list[dict[str, Any]],
     selected_ids: set[int] | None,
-) -> tuple[dict[int, list[dict[str, Any]]], int]:
-    tracks: dict[int, list[dict[str, Any]]] = {}
+) -> tuple[dict[tuple[int, int], list[dict[str, Any]]], int]:
+    """Collect uninterrupted accepted real-track segments only."""
+    segments: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    active_segments: dict[int, int] = {}
+    next_segment: dict[int, int] = {}
     invalid_count = 0
 
     for frame in frames:
+        accepted_this_frame: set[int] = set()
         for obj in frame.get("objects", []):
             tracked_id = obj.get("tracked_id")
             if tracked_id is None:
@@ -62,14 +70,27 @@ def _collect_tracks(
             if selected_ids is not None and track_id not in selected_ids:
                 continue
 
-            sat_coords = obj.get("sat_coords")
-            if not _valid_point(sat_coords):
+            position = authoritative_position(obj)
+            is_real = has_real_track_motion_authority(obj)
+            if position is None or not is_real:
                 invalid_count += 1
+                active_segments.pop(track_id, None)
                 continue
 
-            tracks.setdefault(track_id, []).append(obj)
+            segment_id = active_segments.get(track_id)
+            if segment_id is None:
+                segment_id = next_segment.get(track_id, 0)
+                next_segment[track_id] = segment_id + 1
+                active_segments[track_id] = segment_id
+            obj["_authority_input_position"] = position
+            segments.setdefault((track_id, segment_id), []).append(obj)
+            accepted_this_frame.add(track_id)
 
-    return tracks, invalid_count
+        for track_id in tuple(active_segments):
+            if track_id not in accepted_this_frame:
+                active_segments.pop(track_id, None)
+
+    return segments, invalid_count
 
 
 def _validate_filter_args(window_length: int, polyorder: int) -> None:
@@ -92,10 +113,11 @@ def smooth_trajectories(
     update_sat_center: bool = True,
     in_place: bool = False,
 ) -> tuple[Any, SmoothStats]:
-    """Smooth TrafficLab ``sat_coords`` values grouped by ``tracked_id``.
+    """Smooth uninterrupted authoritative real-track segments.
 
-    The function preserves the original replay shape and only mutates
-    ``sat_coords`` plus ``sat_center`` when present and requested.
+    Localization compatibility coordinates remain untouched. Derived smoothing
+    output is written to ``smoothed_position_sat_px`` and never spans a
+    rejected, missing, pseudo-track, or no-track record.
     """
     _validate_filter_args(window_length, polyorder)
 
@@ -104,6 +126,7 @@ def smooth_trajectories(
     selected_id_set = _normalize_ids(selected_ids)
     tracks, invalid_count = _collect_tracks(frames, selected_id_set)
 
+    track_ids = {track_id for track_id, _ in tracks}
     smoothed_tracks = 0
     skipped_short_tracks = 0
     updated_points = 0
@@ -111,24 +134,27 @@ def smooth_trajectories(
     for objects in tracks.values():
         if len(objects) < window_length:
             skipped_short_tracks += 1
+            for obj in objects:
+                obj.pop("_authority_input_position", None)
             continue
 
-        coords = np.array([obj["sat_coords"][:2] for obj in objects], dtype=float)
+        coords = np.array([obj["_authority_input_position"] for obj in objects], dtype=float)
         smoothed_x = savgol_filter(coords[:, 0], window_length, polyorder)
         smoothed_y = savgol_filter(coords[:, 1], window_length, polyorder)
 
         for obj, x_value, y_value in zip(objects, smoothed_x, smoothed_y):
             point = [float(x_value), float(y_value)]
-            obj["sat_coords"] = point
-            if update_sat_center and "sat_center" in obj:
-                obj["sat_center"] = point.copy()
+            obj["smoothed_position_sat_px"] = point
+            obj.pop("_authority_input_position", None)
+            if update_sat_center:
+                obj["visual_sat_center"] = point.copy()
             updated_points += 1
 
         smoothed_tracks += 1
 
     stats = SmoothStats(
-        total_tracks=len(tracks),
-        selected_tracks=len(tracks),
+        total_tracks=len(track_ids),
+        selected_tracks=len(track_ids),
         smoothed_tracks=smoothed_tracks,
         skipped_short_tracks=skipped_short_tracks,
         skipped_invalid_tracks=invalid_count,

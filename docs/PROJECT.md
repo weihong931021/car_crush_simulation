@@ -20,72 +20,40 @@
     │       現況：80% 可行，需優化影片品質與路徑線性化
     │
     └── [Track B] 碰撞場景重建（本專案核心）
-            自然語言描述碰撞規格
-                → Claude Code + Blender MCP
-                → 下載 3D 車輛模型（Sketchfab）
-                → 生成碰撞動畫腳本
-                → Blender 渲染輸出
+            軌跡 JSON + 衛星圖 → tools/build_scene.py → 場景包
+                → Three.js 播放器（JS 碰撞物理 + 互動 UI + 渲染）
+                → 可分享的網頁 demo
 ```
 
-### Track B 技術細節
+> **架構演進**：早期 Track B 走 Claude Code + Blender MCP 生成碰撞動畫（POC 已驗證，
+> 見下方「早期 Blender POC」）。2026-07 起改為**場景包驅動的 Three.js 網頁播放器**，
+> 2026-08-05 全面轉 Three.js、移除 Blender 工具鏈。渲染與出版級畫面都在瀏覽器。
 
-**工具鏈**：Claude Code CLI → Blender MCP (`blender-mcp` port 9876) → Blender 5.x Python API
+### Track B 技術細節（現行：Three.js）
 
-**已驗證可行**：
-- 透過 Sketchfab 直接下載指定車型（Tesla Model 3 UID: `5ef9b845aaf44203b6d04e2c677e444f`）
-- 正確複製整個物件 hierarchy（301 個子物件），非僅複製根節點
-- 純 Y 軸正面碰撞動畫：等速接近 → 碰撞衝量 → 摩擦減速
-- 物理正確：垂直撞擊無側向位移、無旋轉
-- 在 3-4 次對話內完成完整 demo
+- 物理模組化在 `threejs/lib/`（path/obb/simulate/solve/physics）：前向模擬 + OBB SAT +
+  衝量，安全速度區間；播放器讀 `scenes/<code>/` 場景包，換場景零改碼
+- 車輛 GLB 是 committed 資產（`threejs/models/`），`GLTFLoader` + `registry.json` 載入
+- 驗證：`node --test threejs/lib/tests/*.test.js`、`node tools/verify_scenes.mjs`
 
-**已踩過的坑**（Gemini 失敗點，Claude 已解決）：
-- 搜尋 Tesla Model 3 卻跑出 Cybertruck → 需指定 Sketchfab UID
-- Z 軸旋轉 180° 指令執行失敗 → 用 `math.radians(180)` 精確指定
-- linked duplicate 只複製根物件，子物件不跟 → 需 select all children 再 duplicate
-- **Tesla Model 3 前端在本地 +Y 方向**（非 -Y）→ 正面對撞設定：靜止車 Z-rot=180°（前端朝 -Y），撞擊車 Z-rot=0°（前端朝 +Y），從 Y=-15 往 +Y 推進
-- **Sketchfab 匯入的根物件旋轉模式是 QUATERNION**，設定 `rotation_euler` 無效 → 須先 `obj.rotation_mode = 'XYZ'` 再設 euler，或直接設 `rotation_quaternion`
-- Blender 5.x Action API 改版 → 用 `action.layers[0]` layered action 存取 fcurves
-
----
-
-## Skills 規劃
-
-### 1. `blender-collision-physics`（優先）
-碰撞場景生成的物理規則，讓 Claude 不用每次重新推導：
-
-- **垂直碰撞**：只有衝擊方向（Y 軸）有力，X/Z 無側向位移，無旋轉
-- **斜角碰撞**：力的分量計算、碰撞角度 → 偏轉角度換算
-- **動量傳遞**：靜止車被撞後初速 ≈ 撞擊車速 × 質量比
-- **關鍵幀曲線**：接近段 LINEAR，衝量段 2-3 幀急劇，摩擦段漸近停止
-- **Blender 5.x 注意事項**：layered action API、hierarchy duplicate 方法
-
-### 2. `blender-vehicle-motion`
-車輛啟動/停止/沿軌跡移動的規則：
-
-- 啟動：0 → 最高速（慢到快，Ease-in）
-- 停止：最高速 → 0（快到慢，Ease-out + 摩擦力）
-- 轉彎時速度自動降低
-- Track A 軌跡輸入格式：`[(frame, x, y, heading_deg)]` 序列
-
-### 3. `blender-scene-setup`
-場景初始化標準流程：
-
-- 清除預設 Cube、保留 Camera/Light
-- 從 Sketchfab 下載車型（維護常用車型 UID 表）
-- 正確複製 hierarchy 的方法
-- 地面、燈光、攝影機基本配置
+**早期 Blender POC（已淘汰，保留為記錄）**：工具鏈 Claude Code CLI → Blender MCP →
+Blender 5.x Python API。已驗證：Sketchfab 下載 Tesla Model 3
+（UID `5ef9b845aaf44203b6d04e2c677e444f`）、複製 301 子物件 hierarchy、純 Y 軸正面碰撞
+動畫、3-4 次對話完成 demo。踩過的坑：Cybertruck 誤搜需指定 UID、QUATERNION 根物件須先設
+`rotation_mode='XYZ'`、Blender 5.x layered action API、Tesla 前端朝本地 +Y。
+**這些只對重啟 Blender 路線有意義，現行網頁流程不需要。**
 
 ---
 
 ## Agents 策略
 
 **適合並行的任務（可用 agents）**：
-1. **多場景並行**：同一起事故，同時生成「正面視角」和「俯視視角」兩個版本的場景腳本
-2. **Track A + Track B 並行**：軌跡計算和場景初始化同時進行，軌跡完成後再注入場景
+1. **多場景並行**：同一起事故的多視角場景包
+2. **Track A + Track B 並行**：軌跡計算和場景初始化同時進行
 
 **不適合並行的任務**：
-- 同一個 Blender session 內的步驟（sequential，共用 MCP 連線狀態）
-- 模型下載 → 複製 → 設定動畫（有先後依賴）
+- 產場景包 → verify_scenes 驗收（有先後依賴）
+- 淨化管線各步（順序固定）
 
 ---
 
@@ -109,18 +77,101 @@
 |------|------|----------|
 | 直線正面碰撞重建 | ✅ 已驗證 | 低 |
 | 斜角碰撞（T-bone、追尾偏轉）| ⏳ 未測試 | 中 |
-| Track A 軌跡 → Blender 路徑整合 | ⏳ 未測試 | 中 |
+| Track A 軌跡 → 場景包 → Three.js 路徑整合 | ✅ 已驗證（test1/tainan_yongkang） | 低 |
 | 複雜場景（多車、行人、障礙物）| ⏳ 未測試 | 高 |
 | FoundationPose 碰撞後車體變形重建 | ❌ 技術限制 | 高（考慮 Dynamic 3DGS） |
 | 整體品質依賴 Claude 模型表現 | ⚠️ 已知限制 | 中（現階段可控） |
 
 ---
 
+## NVIDIA Asset Harvester 評估（2026-07-24）
+
+### 結論
+
+[NVIDIA Asset Harvester](https://github.com/NVIDIA/asset-harvester) 有機會加入本專案，
+但它是 **image-to-3D 資產生成模型**，不是物件偵測或多物件追蹤模型，因此不能直接取代
+TrafficLab 目前的 YOLO 權重。
+
+TrafficLab 的偵測流程依賴 `YOLO.track()` 每幀提供：
+
+- 2D bounding box
+- 類別與信心值
+- `tracked_id`
+
+後續才使用這些資料進行地面投影、軌跡、速度與方向計算。Asset Harvester 的輸入則是
+一至數張已裁切、置中並帶有前景遮罩的物件影像；輸出是完整物件的 3D Gaussian Splat
+`gaussians.ply`。它不會從完整交通影片產生 TrafficLab 所需的逐幀偵測框、紅綠燈狀態
+或 `tracked_id`。
+
+### 建議整合位置
+
+```text
+事故影片
+  → YOLO 偵測與追蹤
+  → TrafficLab 投影、軌跡、速度與方向
+  → 依 tracked_id 挑選 1–4 張清楚的物件畫面
+  → 裁切與前景遮罩
+  → 雲端 Asset Harvester
+  → 每個物件的 Gaussian Splat .ply
+  → Three.js 場景載入與快取
+```
+
+因此，Asset Harvester 適合作為「辨識完成後的 3D 外觀生成器」：
+
+- YOLO 和追蹤器繼續負責車輛、機車等移動物件的辨識與身分連續性。
+- 同一個 `tracked_id` 只需挑選少量最佳視角並生成一次 3D 資產，不應逐幀執行。
+- 生成結果需以場景或 track 為單位快取，避免重複付費和等待。
+- Three.js 現有的 `car.glb`／`moto.glb` 可保留為 fallback。
+- Asset Harvester 輸出是 Gaussian Splat `.ply`，不是現有流程直接使用的 `.glb`；
+  播放器需要 Gaussian Splat loader，或另行評估轉 mesh 的品質。
+
+### 紅綠燈限制
+
+Asset Harvester 不能判斷燈號是紅、黃或綠，也不是專門的燈桿偵測器。若要納入紅綠燈：
+
+1. 使用另一個 detector 找出燈體或燈桿位置。
+2. 使用小型分類器或規則判斷每幀燈號狀態。
+3. 固定式燈桿只需建立一次 3D 資產並放入場景，不需要追蹤。
+4. Asset Harvester 主要針對自駕場景中的車輛、行人、騎士等道路物件；用於細長燈桿屬於
+   domain 外推，必須先用實際 CCTV 裁圖驗證品質。
+
+### 權重與運算需求
+
+官方開放的 checkpoint 包含：
+
+- `AH_multiview_diffusion.safetensors`
+- `AH_tokengs_lifting.safetensors`
+- `AH_camera_estimator.safetensors`
+- `AH_object_seg_jit.pt`
+
+權重合計約 12.8 GB。官方環境要求 NVIDIA driver 570 以上、CUDA 12.8，完整
+image-to-3D 推論約需 16 GB VRAM。`--offload_model_to_cpu` 只會在不同階段把暫時不用的
+模型搬到 CPU 以降低顯存，不等於純 CPU 推論。
+
+官方程式雖會在 CUDA 不存在時為部分模型選擇 `cpu`，但 TokenGS／Gaussian lifting
+仍包含 CUDA 計時、同步與 CUDA `gsplat` 依賴。使用 `--skip_gs_lifting --precision fp32`
+最多只能嘗試在 CPU 產生多視角圖片，無法得到最終 3D `.ply`，速度也不適合正式流程。
+Apple Silicon MPS 目前沒有官方支援。
+
+無本機 NVIDIA 顯卡時，可先使用
+[官方 Hugging Face Demo](https://huggingface.co/spaces/nvidia/asset-harvester) 驗證少量裁圖；
+批次或敏感事故素材則應使用私有雲端 NVIDIA GPU。事故影像上傳前應只保留必要的物件裁圖、
+移除不相關人物與影像 metadata。
+
+### 專案決策
+
+- **不以 Asset Harvester 替換 TrafficLab detector／tracker。**
+- 若實測品質可接受，將它規劃為獨立、可選的離線 3D asset generation stage。
+- 第一個驗證目標應是同一台車的 1、2、4 張輸入比較，檢查幾何完整度、外觀一致性、
+  執行時間與 Three.js 顯示方式。
+- 紅綠燈辨識與燈號狀態另立模型，不綁定 Asset Harvester。
+
+---
+
 ## 常用資源
 
-**Sketchfab 車型 UID**：
-- Tesla 2018 Model 3：`5ef9b845aaf44203b6d04e2c677e444f`（684K faces，CC Attribution）
+**車輛模型資產來源**（provenance 記在 `threejs/models/registry.json` `_comment_provenance`）：
+- car.glb = Tesla 2018 Model 3，Sketchfab UID `5ef9b845aaf44203b6d04e2c677e444f`
+  （684K faces，CC Attribution）
 
-**MCP 連線**：`uvx blender-mcp --port 9876`（已設定在 `~/.claude.json` user scope）
-
-**Blender 版本**：5.1.1
+**本地預覽**：`python3 -m http.server 8765` → `http://localhost:8765/threejs/index.html`

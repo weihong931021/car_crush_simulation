@@ -123,3 +123,21 @@ test('solveSafeSpeeds: 搜尋範圍不涵蓋 k=1（kMin=1.2, kMax=1.5）——sl
   assert.equal(r.fasterK, null, '搜尋範圍不含 k=1 時，fasterK 應回傳 null');
   assert.match(r.note, /範圍|kMin|kMax/, 'note 必須說明搜尋範圍不包含目前車速');
 });
+
+// ── 模擬視野截斷 ─────────────────────────────────────────────────────────────
+// simulate() 撞到保險上限（horizonReached）代表「還沒證明安全」，不是「安全」。
+// 求解若只看 .collided，蠕行到走不完的倍率會被回報成可避開——這正是 12s 舊視野
+// 造成假安全結論的同一個洞。
+test('solveSafeSpeeds: 視野截斷的取樣點不算安全，並回報 horizonTruncated 數量', () => {
+  // 汽車 1 m/s、40 m 路徑（k=1 時 40s 走完；k=0.1 要 400s，遠超保險上限）；
+  // 機車 10 m/s 早在 2s 就穿過路口 → k=1 不撞。
+  const slowCar = Array.from({ length: 41 }, (_, i) => ({ x: 0, z: -20 + i, t: i * 1.0 }));
+  const vehicles = [veh(slowCar, 4.69, 1.85, 1500), veh(motoPts, 1.85, 0.7, 200)];
+  const r = solveSafeSpeeds({ vehicles, which: 0, otherK: 1, kMin: 0.1, kMax: 1.0, steps: 10 });
+  assert.equal(r.actualCollides, false);
+  assert.ok(r.horizonTruncated >= 1, `低倍率取樣點應有被截斷者，實得 ${r.horizonTruncated}`);
+  assert.ok(r.safeIntervals.length >= 1);
+  assert.ok(r.safeIntervals[0][0] > 0.15,
+    `安全區間不得從被截斷的 kMin=0.1 起算，實得 ${JSON.stringify(r.safeIntervals)}`);
+  assert.match(r.note, /視野|截斷|無法確認/);
+});

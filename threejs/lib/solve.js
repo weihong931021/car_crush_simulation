@@ -27,11 +27,16 @@ function fmt(k) {
   return k.toFixed(3);
 }
 
-// vehicles/which/otherK → 該次呼叫要用哪組 kA/kB 呼叫 simulate()
-function collidedAt(vehicles, which, otherK, k) {
+// vehicles/which/otherK → 該次呼叫要用哪組 kA/kB 呼叫 simulate()。
+// 回傳「是否**未證明安全**」：碰撞、或模擬撞到保險上限（horizonReached，兩車還沒走完就
+// 停算）都算。視野截斷若被當成「安全」，蠕行到走不完的倍率會被回報成可避開——這正是
+// 舊 12s 視野讓 test1 出現「×≤0.65 可避開」假結論的同一個洞。截斷次數另外計數回報。
+function collidedAt(vehicles, which, otherK, k, stats) {
   const kA = which === 0 ? k : otherK;
   const kB = which === 0 ? otherK : k;
-  return simulate({ vehicles, kA, kB }).collided;
+  const r = simulate({ vehicles, kA, kB });
+  if (r.horizonReached) stats.horizonTruncated++;
+  return r.collided || r.horizonReached;
 }
 
 // [lo, hi] 已知兩端 collided 狀態不同，二分到 hi-lo <= tol，回傳邊界（取中點）。
@@ -60,9 +65,10 @@ export function solveSafeSpeeds({
   tol = DEFAULT_TOL,
 }) {
   let calls = 0;
+  const stats = { horizonTruncated: 0 };
   const evalFn = (k) => {
     calls++;
-    return collidedAt(vehicles, which, otherK, k);
+    return collidedAt(vehicles, which, otherK, k, stats);
   };
 
   const oneInRange = kMin <= 1 && 1 <= kMax;
@@ -171,5 +177,11 @@ export function solveSafeSpeeds({
       `安全邊界，建議擴大搜尋範圍。`;
   }
 
-  return { actualCollides, transitions, safeIntervals, slowerK, fasterK, calls, note };
+  if (stats.horizonTruncated > 0) {
+    note += `另有 ${stats.horizonTruncated} 次模擬因視野截斷（車輛過慢、保險上限內未走完路徑）` +
+      `而無法確認安全，這些倍率一律不列入安全區間。`;
+  }
+
+  return { actualCollides, transitions, safeIntervals, slowerK, fasterK, calls, note,
+           horizonTruncated: stats.horizonTruncated };
 }

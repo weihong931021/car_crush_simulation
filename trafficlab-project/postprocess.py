@@ -30,6 +30,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from trafficlab.motion.localization_authority import (
+    authoritative_position,
+    has_real_track_motion_authority,
+)
+
 
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("postprocess_config.yaml")
 
@@ -193,24 +198,43 @@ def _interpolate(a: list[float], b: list[float], ratio: float) -> list[float]:
     ]
 
 
-def _collect_tracks(data: dict[str, Any], target_classes: set[str]) -> dict[int, list[TrackPoint]]:
-    tracks: dict[int, list[TrackPoint]] = {}
+def _collect_tracks(
+    data: dict[str, Any], target_classes: set[str]
+) -> dict[tuple[int, int], list[TrackPoint]]:
+    """Collect uninterrupted authoritative real-track segments."""
+    tracks: dict[tuple[int, int], list[TrackPoint]] = {}
+    active_segments: dict[int, int] = {}
+    next_segments: dict[int, int] = {}
     for fallback_index, frame in enumerate(data.get("frames", [])):
         frame_index = _frame_id(frame, fallback_index)
+        accepted_this_frame: set[int] = set()
         for obj in frame.get("objects", []):
             if not _is_target_class(obj.get("class"), target_classes):
                 continue
             tracked_id = obj.get("tracked_id")
-            sat_coords = _normalize_point(obj.get("sat_coords"))
-            if tracked_id is None or sat_coords is None:
+            point = authoritative_position(obj)
+            if tracked_id is None:
                 continue
-            tracks.setdefault(int(tracked_id), []).append(
+            track_id = int(tracked_id)
+            if point is None or not has_real_track_motion_authority(obj):
+                active_segments.pop(track_id, None)
+                continue
+            segment_id = active_segments.get(track_id)
+            if segment_id is None:
+                segment_id = next_segments.get(track_id, 0)
+                next_segments[track_id] = segment_id + 1
+                active_segments[track_id] = segment_id
+            tracks.setdefault((track_id, segment_id), []).append(
                 TrackPoint(
                     frame_index=frame_index,
                     object_ref=obj,
-                    point=sat_coords,
+                    point=[point[0], point[1]],
                 )
             )
+            accepted_this_frame.add(track_id)
+        for track_id in tuple(active_segments):
+            if track_id not in accepted_this_frame:
+                active_segments.pop(track_id, None)
     for points in tracks.values():
         points.sort(key=lambda item: item.frame_index)
     return tracks
@@ -531,11 +555,8 @@ def _apply_direction_correction(
             item = track[idx]
             old = original_points[idx]
             new = corrected_points[idx]
-            delta = (new[0] - old[0], new[1] - old[1])
-            item.object_ref["sat_coords"] = [new[0], new[1]]
-            item.object_ref["sat_center"] = [new[0], new[1]]
+            item.object_ref["postprocessed_position_sat_px"] = [new[0], new[1]]
             item.point = [new[0], new[1]]
-            _translate_sat_floor_box(item.object_ref, delta)
             _merge_postprocess_entry(
                 item.object_ref,
                 original=old,
@@ -600,10 +621,11 @@ def _normalize_output_format(data: dict[str, Any]) -> dict[str, int]:
             if obj.get("tracked_id") is None:
                 stats["objects_missing_tracked_id"] += 1
 
-            point = _normalize_point(obj.get("sat_coords"))
+            point = authoritative_position(obj)
             if point is None:
                 stats["objects_missing_sat_coords"] += 1
                 continue
+            point = [point[0], point[1]]
 
             if obj.get("sat_coords") != point:
                 obj["sat_coords"] = point
@@ -692,17 +714,18 @@ def _add_visual_bspline_tracks(
         "skipped": {},
     }
 
-    for track_id, track in tracks.items():
+    for (track_id, segment_id), track in tracks.items():
+        track_label = f"{track_id}:{segment_id}"
         if len(track) < min_track_points:
-            summary["skipped"][str(track_id)] = "short_track"
+            summary["skipped"][track_label] = "short_track"
             continue
 
         current_points: list[list[float]] = []
         for item in track:
-            point = _normalize_point(item.object_ref.get("sat_coords"))
+            point = authoritative_position(item.object_ref)
             if point is None:
                 break
-            current_points.append(point)
+            current_points.append([point[0], point[1]])
         else:
             visual_points, skip_reason = _fit_bspline_visual_points(
                 current_points,
@@ -711,7 +734,7 @@ def _add_visual_bspline_tracks(
                 preserve_endpoints=preserve_endpoints,
             )
             if visual_points is None:
-                summary["skipped"][str(track_id)] = skip_reason or "unknown"
+                summary["skipped"][track_label] = skip_reason or "unknown"
                 continue
 
             for item, visual_point in zip(track, visual_points):
@@ -724,7 +747,7 @@ def _add_visual_bspline_tracks(
             summary["visual_points"] += len(visual_points)
             continue
 
-        summary["skipped"][str(track_id)] = "invalid_sat_coords"
+        summary["skipped"][track_label] = "invalid_sat_coords"
 
     return summary
 
@@ -769,11 +792,8 @@ def _process_track(
 
             old = original_points[idx]
             new = corrected_points[idx]
-            delta = (new[0] - old[0], new[1] - old[1])
-            item.object_ref["sat_coords"] = [new[0], new[1]]
-            item.object_ref["sat_center"] = [new[0], new[1]]
+            item.object_ref["postprocessed_position_sat_px"] = [new[0], new[1]]
             item.point = [new[0], new[1]]
-            _translate_sat_floor_box(item.object_ref, delta)
             _merge_postprocess_entry(
                 item.object_ref,
                 original=old,
@@ -804,7 +824,8 @@ def postprocess(data: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
         "per_track": {},
     }
 
-    for track_id, track in tracks.items():
+    for (track_id, segment_id), track in tracks.items():
+        track_label = f"{track_id}:{segment_id}"
         direction_result = _apply_direction_correction(
             track,
             enabled=args.direction_correction,
@@ -829,7 +850,7 @@ def postprocess(data: dict[str, Any], args: argparse.Namespace) -> dict[str, Any
             dry_run=False,
         )
         result["direction_correction"] = direction_result
-        summary["per_track"][str(track_id)] = result
+        summary["per_track"][track_label] = result
         if result.get("skipped"):
             continue
         summary["tracks_processed"] += 1
@@ -1103,7 +1124,7 @@ def main() -> int:
         print(f"  visual B-spline eligible tracks: {dry_visual.get('eligible_tracks', 0)}")
 
     if args.verbose:
-        for track_id, result in sorted(summary["per_track"].items(), key=lambda item: int(item[0])):
+        for track_id, result in sorted(summary["per_track"].items()):
             print(f"  track {track_id}: {result}")
 
     if not args.dry_run:

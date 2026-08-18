@@ -296,6 +296,31 @@ test('projectToPath: 沿曲線單調前進（不回頭黏段）', () => {
   }
 });
 
+// 上面那條只擋「跨段倒退」；真正漏掉的是**同一段內** u 變小。實測 test1 的 track 7
+// 有 29 次這種倒退、累積 2cm 假里程——buildPath 累加絕對距離，倒退會變成多走的路。
+test('projectToPath: 同一線段內投影參數不可倒退（不虛增里程）', () => {
+  const points = [0, 5, 4, 6].map((x, t) => ({ t, x, z: 0 }));
+  const anchors = [{ t: 0, x: 0, z: 0 }, { t: 3, x: 10, z: 0 }];   // 單一線段
+  const proj = projectToPath(points, anchors);
+  assert.deepEqual(proj.map(p => [p.x, p.z]), [[0, 0], [5, 0], [5, 0], [6, 0]],
+    '回頭的樣本應停在原地（0→5→5→6），而不是投影回 4');
+  assert.deepEqual(proj.map(p => p.t), [0, 1, 2, 3], '每點 t 必須原樣保留（幾何/時序分離）');
+  assert.equal(buildPath(proj).length, 6, '弧長應為 6m；倒退版會累成 5+1+2=8m');
+});
+
+test('projectToPath: 零長度錨段不產生 NaN，弧位仍單調', () => {
+  const points = [0, 2, 1, 3].map((x, t) => ({ t, x, z: 0 }));
+  const anchors = [
+    { t: 0, x: 0, z: 0 },
+    { t: 1, x: 0, z: 0 },   // 與前一點重合 → L2 === 0
+    { t: 3, x: 10, z: 0 },
+  ];
+  const proj = projectToPath(points, anchors);
+  assert.ok(proj.every(p => Number.isFinite(p.x) && Number.isFinite(p.z)), '不得出現 NaN');
+  assert.deepEqual(proj.map(p => p.x), [0, 2, 2, 3]);
+  assert.equal(buildPath(proj).length, 3);
+});
+
 // ── refineAnchors（轉角細分）──────────────────────────────────────────────────
 import { refineAnchors } from '../path.js';
 
@@ -322,4 +347,27 @@ test('refineAnchors: 大轉角被攤成多段小角度，直段不受影響', ()
   }
   // 錨點仍是原始子集合
   for (const a of refined) assert.ok(pts.some(p => p.t === a.t));
+});
+
+// 上面那條只有單一平滑彎道，永遠細分得下去。這條放一個「兩側原始索引都相鄰、
+// 無法再細分」的 180° 尖角在前面：舊版會直接 break 掉整個迴圈，讓後面那個真的
+// 能細分的 90° 彎道完全沒被處理。maxIter=1 同時確認「封鎖」不吃掉插點額度。
+test('refineAnchors: 不可細分的尖角不得中止其餘彎道的細分', () => {
+  const points = [
+    { t: 0,  x: 0,   z: 0 },
+    { t: 1,  x: 0,   z: 1 },
+    { t: 2,  x: 0,   z: 0 },   // 索引 1：180° 折返，兩側都無內點 → 不可細分
+    { t: 3,  x: 0.5, z: 0 },
+    { t: 4,  x: 1,   z: 0 },   // 索引 2↔6 的中點，應被插入
+    { t: 5,  x: 1.5, z: 0 },
+    { t: 6,  x: 2,   z: 0 },   // 索引 6：90° 彎，可細分
+    { t: 7,  x: 2,   z: 1 },
+    { t: 8,  x: 2,   z: 2 },
+    { t: 9,  x: 2,   z: 3 },
+    { t: 10, x: 2,   z: 4 },
+  ];
+  const anchors = [0, 1, 2, 6, 10].map(i => points[i]);
+  const refined = refineAnchors(points, anchors, { maxTurnDeg: 12, maxIter: 1 });
+  assert.deepEqual(refined.map(p => p.t), [0, 1, 2, 4, 6, 10],
+    '不可細分的 180° 角應被跳過，90° 彎仍要補入中點 t=4');
 });

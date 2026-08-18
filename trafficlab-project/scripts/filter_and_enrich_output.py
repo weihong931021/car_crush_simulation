@@ -4,6 +4,15 @@ import gzip
 import json
 from pathlib import Path
 
+from trafficlab.motion.localization_authority import (
+    authoritative_extent,
+    authoritative_position,
+    authority_status_reason,
+    collider_footprint,
+    has_real_track_motion_authority,
+    sanitize_spatial_record_for_export,
+)
+
 
 def load_json(path):
     path = Path(path)
@@ -126,14 +135,24 @@ def enrich_object(obj, prior_map, px_per_meter, frame_index, fps, previous_state
     class_name = str(enriched.get("class", "")).strip().lower()
     dims = prior_map.get(class_name)
     enriched["dimensions_m"] = copy.deepcopy(dims) if dims is not None else None
-    enriched["position_m"] = compute_position_m(enriched.get("sat_coords"), px_per_meter)
+    position = authoritative_position(enriched)
+    enriched["position_m"] = compute_position_m(position, px_per_meter)
     enriched["velocity_mps"] = compute_velocity_mps(
         enriched["position_m"],
-        previous_state,
+        previous_state if has_real_track_motion_authority(enriched) else None,
         frame_index,
         fps,
     )
-    return enriched
+    if isinstance(dims, dict):
+        enriched["collider_sat_floor_box"] = collider_footprint(
+            enriched,
+            length_m=dims.get("length"),
+            width_m=dims.get("width"),
+            px_per_meter=px_per_meter,
+        )
+    else:
+        enriched["collider_sat_floor_box"] = None
+    return sanitize_spatial_record_for_export(enriched)
 
 
 def filter_and_enrich(data, selected_ids, px_per_meter, prior_map):
@@ -144,15 +163,23 @@ def filter_and_enrich(data, selected_ids, px_per_meter, prior_map):
     output["selected_track_stats"] = build_track_stats(selected_ids)
     fps = output.get("meta", {}).get("fps")
     previous_states = {}
+    authority_counts = {}
+
+    def count(status, reason):
+        reasons = authority_counts.setdefault(status, {})
+        reasons[reason] = reasons.get(reason, 0) + 1
 
     filtered_frames = []
     for frame in output.get("frames", []):
         frame_index = frame.get("frame_index")
         selected_objects = []
+        accepted_real_ids = set()
+        observed_ids = set()
         for obj in frame.get("objects", []):
             track_id = obj.get("tracked_id")
             if track_id not in selected_ids:
                 continue
+            observed_ids.add(track_id)
 
             stats = output["selected_track_stats"][track_id]
             stats["frames_present"] += 1
@@ -161,6 +188,9 @@ def filter_and_enrich(data, selected_ids, px_per_meter, prior_map):
             if is_speed_missing(obj):
                 stats["missing_speed_count"] += 1
 
+            status, reason = authority_status_reason(obj)
+            count(status, reason)
+            is_real = has_real_track_motion_authority(obj)
             enriched = enrich_object(
                 obj,
                 prior_map,
@@ -169,11 +199,21 @@ def filter_and_enrich(data, selected_ids, px_per_meter, prior_map):
                 fps,
                 previous_states.get(track_id),
             )
-            previous_states[track_id] = {
-                "frame_index": frame_index,
-                "position_m": enriched.get("position_m"),
-            }
+            if enriched["position_m"] is not None and is_real:
+                previous_states[track_id] = {
+                    "frame_index": frame_index,
+                    "position_m": enriched["position_m"],
+                }
+                accepted_real_ids.add(track_id)
+            else:
+                previous_states.pop(track_id, None)
             selected_objects.append(enriched)
+
+        for track_id in selected_ids:
+            if track_id not in observed_ids:
+                count("missing", "missing_localization")
+            if track_id not in accepted_real_ids:
+                previous_states.pop(track_id, None)
 
         filtered_frames.append(
             {
@@ -183,6 +223,15 @@ def filter_and_enrich(data, selected_ids, px_per_meter, prior_map):
         )
 
     output["frames"] = filtered_frames
+    output["scene_extent_sat_px"] = authoritative_extent(
+        obj
+        for frame in filtered_frames
+        for obj in frame["objects"]
+    )
+    output["localization_counts"] = {
+        status: {reason: reasons[reason] for reason in sorted(reasons)}
+        for status, reasons in sorted(authority_counts.items())
+    }
     return output
 
 
@@ -248,6 +297,10 @@ def main():
             f"missing_heading={stats['missing_heading_count']} "
             f"missing_speed={stats['missing_speed_count']}"
         )
+    print("Localization counts by status/decisive reason:")
+    for status, reasons in filtered["localization_counts"].items():
+        for reason, count in reasons.items():
+            print(f"  status={status} decisive_reason={reason} count={count}")
 
 
 if __name__ == "__main__":

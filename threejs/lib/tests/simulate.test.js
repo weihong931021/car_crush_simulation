@@ -155,3 +155,35 @@ test('yaw limit: 正常速度轉彎完全跟得上切線', () => {
   if (d > Math.PI) d = 2 * Math.PI - d;
   assert.ok(d < 0.06, `轉彎中車身朝向應貼合行進方向，偏差 ${(d * 180 / Math.PI).toFixed(2)}°`);
 });
+
+// ── 模擬視野（horizon）──────────────────────────────────────────────────────
+// 舊版寫死 maxTime=12s：慢速情境下兩車 12s 後才交會，會被回報成「未碰撞、最近距離落在
+// t=12.00」——這是視野截斷的假象，連帶 solve 的「安全車速」也是假的。預設應模擬到兩車都
+// 走完路徑為止；只有車輛蠕行到走不完時才由保險上限截斷，且要明說。
+test('兩車 12 秒後才交會（1 m/s）→ 預設仍偵測到碰撞，不被舊的 12s 視野截斷', () => {
+  const slowCar  = Array.from({ length: 41 }, (_, i) => ({ x: 0, z: -20 + i, t: i * 1.0 }));
+  const slowMoto = Array.from({ length: 41 }, (_, i) => ({ x: -20 + i, z: 0, t: i * 1.0 }));
+  const r = simulate({ vehicles: [veh(slowCar, 4.69, 1.85, 1500), veh(slowMoto, 1.85, 0.7, 200)],
+                       kA: 1, kB: 1 });
+  assert.equal(r.collided, true, '交會在 t≈18–20s，預設視野必須涵蓋');
+  assert.ok(r.impactTime > 12, `撞擊時刻應晚於 12s，實得 ${r.impactTime}`);
+  assert.equal(r.horizonReached, false);
+});
+
+test('未碰撞且兩車走完路徑 → horizonReached=false，endTime 為實際結束時刻', () => {
+  const r = simulate({ vehicles: [veh(carPts, 4.69, 1.85, 1500), veh(motoPts, 1.85, 0.7, 200)],
+                       kA: 0.35, kB: 1 });
+  assert.equal(r.collided, false);
+  assert.equal(r.horizonReached, false);
+  assert.ok(Number.isFinite(r.endTime) && r.endTime > r.minGapTime, `endTime=${r.endTime} 應在最近間距之後`);
+  assert.ok(r.endTime < 180, '兩車 0.35×/1× 應遠在保險上限前走完');
+});
+
+test('車輛蠕行走不完路徑 → 到保險上限截斷並回報 horizonReached=true', () => {
+  const creepCar = Array.from({ length: 41 }, (_, i) => ({ x: 0, z: -20 + i, t: i * 50 })); // 0.02 m/s
+  const r = simulate({ vehicles: [veh(creepCar, 4.69, 1.85, 1500), veh(motoPts, 1.85, 0.7, 200)],
+                       kA: 1, kB: 1 });
+  assert.equal(r.collided, false);
+  assert.equal(r.horizonReached, true);
+  assert.ok(r.endTime >= 180 - 1e-6, `應跑到預設保險上限 180s，實得 ${r.endTime}`);
+});

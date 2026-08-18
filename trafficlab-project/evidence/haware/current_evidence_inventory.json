@@ -1,0 +1,22 @@
+{
+  "diagnostic_inputs_role": "diagnostic_only",
+  "per_site_inputs": [
+    {
+      "genuine_track_evidence": [],
+      "independent_ground_truth": [],
+      "pilot_power_evidence": [],
+      "site": "kee-cc",
+      "untouched_held_out_partitions": []
+    },
+    {
+      "genuine_track_evidence": [],
+      "independent_ground_truth": [],
+      "pilot_power_evidence": [],
+      "site": "taoyuan-tc",
+      "untouched_held_out_partitions": []
+    }
+  ],
+  "report_path": "evidence/haware/current_evidence_report.json",
+  "report_sha256": "567d93b8af5af271ef89aaa06c2669f034f4b55b41e857bc55497f1f415930fa",
+  "schema_version": "haware-current-evidence-inventory-v1"
+}

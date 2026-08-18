@@ -1,6 +1,6 @@
 # `filter_and_enrich_output.py`
 
-這支腳本會讀取 TrafficLab 的 `output.json` 或 `output.json.gz`，保留指定的多個 `tracked_id`，並補上給下游模擬或 Blender 較好使用的欄位。
+這支腳本會讀取 TrafficLab 的 `output.json` 或 `output.json.gz`，保留指定的多個 `tracked_id`，並補上給下游模擬（場景包 → Three.js 播放器）較好使用的欄位。
 
 ## 功能
 

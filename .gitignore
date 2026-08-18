@@ -19,6 +19,9 @@ secrets.json
 # Playwright MCP logs/cache
 .playwright-mcp/
 
+# Hypothesis 的 unicode 快取（產生物，非原始碼）
+.hypothesis/
+
 # Large binary files
 *.mp4
 *.mov
@@ -26,3 +29,9 @@ secrets.json
 
 # Large model weights (not needed for reading the project)
 *.pb
+*.pkl.epoch*
+
+# 凍結的基準播放器（本地快速參考，不入庫）
+threejs-v1/
+# brainstorming 視覺協作板暫存
+.superpowers/

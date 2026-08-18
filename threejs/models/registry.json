@@ -1,18 +1,19 @@
 {
-  "_comment": "flip = 讓模型車頭對齊 pivot +Z 所需的 Y 軸旋轉（弧度）。量法：在 Blender 匯入 GLB，取前後輪中心連線向量 (dx,dy)，轉 three.js 得 (dx,-dy)，車頭角 = atan2(dx,-dy)，flip = -車頭角。勿憑 GLTF 慣例直接填 π。",
+  "_comment": "flip = 讓模型車頭對齊 pivot +Z 所需的 Y 軸旋轉（弧度）。歷史量法（GLB 產出時用過 Blender，現已移除該工具鏈）：匯入 GLB，取前後輪中心連線向量 (dx,dy)，轉 three.js 得 (dx,-dy)，車頭角 = atan2(dx,-dy)，flip = -車頭角。勿憑 GLTF 慣例直接填 π。純網頁流程下要換模型：直接放新 GLB、在瀏覽器量前後輪連線重算 flip。",
+  "_comment_provenance": "car.glb / moto.glb 資產來源紀錄（供日後重新取得，執行期不讀）。car.glb = Sketchfab UID 5ef9b845aaf44203b6d04e2c677e444f（Tesla 2018 Model 3, CC Attribution）。moto.glb 來源 UID 未紀錄。length_m 為 GLB 原生量測值（非縮放目標；縮放目標讀 scene.json 的 length_m）。",
   "models": {
     "car.glb": {
       "flip": -2.949,
       "measured_heading_deg": 169.0,
-      "length_m": 4.77
+      "length_m": 4.77,
+      "sketchfab_uid": "5ef9b845aaf44203b6d04e2c677e444f"
     },
     "moto.glb": {
       "flip": -0.9495,
       "measured_heading_deg": 54.4,
       "length_m": 1.42,
       "hide": [
-        "Object_4",
-        "floor"
+        "floor_0"
       ]
     }
   },
@@ -26,5 +27,5 @@
     "motor": "moto.glb",
     "motorcycle": "moto.glb"
   },
-  "_comment_hide": "hide: 該模型內要隱藏的節點/網格名稱前綴（模型自帶的參考幾何，如地面圓片）；Collider 命名者一律自動隱藏不需列於此。"
+  "_comment_hide": "hide: 該模型內要隱藏的節點**精確名稱**（模型自帶的參考幾何，如地面圓片）——不是前綴，Sketchfab 的 Object_N 流水號下前綴會誤殺真實零件（Object_4 曾連 Object_41/43/44/46/48 一起隱藏）。列父節點即隱藏整棵子樹（moto.glb 的 floor_0 → 地面圓片 Object_4）。Collider 命名者一律自動隱藏不需列於此，也絕不可列模型根節點。"
 }

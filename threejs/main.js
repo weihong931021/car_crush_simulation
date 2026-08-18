@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { loadScene, sceneCodeFromURL, modelFor } from './scene-loader.js';
+import { loadScene, sceneCodeFromURL, modelFor, shouldHideNode } from './scene-loader.js';
 import { buildPaths } from './lib/waypoints.js';
 import { buildPath, speedProfile, smoothPoints, trimFrozenTail, rdpSimplify, refineAnchors, projectToPath, limitAcceleration, extendPoints } from './lib/path.js';
 import { simulate } from './lib/simulate.js';
@@ -23,6 +23,10 @@ let isPlaying = false;
 let accumulator = 0;
 let lastTS = 0;
 let playbackSpeed = 1;
+
+// 對外 demo 預設不顯示任何絕對 km/h（追蹤器碰前凍結，位移回推的絕對速度不可靠，
+// 「3.9 km/h」這種數字對觀眾只像壞掉）。要看的話加 ?debug=1。倍率 ×k 永遠顯示。
+const SHOW_ABS_SPEED = new URLSearchParams(location.search).get('debug') === '1';
 
 // ── Renderer / Scene / Camera ────────────────────────────────────────────────
 const container = document.getElementById('canvas-container');
@@ -252,11 +256,15 @@ function measureBodyExtentAlongAxis(gltfScene, axisX, axisZ) {
 }
 
 function wrapModel(gltfScene, flip, targetLengthM, hideNames = []) {
-  // 模型自帶的參考幾何（碰撞盒、地面圓片）依名稱前綴隱藏——資料來源是 registry.json
-  // 的 hide 清單。用 visible=false 而非拆除，維持模型檔原樣。
+  // 模型自帶的參考幾何（地面圓片等）依 registry.json 的 hide 清單隱藏，比對是**精確名稱**
+  // （前綴語意會誤殺 Object_41/43/… 這類同前綴的真實零件，見 scene-loader.shouldHideNode）。
+  // 不限定 isMesh：hide 可以列空節點（如 moto.glb 的 floor_0），visible=false 會連同
+  // 後代一起不繪製，正好對應「隱藏這團參考幾何」。用 visible 而非拆除，維持模型檔原樣。
+  // 唯一禁區是 gltfScene 自己——它是整個模型的根（moto.glb 是 MotoCollider），
+  // 一旦被列進 hide 就是整台車消失。
   gltfScene.traverse(child => {
-    if (!child.isMesh) return;
-    if (hideNames.some(p => (child.name || '').startsWith(p))) child.visible = false;
+    if (child === gltfScene) return;
+    if (shouldHideNode(child.name, hideNames)) child.visible = false;
   });
   const pivot = new THREE.Group();
 
@@ -375,13 +383,22 @@ function updateVerdict() {
   const el = document.getElementById('verdict');
   if (!el || !simResult) return;
   if (simResult.collided) {
-    const va = velocityBeforeTime(simResult.tracks[0].samples, simResult.impactTime);
-    const vb = velocityBeforeTime(simResult.tracks[1].samples, simResult.impactTime);
-    const rel = Math.hypot(va.vx - vb.vx, va.vz - vb.vz) * 3.6;
-    el.textContent = `碰撞於 t=${simResult.impactTime.toFixed(2)} s · 相對速度 ${rel.toFixed(1)} km/h（播放至碰撞瞬間）`;
+    let extra = '';
+    if (SHOW_ABS_SPEED) {
+      const va = velocityBeforeTime(simResult.tracks[0].samples, simResult.impactTime);
+      const vb = velocityBeforeTime(simResult.tracks[1].samples, simResult.impactTime);
+      const rel = Math.hypot(va.vx - vb.vx, va.vz - vb.vz) * 3.6;
+      extra = ` · 相對速度 ${rel.toFixed(1)} km/h`;
+    }
+    el.textContent = `碰撞於 ${simResult.impactTime.toFixed(2)} s${extra}（播放至碰撞瞬間）`;
     el.style.color = '#ff9999';
+  } else if (simResult.horizonReached) {
+    // 保險上限截斷：兩車還沒走完路徑就停算，不能宣稱「未發生碰撞」
+    el.textContent = `模擬 ${simResult.endTime.toFixed(0)} s 內未碰撞（有車輛過慢、尚未走完路徑，結論不完整）` +
+      ` · 最近距離 ${simResult.minGap.toFixed(2)} m（${simResult.minGapTime.toFixed(2)} s）`;
+    el.style.color = '#ffcc66';
   } else {
-    el.textContent = `未發生碰撞 · 最近距離 ${simResult.minGap.toFixed(2)} m（t = ${simResult.minGapTime.toFixed(2)} s）`;
+    el.textContent = `未發生碰撞（兩車皆已通過）· 最近距離 ${simResult.minGap.toFixed(2)} m（${simResult.minGapTime.toFixed(2)} s）`;
     el.style.color = '#7fdc9a';
   }
 }
@@ -394,7 +411,13 @@ function resimulate() {
     vehicles: [A.simVehicle, B.simVehicle],
     kA: A.k, kB: B.k,
   });
-  const cutT = simResult.collided ? simResult.impactTime : Infinity;
+  // 碰撞：播到撞擊瞬間（會議決定）。未碰撞：播到錯車後幾秒就夠了——模擬本身會跑到兩車
+  // 都走完路徑（慢車 ×0.25 可能是上百秒），全播進時間軸只會讓觀眾拖一條長到沒意義的拉桿。
+  const POST_GAP_SEC = 4;
+  // 至少讓晚出現的那台車也進場（samplesToWps 要求截斷點前每台 ≥2 個樣本）
+  const latestStart = Math.max(A.simVehicle.startT ?? 0, B.simVehicle.startT ?? 0);
+  const cutT = simResult.collided ? simResult.impactTime
+    : Math.max(latestStart + 1, Math.min(simResult.endTime, simResult.minGapTime + POST_GAP_SEC));
   colliderStates.forEach((st, i) => {
     st.wps = samplesToWps(simResult.tracks[i].samples, cutT);
   });
@@ -403,14 +426,45 @@ function resimulate() {
     slider.min = animStart;
     slider.max = animEnd;
   }
-  if (currentFrame > animEnd) currentFrame = animEnd;
+  // 時間軸長度隨結果變：目前幀若已超出新的結尾，回到開頭重看，不要卡在（新的）最後一幀
+  if (currentFrame > animEnd) currentFrame = animStart;
   window.__simResult = simResult;   // debug hook 與最新結果同步
   rebuildPathLines();
   updateVerdict();
+  invalidateSolveResult();
   updateScene(currentFrame);
 }
 
+// 「求安全車速」的答案是針對按下當時的兩個倍率算的；滑桿一動就過期，必須清掉，
+// 否則面板會同時顯示「目前設定下已不會碰撞」與上方的「碰撞於 …」自相矛盾。
+function invalidateSolveResult() {
+  const el = document.getElementById('solve-result');
+  if (!el || !el.textContent) return;
+  el.innerHTML = '<div style="color:#999">車速已變更，請重新按「求安全車速」</div>';
+}
+
 const PATH_COLORS = [0xffcc33, 0xff8833];
+const PATH_RIBBON_WIDTH_M = 0.30;   // WebGL 的 linewidth 不生效（1px 幾乎看不見），路徑改畫成貼地色帶
+
+// 把折線 [x,z]… 鋪成寬 w 的貼地色帶（每段一個四邊形、兩個三角形，法線朝上）。
+// 幾何簡單到不需要 addons 的 Line2；轉角處相鄰四邊形直接重疊，30cm 寬肉眼看不出接縫。
+function ribbonGeometry(pts, w, y) {
+  const pos = [];
+  const half = w / 2;
+  for (let i = 1; i < pts.length; i++) {
+    const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
+    const dx = bx - ax, dz = bz - az;
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-6) continue;
+    const nx = -dz / len * half, nz = dx / len * half;   // 左法線
+    // 兩個三角形（逆時針、從上方看）：a-左, b-左, b-右 / a-左, b-右, a-右
+    pos.push(ax + nx, y, az + nz,  bx + nx, y, bz + nz,  bx - nx, y, bz - nz);
+    pos.push(ax + nx, y, az + nz,  bx - nx, y, bz - nz,  ax - nx, y, az - nz);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  return geo;
+}
 
 function rebuildPathLines() {
   for (const l of pathLines) {
@@ -421,12 +475,14 @@ function rebuildPathLines() {
   pathLines = [];
   colliderStates.forEach((st, i) => {
     if (!st.wps) return;
-    const pts = st.wps.map(wp => new THREE.Vector3(wp[1], 0.05, wp[2]));
-    const line = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints(pts),
-      new THREE.LineBasicMaterial({ color: PATH_COLORS[i % PATH_COLORS.length], transparent: true, opacity: 0.75 }));
-    scene.add(line);
-    pathLines.push(line);
+    const mesh = new THREE.Mesh(
+      ribbonGeometry(st.wps.map(wp => [wp[1], wp[2]]), PATH_RIBBON_WIDTH_M, 0.03),
+      new THREE.MeshBasicMaterial({
+        color: PATH_COLORS[i % PATH_COLORS.length], transparent: true, opacity: 0.8,
+        side: THREE.DoubleSide, depthWrite: false,
+      }));
+    scene.add(mesh);
+    pathLines.push(mesh);
   });
 }
 
@@ -450,7 +506,8 @@ function updateScene(frame) {
     applyState(st.pivot, st.wps, frame, st.wps[0][0]);
     if (st.pivot) st.pivot.visible = frame >= st.wps[0][0] && frame <= st.wps[st.wps.length - 1][0];
   }
-  if (frameDisplay) frameDisplay.textContent = `${frame}`;
+  // 觀眾看秒數，不看幀號（幀號只是內部時間軸單位；frame 1 = 0.00 s）
+  if (frameDisplay) frameDisplay.textContent = `${((frame - 1) * FRAME_DURATION).toFixed(2)} s`;
   if (slider) slider.value = `${frame}`;
 
   // 碰撞紅環：時間軸截在碰撞瞬間，紅環在最後幾幀淡入、停在接觸點
@@ -483,9 +540,18 @@ const chaseBtn = document.getElementById('btn-chase');
 let chaseMode = false;
 let chaseTarget = 0;   // colliderStates 的索引；跟車鈕再按一次就換下一台
 
+// 觀眾看得懂的車名。兩台同類（taipei 兩台都叫「汽車」）就加 A/B 後綴，否則
+// 滑桿列、圖例、求解結果三處都分不出誰是誰。
+function displayName(idx) {
+  const st = colliderStates[idx];
+  if (!st) return '—';
+  const base = st.vehicle.label ?? st.vehicle.class;
+  const dup = colliderStates.some((o, j) => j !== idx && (o.vehicle.label ?? o.vehicle.class) === base);
+  return dup ? `${base} ${String.fromCharCode(65 + idx)}` : base;
+}
+
 function chaseLabel() {
-  const st = colliderStates[chaseTarget];
-  return `🚗 跟車：${st?.vehicle.label ?? st?.vehicle.class ?? '—'}`;
+  return `🚗 跟車：${displayName(chaseTarget)}`;
 }
 function updateChaseBtn() {
   if (chaseBtn) chaseBtn.textContent = chaseMode ? chaseLabel() : '🚗 跟車';
@@ -498,26 +564,71 @@ function gotoFrame(f) {
   currentFrame = Math.max(animStart, Math.min(animEnd, Math.round(f)));
   updateScene(currentFrame);
 }
+
+// 「事發範圍」：兩台 collider 整段播放軌跡的 XZ 包圍盒（含車身尺寸的餘裕）。
+// 鏡頭 preset 以它為準，不是以地面中心為準——地面圖多大跟事故發生在哪裡無關
+// （tainan 第 1 幀汽車在畫面外、taipei 兩車卡在底部控制列後面，都是框地面中心的後果）。
+function actionBounds() {
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const st of colliderStates) {
+    if (!st.wps) continue;
+    for (const wp of st.wps) {
+      if (wp[1] < minX) minX = wp[1]; if (wp[1] > maxX) maxX = wp[1];
+      if (wp[2] < minZ) minZ = wp[2]; if (wp[2] > maxZ) maxZ = wp[2];
+    }
+  }
+  if (!Number.isFinite(minX)) {           // 還沒有模擬結果 → 退回地面
+    const [w, d] = CFG.ground.size_m;
+    return { cx: 0, cz: 0, w, d };
+  }
+  const pad = Math.max(...colliderStates.map(st => st.vehicle.length_m ?? 4.5));
+  return {
+    cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2,
+    w: Math.max(maxX - minX + 2 * pad, 12), d: Math.max(maxZ - minZ + 2 * pad, 12),
+  };
+}
+
+// 讓半徑 r 的球正好塞進視錐（考慮視窗長寬比：直式視窗受水平 fov 限制），再留 margin。
+function fitDistance(r, margin = 1.15) {
+  const fovV = THREE.MathUtils.degToRad(camera.fov);
+  const fovH = 2 * Math.atan(Math.tan(fovV / 2) * camera.aspect);
+  return (r / Math.sin(Math.min(fovV, fovH) / 2)) * margin;
+}
+
 function setTopDownView() {
   chaseMode = false;
   updateChaseBtn();
-  const h = Math.max(...CFG.ground.size_m) * 1.15;
-  camera.position.set(0, h, 0.001);
-  camera.up.set(0, 0, -1);
+  // 頂視圖看整張地面圖（事發範圍一定在其中），依視窗長寬比 fit，不留大片藍邊
+  const [w, d] = CFG.ground.size_m;
+  const fovV = THREE.MathUtils.degToRad(camera.fov);
+  const fovH = 2 * Math.atan(Math.tan(fovV / 2) * camera.aspect);
+  const h = Math.max(d / 2 / Math.tan(fovV / 2), w / 2 / Math.tan(fovH / 2)) * 1.05;
+  // 不改 camera.up：OrbitControls 建構時就把 up 抓死，之後改它不理，相機若正好落在極點
+  // （正上方）就退化成原地自轉——左鍵拖曳完全沒反應。改成從正上方往南偏 0.5°：
+  // 看起來仍是頂視圖、北（-z）在螢幕上方，而且拖曳能正常旋轉／傾斜。
+  const tilt = THREE.MathUtils.degToRad(0.5);
+  camera.position.set(0, h * Math.cos(tilt), h * Math.sin(tilt));
   controls.target.set(0, 0, 0);
   controls.update();
 }
 function setPersp45View() {
   chaseMode = false;
   updateChaseBtn();
-  const span = Math.max(...CFG.ground.size_m);
-  camera.up.set(0, 1, 0);
-  camera.position.set(-span * 0.06, span * 0.57, span * 0.45);
-  controls.target.set(-span * 0.06, 0, span * 0.12);
+  const b = actionBounds();
+  const r = Math.hypot(b.w, b.d) / 2;
+  const dist = fitDistance(r);
+  // 從南偏一點、俯角約 50° 看向事發範圍中心
+  const dir = new THREE.Vector3(-0.1, 0.78, 0.62).normalize();
+  controls.target.set(b.cx, 0, b.cz);
+  camera.position.copy(controls.target).addScaledVector(dir, dist);
   controls.update();
 }
 
-if (playBtn) playBtn.addEventListener('click', () => { isPlaying = !isPlaying; accumulator = 0; setPlayLabel(); });
+if (playBtn) playBtn.addEventListener('click', () => {
+  // 播到底再按播放 → 從頭重播（不必先按重置）
+  if (!isPlaying && currentFrame >= animEnd) gotoFrame(animStart);
+  isPlaying = !isPlaying; accumulator = 0; setPlayLabel();
+});
 if (resetBtn) resetBtn.addEventListener('click', () => { isPlaying = false; accumulator = 0; setPlayLabel(); gotoFrame(animStart); });
 if (topdownBtn) topdownBtn.addEventListener('click', setTopDownView);
 if (perspBtn) perspBtn.addEventListener('click', setPersp45View);
@@ -527,7 +638,6 @@ if (chaseBtn) {
       chaseTarget = (chaseTarget + 1) % Math.max(1, colliderStates.length); // 已在跟車 → 換下一台
     } else {
       chaseMode = true;
-      camera.up.set(0, 1, 0);
     }
     updateChaseBtn();
   });
@@ -545,7 +655,7 @@ function bindSpeedSlider(idx) {
   const nameEl = document.getElementById(`collider${idx}-name`);
   const st = colliderStates[idx];
   if (!input || !st) return;
-  if (nameEl) nameEl.textContent = st.vehicle.label ?? st.vehicle.class;
+  if (nameEl) nameEl.textContent = displayName(idx);
   input.min = '0.25';
   input.max = '2.5';
   input.step = '0.05';
@@ -561,20 +671,41 @@ function bindSpeedSlider(idx) {
 function fillRefSpeeds() {
   const el = document.getElementById('ref-speeds');
   if (!el) return;
+  if (!SHOW_ABS_SPEED) {
+    el.textContent = '×1.00 = 實錄車速；拖動可假設「當時再快／再慢一點」';
+    return;
+  }
   el.textContent = '碰前 2s 位移均速（參考）：' + colliderStates
-    .map(st => `${st.vehicle.label ?? st.vehicle.class} ${st.refSpeedKmh.toFixed(1)} km/h`)
+    .map((st, i) => `${displayName(i)} ${st.refSpeedKmh.toFixed(1)} km/h`)
     .join('、');
 }
 
-function formatSolveLine(st, r) {
-  const name = st.vehicle.label ?? st.vehicle.class;
+// solve 的 slowerK/fasterK 是相對 k=1（實錄）的邊界；面板要回答的是「相對**目前滑桿**」
+// 該怎麼調，所以這裡從 safeIntervals 自己找目前 st.k 左右最近的安全邊界，
+// 「目前設定下已不會碰撞」也直接看目前的 simResult，而不是 solve 在 k=1 的評估。
+function formatSolveLine(idx, r) {
+  const st = colliderStates[idx];
+  const name = displayName(idx);
   const ref = st.refSpeedKmh;
-  if (!r.actualCollides) return `${name}：目前設定下已不會碰撞`;
+  const kmh = k => (SHOW_ABS_SPEED ? `（≈${(k * ref).toFixed(1)} km/h）` : '');
+  const k = st.k;
+  const inSafe = r.safeIntervals.some(([lo, hi]) => k >= lo - 1e-9 && k <= hi + 1e-9);
+  if (!simResult?.collided || inSafe) return `${name}：目前設定下已不會碰撞`;
+  let slower = null, faster = null;
+  for (const [lo, hi] of r.safeIntervals) {
+    if (hi <= k && (slower == null || hi > slower)) slower = hi;
+    if (lo >= k && (faster == null || lo < faster)) faster = lo;
+  }
   const parts = [];
-  if (r.slowerK != null) parts.push(`×≤${r.slowerK.toFixed(2)}（≈${(r.slowerK * ref).toFixed(1)} km/h）`);
-  if (r.fasterK != null) parts.push(`×≥${r.fasterK.toFixed(2)}（≈${(r.fasterK * ref).toFixed(1)} km/h）`);
-  if (!parts.length) return `${name}：${r.note}`;
-  return `${name} ${parts.join(' 或 ')} 可避開`;
+  if (slower != null) parts.push(`慢到 ×${slower.toFixed(2)} 以下${kmh(slower)}`);
+  if (faster != null) parts.push(`快到 ×${faster.toFixed(2)} 以上${kmh(faster)}`);
+  const truncated = r.horizonTruncated > 0 ? '（更慢的部分倍率因模擬視野不足未計入）' : '';
+  // 觀眾版不貼 solve 的技術性 note（取樣間距、建議加大 steps…），?debug=1 才附上
+  if (!parts.length) {
+    return SHOW_ABS_SPEED ? `${name}：${r.note}`
+      : `${name}：在 ×0.25–×2.50 範圍內單獨調它都仍會碰撞（另一台維持目前設定）${truncated}`;
+  }
+  return `${name} ${parts.join('，或')} 可避開${truncated}`;
 }
 
 const solveBtn = document.getElementById('btn-solve');
@@ -583,14 +714,24 @@ if (solveBtn) {
     const el = document.getElementById('solve-result');
     if (!el || colliderStates.length < 2) return;
     const vehicles = [colliderStates[0].simVehicle, colliderStates[1].simVehicle];
-    // 對兩台各自求解；另一台固定在其目前滑桿設定（otherK）。
-    // 搜尋範圍對齊滑桿（×0.25–×2.5），steps 按比例加密維持 Δk 解析度。
-    const lines = colliderStates.map((st, i) =>
-      formatSolveLine(st, solveSafeSpeeds({
-        vehicles, which: i, otherK: colliderStates[1 - i].k,
-        kMin: 0.25, kMax: 2.5, steps: 68,
-      })));
-    el.innerHTML = lines.map(t => `<div>${t}</div>`).join('');
+    // 136 次前向模擬同步跑在主執行緒（慢車設定下可到 1 秒多），先把「計算中」畫出來
+    // 再開算，按鈕才不會像沒反應。
+    el.textContent = '計算中…';
+    solveBtn.disabled = true;
+    setTimeout(() => {
+      try {
+        // 對兩台各自求解；另一台固定在其目前滑桿設定（otherK）。
+        // 搜尋範圍對齊滑桿（×0.25–×2.5），steps 按比例加密維持 Δk 解析度。
+        const lines = colliderStates.map((st, i) =>
+          formatSolveLine(i, solveSafeSpeeds({
+            vehicles, which: i, otherK: colliderStates[1 - i].k,
+            kMin: 0.25, kMax: 2.5, steps: 68,
+          })));
+        el.innerHTML = lines.map(t => `<div>${t}</div>`).join('');
+      } finally {
+        solveBtn.disabled = false;
+      }
+    }, 0);
   });
 }
 
@@ -599,13 +740,14 @@ function fillLegend() {
   if (!legend) return;
   const dots = ['#4488ff', '#ff4444'];
   const pathHex = PATH_COLORS.map(c => '#' + c.toString(16).padStart(6, '0'));
+  // 對外 demo 不秀 class/track id（觀眾不需要）；?debug=1 才附上
+  const tech = st => (SHOW_ABS_SPEED ? ` (${st.vehicle.class} id=${st.vehicle.track_id})` : '');
   legend.innerHTML = colliderStates.map((st, i) =>
-    `<div><span class="dot" style="background:${dots[i % 2]}"></span>` +
-    `${st.vehicle.label ?? st.vehicle.class} (${st.vehicle.class} id=${st.vehicle.track_id})</div>`
+    `<div><span class="dot" style="background:${dots[i % 2]}"></span>${displayName(i)}${tech(st)}</div>`
   ).join('') +
   colliderStates.map((st, i) =>
-    `<div><span class="dot" style="background:${pathHex[i % pathHex.length]}; opacity:0.75"></span>` +
-    `${st.vehicle.label ?? st.vehicle.class} 路徑</div>`
+    `<div><span class="dot" style="background:${pathHex[i % pathHex.length]}; opacity:0.8"></span>` +
+    `${displayName(i)} 路徑</div>`
   ).join('');
 }
 
@@ -714,13 +856,6 @@ async function boot() {
   Object.assign(sun.shadow.camera, { left: -ext, right: ext, top: ext, bottom: -ext, near: 1, far: 120 });
   sun.shadow.camera.updateProjectionMatrix();
 
-  // 相機初始位（依地圖大小縮放）
-  if (cfg.camera?.default === 'ortho_top') {
-    setTopDownView();
-  } else {
-    setPersp45View();
-  }
-
   // 路徑 + 速度剖面（真實秒數；時間原點平移到最早的 collider 資料點）
   const rawPaths = buildPaths(trajectory, cfg);
   const t0 = Math.min(...rawPaths.map(p => p.points[0].t));
@@ -758,7 +893,23 @@ async function boot() {
     ? metaFps : (cfg.frames.fps ?? 30);
   const extras = buildExtrasRealtime(trajectory, cfg, fps, t0);
 
+  // 開場切到「第二台車出現前 LEAD_IN_SEC 秒」：test1 機車 6.3 s 才進場，前面只有汽車
+  // 用 3.9 km/h 蠕行——對觀眾是空等。模擬與證據不動（時間原點仍是最早的資料點、
+  // startT 照舊），只是把時間軸／拉桿的下限往後挪，前段刻意不給看。秒數顯示仍以
+  // 資料原點為 0，所以開場會從 4.30 s 之類的數字起跳，這是誠實的。
+  const LEAD_IN_SEC = 2;
+  const latestStart = Math.max(...colliderStates.map(st => st.simVehicle.startT ?? 0));
+  animStart = Math.max(1, Math.floor((latestStart - LEAD_IN_SEC) * DISPLAY_FPS) + 1);
+  currentFrame = animStart;
+
   resimulate();
+
+  // 相機初始位：要等 resimulate() 有了播放軌跡才知道事發範圍在哪（見 actionBounds）
+  if (cfg.camera?.default === 'ortho_top') {
+    setTopDownView();
+  } else {
+    setPersp45View();
+  }
 
   if (slider) slider.step = 1;
   bindSpeedSlider(0);

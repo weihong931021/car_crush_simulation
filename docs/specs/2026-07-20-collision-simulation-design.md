@@ -151,11 +151,12 @@ threejs/lib/
 - 全部不得 import three.js（維持 `node --test` 可測）
 - `main.js` 只負責把模擬結果畫出來與顯示結論文字
 
-## 第二階段：Blender 消費端
+## ~~第二階段：Blender 消費端~~（2026-08-05 取消）
 
-模擬結果是一份確定的軌跡，Blender 端因此變單純：讀同一份 `scene.json` ＋ 模擬輸出，
-自動搭建渲染場景（地面貼圖、車輛匯入與縮放、逐幀 keyframe），輸出出版用高品質畫面。
-與 Three.js demo 同源，不會兩邊各算一套物理。
+原計畫讓 Blender 讀同一份 `scene.json` ＋ 模擬輸出自動搭渲染場景出版。已取消：
+全面轉 Three.js 網頁渲染、移除 Blender 工具鏈，出版級畫面改由 Three.js 負責
+（渲染仍與 demo 同源，物理只算一套）。見
+`docs/decisions/2026-07-24-blender-threejs-contract-split.md`。
 
 ## 驗收標準
 

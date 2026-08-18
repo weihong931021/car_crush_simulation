@@ -59,14 +59,37 @@ export async function loadScene(code) {
   return { cfg, trajectory, registry, basePath };
 }
 
+// class_fallback 查表：**不分大小寫**。上游 haware 管線輸出小寫 `car`，而 registry 的鍵是
+// 大寫 `Car`——精確比對會讓每一台背景車查表 miss 而退成灰方塊，且只有 console.warn。
+// collider 的 class 由 build_scene.py 正規化過，但 extras 直接吃 trajectory 的 obj.class。
+function lookupClass(cls, registry) {
+  if (typeof cls !== 'string') return undefined;
+  const table = registry.class_fallback ?? {};
+  if (table[cls]) return table[cls];
+  const key = cls.trim().toLowerCase().replace(/[-\s]/g, '_');
+  for (const k of Object.keys(table)) {
+    if (k.trim().toLowerCase().replace(/[-\s]/g, '_') === key) return table[k];
+  }
+  return undefined;
+}
+
 export function modelFor(vehicleOrClass, registry) {
   const name = typeof vehicleOrClass === 'string'
-    ? registry.class_fallback[vehicleOrClass]
-    : (vehicleOrClass.model ?? registry.class_fallback[vehicleOrClass.class]);
+    ? lookupClass(vehicleOrClass, registry)
+    : (vehicleOrClass.model ?? lookupClass(vehicleOrClass.class, registry));
   if (!name) return null;
   return {
     file: name,
     flip: registry.models[name]?.flip ?? Math.PI,
-    hide: registry.models[name]?.hide ?? [],   // 模型自帶參考幾何（如地面圓片）的名稱前綴
+    hide: registry.models[name]?.hide ?? [],   // 模型自帶參考幾何（如地面圓片）的精確節點名稱
   };
+}
+
+// hide 清單比對：**精確名稱**，不是前綴。
+// 前綴語意曾讓 moto.glb 的 "Object_4" 連 Object_41/43/44/46/48（車身、油箱、輪胎）
+// 一起隱藏——Sketchfab 匯出的流水號命名下，任何前綴都可能是另一個節點名稱的開頭。
+// 要隱藏整棵子樹就列它的父節點名稱（three.js 的 visible=false 會連同後代一起不繪製）。
+export function shouldHideNode(name, hideNames) {
+  if (!name || !hideNames || hideNames.length === 0) return false;
+  return hideNames.includes(name);
 }

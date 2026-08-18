@@ -1,0 +1,28 @@
+{
+  "diagnostic_inputs_role": "diagnostic_only",
+  "final_evidence_status": "insufficient_data",
+  "held_out_acceptance_claim_allowed": false,
+  "optimizer_authoritative_dispatch_allowed": false,
+  "per_site_evidence_gaps": [
+    {
+      "evidence_gaps": [
+        "independent_ground_truth_unavailable",
+        "genuine_track_coverage_unavailable",
+        "pilot_power_unavailable",
+        "untouched_held_out_partition_unavailable"
+      ],
+      "site": "kee-cc"
+    },
+    {
+      "evidence_gaps": [
+        "independent_ground_truth_unavailable",
+        "genuine_track_coverage_unavailable",
+        "pilot_power_unavailable",
+        "untouched_held_out_partition_unavailable"
+      ],
+      "site": "taoyuan-tc"
+    }
+  ],
+  "proven_improvement_claim_allowed": false,
+  "schema_version": "haware-current-evidence-report-v1"
+}
