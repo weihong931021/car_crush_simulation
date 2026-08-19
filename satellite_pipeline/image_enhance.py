@@ -123,27 +123,40 @@ IMAGE_MIN_PIXELS = 655_360
 IMAGE_MAX_PIXELS = 8_294_400
 IMAGE_MAX_ASPECT = 3.0
 
+# 2026-08-20 換掉舊 prompt。舊版要求「一致柏油色調 / edges crisp / markings rendered plain
+# white / 只清理路面」，實測直接逼出四個失敗模式：路面變平塗多邊形＋白色描邊、標線變成
+# 完美等寬的向量色塊、周圍建物維持糊的造成硬邊界。模型不是沒聽話，是**照做才壞**。
+#
+# 實測（taipei_sogo 同一張 sat_raw，measure_genai_drift.py tile=128）：
+#   舊 prompt + gemini  0.15 m / >10px 39% / 全域相關 0.915   ← 向量插畫、硬邊界
+#   舊 prompt + gpt-2   0.56 m / >10px 75% / 全域相關 0.345   ← 最差
+#   新 prompt + gemini  0.11 m / >10px 21% / 全域相關 0.960   ← 仍像照片、浮水印保留
+#   新 prompt + gpt-2   0.09 m / >10px 10% / 全域相關 0.952   ← 幾何最佳但變版畫質感
+# 結論：先前「Gemini 比 OpenAI 忠於原圖」其實是 prompt 造成的，不是模型差異。
+#
+# ⚠ 驗收漏洞：最後那句「寧可糊也不要改」讓「什麼都不做」在漂移指標上滿分。
+#   指標分不出「忠實」與「沒動」，所以換 prompt 後**必須人眼看過**才算通過。
 GENAI_PROMPT = (
-    "Clean up and sharpen this aerial/satellite top-down photo of a road.\n"
-    "GOALS:\n"
-    "1. Render the road surface as REALISTIC ASPHALT: a dark grey asphalt colour like "
-    "a real city road, with a clearly ROUGH, grainy, coarse asphalt texture (visible "
-    "aggregate / gritty surface) — NOT smooth, NOT a flat solid shape or cut-out. "
-    "Make the whole road one consistent asphalt material/tone, but clean: remove stains, "
-    "oil patches, tyre marks and repair scars while keeping the rough natural asphalt "
-    "look (photorealistic, matte, top-down).\n"
-    "2. Make the ROAD EDGES (kerb lines / road outline) crisp and well defined.\n"
-    "3. Markings: be MINIMAL and restrained. Keep ONLY the markings that are clearly and "
-    "unmistakably present, rendered plain white. Do NOT bold, brighten, thicken, multiply, "
-    "extend or invent any marking. When in doubt, leave it out. Fewer markings is better.\n"
-    "HARD CONSTRAINTS — do NOT violate:\n"
-    "- If a marking is blurry or ambiguous (motorcycle waiting box, an unreadable "
-    "arrow), leave it faint or omit it. NEVER guess, invent, duplicate or redraw.\n"
-    "- Keep the EXACT same road layout, shapes and positions of every road, kerb, "
-    "building, tree and structure. Do not add roundabouts, plazas, parks or buildings.\n"
-    "- Only the road/asphalt area is cleaned; do NOT repaint buildings, vegetation "
-    "or pavement.\n"
-    "Treat this as a clean-up + deblur pass on the existing image, not a redraw."
+    "This is a low-resolution satellite PHOTOGRAPH. Perform PHOTOGRAPHIC RESTORATION only: "
+    "reduce blur and compression artefacts so that detail ALREADY PRESENT becomes legible.\n"
+    "THIS IS NOT AN ILLUSTRATION TASK. The output must still read as a photograph of this "
+    "exact place, from the same camera at the same moment.\n"
+    "RULES:\n"
+    "- Apply the SAME treatment to the whole frame. Do NOT single out the road for special "
+    "treatment while leaving buildings, vegetation or pavement untouched — a visible boundary "
+    "between a sharp region and a blurry region is a failure. (This does NOT mean making "
+    "everything equally sharp: regions that were soft in the input stay relatively soft.)\n"
+    "- Preserve every surface exactly as photographed: keep stains, patches, tyre marks, "
+    "colour variation and wear. That is real detail, not noise to be cleaned away.\n"
+    "- Do NOT draw outlines, kerb lines or edges that are not already visible as pixels.\n"
+    "- Do NOT regularise road markings. If a stripe is uneven, faded, chipped or partly "
+    "occluded in the input, it must stay uneven, faded, chipped and partly occluded in the "
+    "output. Do not make stripes equal width, equal spacing or pure white.\n"
+    "- Do NOT change the position, shape or size of anything.\n"
+    "- Keep any watermark or attribution text exactly where it is. If such text is blurry, "
+    "LEAVE IT BLURRY — do not re-typeset, sharpen or complete it into legible letters.\n"
+    "If you cannot recover detail in a region, leave that region exactly as it is. "
+    "A slightly blurry faithful result is CORRECT; a sharp reinterpreted result is WRONG."
 )
 
 STYLE_REF_NOTE = (
@@ -506,7 +519,10 @@ def main():
                          "low 試 prompt、medium 預設、high 定稿")
     ap.add_argument("--genai-temp", type=float, default=None,
                     help="（已棄用）OpenAI images API 無 temperature，傳了會被忽略")
-    ap.add_argument("--style-ref", default="refs/road_style_ref.png",
+    # 預設停用：STYLE_REF_NOTE 要求「把參考圖的柏油質感只套到道路」，與新 prompt 的
+    # 「整張同一處理、完全保留原表面」直接矛盾，會把硬邊界裝回來。而且那張參考圖是
+    # test1 的地面圖（真空拍照），拿它當風格來源等於叫模型把別的地點的樣子搬過來。
+    ap.add_argument("--style-ref", default="",
                     help="風格參考圖（真實空拍馬路）；設空字串關閉")
     args = ap.parse_args()
 

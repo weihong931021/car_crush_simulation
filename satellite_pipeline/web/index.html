@@ -140,7 +140,6 @@
       <span class="facts" id="facts"></span>
       <button id="lock" class="ghost">鎖定範圍</button>
       <div class="extras" id="extras" hidden>
-        <button id="decarBtn" title="Gemini 偵測 + inpaint 去除路上車輛（選配）">去車</button>
         <button id="genaiBtn" title="生圖模型重畫路面：好看但幾何位移 0.2 m，不可用於標註">AI 高清</button>
       </div>
     </div>
@@ -250,7 +249,6 @@ function apply(st){
     : "");
 
   const names = Object.keys(st.variants);
-  $("decarBtn").classList.toggle("on", st.meta.decar_status === "ok");
   $("genaiBtn").classList.toggle("on", names.includes("sat_genai.png"));
   show(names.includes("sat_clean.png") ? "sat_clean.png" : names[0]);
 }
@@ -308,13 +306,6 @@ $("lock").onclick = async () => {
     msg(st.zoom_upgraded ? `已鎖定（自動升到 zoom ${st.zoom_upgraded.to}，解析度加倍）`
                          : "已鎖定，可以交付標註");
   }catch(e){ msg("鎖定失敗：" + e.message); $("lock").disabled = false; }
-};
-
-$("decarBtn").onclick = async () => {
-  $("decarBtn").disabled = true; msg("Gemini 偵測車輛並去除…", true);
-  try{ apply(await api("/api/enhance", { code:S.code, decar:true })); msg("去車完成"); }
-  catch(e){ msg("去車失敗：" + e.message); }
-  finally{ $("decarBtn").disabled = false; }
 };
 
 $("genaiBtn").onclick = async () => {

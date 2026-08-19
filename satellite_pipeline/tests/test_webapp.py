@@ -221,6 +221,41 @@ class LockSizeTest(unittest.TestCase):
         self.assertEqual(meta["decar_status"], "no_key")
         self.assertEqual(meta["enhanced_px"], round(25.0 * 29.0) * 2)
 
+    def test_鎖定必定產出銳化版且不去車(self):
+        """鎖定後標註馬上要用得到清楚的底圖，所以銳化是必做的（本機 1 秒、無隨機性）。
+        去車是另一回事（Gemini、有隨機性、要等）——維持選配。
+        """
+        import image_enhance
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir = Path(d) / "loc"
+            self._seed(out_dir)
+            image_enhance.enhance("loc", key="FAKE", upscale=2, out_dir=out_dir, decar=False)
+            meta = json.loads((out_dir / "meta.json").read_text())
+            clean = Image.open(out_dir / "sat_clean.png")
+        self.assertEqual(meta["decar_status"], "skipped")
+        self.assertEqual(clean.size, (2560, 2560))
+
+    def test_run_lock必定留下可標註的銳化底圖(self):
+        """整合層：鎖定完就要能直接標註，所以 run_lock 一定要留下 sat_clean。
+
+        （seed 成 zoom 21＝最高，best_zoom_for_size 不會想升級，所以這條路不碰網路。）
+        """
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir = webapp.OUTPUT_DIR / "unittest_lock_tmp"
+            self.addCleanup(lambda: __import__("shutil").rmtree(out_dir, ignore_errors=True))
+            out_dir.mkdir(parents=True, exist_ok=True)
+            _noise_img(1280, 1280, 7).save(out_dir / "sat_raw.png")
+            (out_dir / "meta.json").write_text(json.dumps({
+                "lat": 23.0, "lon": 120.0, "zoom": 21, "scale": 2,
+                "px_per_meter": 29.0, "img_w": 1280, "img_h": 1280, "size_m": 1280 / 29.0}))
+            st = webapp.run_lock("unittest_lock_tmp", 25.0)
+            side = round(25.0 * 29.0)
+            self.assertIn("sat_clean.png", st["variants"], "鎖定後沒有銳化底圖，標註會拿到糊的原圖")
+            self.assertEqual(st["variants"]["sat_clean.png"]["w"], side * 2)
+            self.assertEqual(st["meta"]["decar_status"], "skipped")   # 銳化做、去車不做
+
     def test_已鎖定不可再鎖(self):
         import webapp
         with tempfile.TemporaryDirectory() as d:
@@ -285,6 +320,33 @@ class UploadPathTest(unittest.TestCase):
         self.assertNotIn("Errno", text)
 
 
+class StaticServeTest(unittest.TestCase):
+    """播放器要能從這台 server 開，所以得服務 threejs/ 與 scenes/。
+
+    這是第二個「用戶端字串接路徑」的地方（第一個是上傳檔名），同樣要擋穿越——
+    而且靜態檔是 GET，任何網頁都能誘導瀏覽器去讀。
+    """
+
+    def test_正常路徑可通過(self):
+        import webapp
+        got = webapp.safe_static("threejs", "index.html")
+        self.assertEqual(got, webapp.REPO_ROOT / "threejs" / "index.html")
+        self.assertEqual(webapp.safe_static("scenes", "test1/scene.json"),
+                         webapp.REPO_ROOT / "scenes" / "test1" / "scene.json")
+
+    def test_穿越會被擋下(self):
+        import webapp
+        for bad in ("../satellite_pipeline/.env", "../../etc/passwd", "/etc/passwd",
+                    "a/../../.env"):
+            with self.subTest(bad=bad):
+                self.assertIsNone(webapp.safe_static("threejs", bad))
+
+    def test_只開放白名單目錄(self):
+        import webapp
+        self.assertIsNone(webapp.safe_static("satellite_pipeline", "webapp.py"))
+        self.assertIsNone(webapp.safe_static("..", "x"))
+
+
 @unittest.skipUnless(HAVE_DEPS, "需要 PIL / numpy / cv2")
 class HandoffTest(unittest.TestCase):
     """② 鎖定完 → 交給 trafficlab 標註 GUI（③）。
@@ -303,6 +365,25 @@ class HandoffTest(unittest.TestCase):
         (out_dir / "meta.json").write_text(json.dumps({
             "lat": 23.0, "lon": 120.0, "zoom": 21, "px_per_meter": ppm,
             "img_w": side, "img_h": side, "size_m": side / ppm, "locked": True}))
+
+    def test_交付給標註的是2x銳化版而不是原圖(self):
+        """標註要在圖上點準位置，786px 的原圖糊到點不準。
+
+        銳化是**本機、確定性、不動幾何**的（UnsharpMask + LANCZOS 整數倍放大，
+        image_enhance 內有尺寸 assert），跟去車／生圖那些會亂動內容的步驟不同類，
+        所以標註底圖一律用它；px_per_meter 跟著 ×2 一起帶過去，座標才對得上。
+        """
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            (out_dir / "sat_genai.png").unlink()
+            info = webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
+            sat = Image.open(loc_root / "loc" / "sat_loc.png")
+        self.assertEqual(sat.size, (800, 800))                  # sat_clean，raw 的 2 倍
+        self.assertEqual(info["sat_meta"]["sat_variant"], "sat_clean.png")
+        self.assertAlmostEqual(info["sat_meta"]["px_per_meter"], 58.0)
+        self.assertEqual(info["sat_meta"]["upscale_factor"], 2.0)
 
     def test_沒有增強版時交付原圖(self):
         """使用者決定不去車也不銳化 → 只有 sat_raw。交付要用它，比例尺就是 raw 的 px/m。"""

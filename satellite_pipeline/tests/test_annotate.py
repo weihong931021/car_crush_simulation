@@ -82,6 +82,80 @@ class HomographyTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_DEPS, "需要 cv2 / numpy")
+class MisannotationDiagnosticsTest(unittest.TestCase):
+    """找出「哪一點標歪了」——最大殘差會指錯人。
+
+    最小平方會把單一錯點的誤差**分攤到所有點**。實測：6 組點只有 index 2 標歪 30px，
+    殘差最大的卻是 index 4。照殘差叫人重標，就是叫他去改沒問題的那一點。
+
+    改用 leave-one-out：逐一拿掉某點重擬合，看剩下的點變多乾淨。拿掉真正的錯點，
+    殘差會塌到 0；拿掉好點則不會改善。實測同一組資料指向 index 2，正確。
+    """
+
+    # sat = cctv*2 + (10,20)
+    BASE = [(0, 0), (300, 0), (300, 200), (0, 200), (150, 100), (75, 50)]
+
+    def _pairs(self, bad_index=None, offset=30):
+        ps = [{"coords_cctv": [x, y], "coords_sat": [x * 2 + 10, y * 2 + 20]}
+              for x, y in self.BASE]
+        if bad_index is not None:
+            ps[bad_index]["coords_sat"][0] += offset
+        return ps
+
+    def test_leave_one_out指出真正標歪的那一點(self):
+        import annotate
+        _, err = annotate.solve_homography(self._pairs(bad_index=2))
+        self.assertEqual(err["suspect_index"], 2)
+        self.assertNotEqual(err["worst_index"], 2)      # 殘差最大的其實是別人
+
+    def test_全部標準時沒有嫌疑點(self):
+        import annotate
+        _, err = annotate.solve_homography(self._pairs())
+        self.assertIsNone(err["suspect_index"])
+
+    def test_退化的leave_one_out要跳過不能整組壞掉(self):
+        """拿掉某點後剩下的可能共線，findHomography 會失敗——不能讓它中斷整個診斷。"""
+        import annotate
+        _, err = annotate.solve_homography(self._pairs(bad_index=2))
+        self.assertEqual(err["suspect_index"], 2)       # 其他點退化被跳過仍算得出來
+
+    def test_誤差要以公尺回報而不是像素(self):
+        """8px 的門檻隨底圖倍率浮動（58px/m 時 0.14m、29px/m 時 0.28m），
+        公尺才是物理上有意義又跟解析度無關的單位。"""
+        import annotate
+        _, err = annotate.solve_homography(self._pairs(bad_index=2), px_per_meter=58.0)
+        self.assertIn("rms_m", err)
+        self.assertAlmostEqual(err["rms_m"], err["rms_px"] / 58.0, places=9)
+        self.assertEqual(len(err["per_point_m"]), 6)
+
+    def test_沒給比例尺時不編造公尺數(self):
+        import annotate
+        _, err = annotate.solve_homography(self._pairs())
+        self.assertIsNone(err["rms_m"])
+
+    def test_點位擠成一團要警告(self):
+        """點全擠在一角時，單應性在其餘區域是外推的——殘差再小也不代表整張圖準。"""
+        import annotate
+        tight = [{"coords_cctv": [x, y], "coords_sat": [x * 2 + 10, y * 2 + 20]}
+                 for x, y in [(0, 0), (20, 0), (20, 20), (0, 20), (10, 10)]]
+        _, err = annotate.solve_homography(tight, sat_size=(1600, 1600))
+        self.assertLess(err["coverage"], 0.05)
+        self.assertIn("coverage", [w["code"] for w in err["warnings"]])
+
+    def test_點位分散時不警告(self):
+        import annotate
+        _, err = annotate.solve_homography(self._pairs(), sat_size=(640, 440))
+        self.assertGreater(err["coverage"], 0.3)
+        self.assertNotIn("coverage", [w["code"] for w in err["warnings"]])
+
+    def test_四點時明說誤差不可信(self):
+        import annotate
+        _, err = annotate.solve_homography(self._pairs()[:4])
+        self.assertFalse(err["overdetermined"])
+        self.assertIn("exact_fit", [w["code"] for w in err["warnings"]])
+
+
+@unittest.skipUnless(HAVE_DEPS, "需要 cv2 / numpy")
 class BuildGProjectionTest(unittest.TestCase):
 
     PAIRS = HomographyTest.PAIRS

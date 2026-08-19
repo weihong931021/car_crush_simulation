@@ -16,15 +16,44 @@ from pathlib import Path
 
 MIN_PAIRS = 4          # 單應性 8 個自由度，4 組對應點是下限
 
+# 判「這點標歪了」的門檻，單位是**公尺**不是像素：像素門檻會隨底圖倍率浮動
+# （8px 在 58px/m 是 0.14m、在 29px/m 是 0.28m），公尺才跟解析度無關。
+# 取 0.30 m 的理由：29px/m 底圖一個像素 3.4cm，人工點擊精度約 ±3px ≈ ±0.1m；
+# 標得好的組合 RMS 落在 0.07–0.17 m，所以超過 0.3 m 是真的標錯而不是手抖。
+BAD_RESIDUAL_M = 0.30
 
-def solve_homography(pairs):
-    """對應點 → (H 3×3 list, 誤差 dict)。
+# 點位涵蓋面積（凸包 / 整張底圖）低於此值＝其餘區域全靠外推，殘差再小也不代表準
+MIN_COVERAGE = 0.10
+
+
+def _fit(src, dst):
+    """擬合單應性並回傳 (H, 逐點殘差)；退化時回 (None, None)，讓呼叫端自己決定要不要炸。"""
+    import cv2
+    import numpy as np
+
+    H, _ = cv2.findHomography(src, dst, method=0)
+    if H is None or not np.isfinite(H).all() or abs(H[2, 2]) < 1e-12:
+        return None, None
+    H = H / H[2, 2]                       # haware_forward 會檢查 H[2,2] ≈ 1
+    proj = (H @ np.hstack([src, np.ones((len(src), 1))]).T).T
+    w = proj[:, 2:3]
+    if not np.isfinite(w).all() or (np.abs(w) < 1e-12).any():
+        return None, None
+    return H, np.linalg.norm(proj[:, :2] / w - dst, axis=1)
+
+
+def solve_homography(pairs, px_per_meter=None, sat_size=None):
+    """對應點 → (H 3×3 list, 診斷 dict)。
 
     pairs：[{"coords_cctv": [x, y], "coords_sat": [x, y]}, ...]
-    誤差是把 cctv 點經 H 投到衛星圖後與人工標的距離（像素）——這是唯一能當場看出
-    「哪一點標歪了」的訊號，所以連逐點明細一起回傳。
+
+    診斷要回答的是「**哪一點該重標**」，而這件事不能看殘差：最小平方會把單一錯點的
+    誤差分攤到所有點。實測 6 組點只有 index 2 標歪 30px，殘差最大的卻是 index 4——
+    照殘差叫人重標就是叫他去改沒問題的點。
+
+    所以改用 **leave-one-out**：逐一拿掉某點重擬合，看剩下的點變多乾淨。拿掉真正的
+    錯點殘差會塌下來，拿掉好點則不會。拿掉後剩下的點若退化（共線等）就跳過該點。
     """
-    import cv2
     import numpy as np
 
     if len(pairs) < MIN_PAIRS:
@@ -32,28 +61,76 @@ def solve_homography(pairs):
 
     src = np.array([p["coords_cctv"] for p in pairs], dtype=np.float64)
     dst = np.array([p["coords_sat"] for p in pairs], dtype=np.float64)
-    H, _ = cv2.findHomography(src, dst, method=0)
-    if H is None or not np.isfinite(H).all() or abs(H[2, 2]) < 1e-12:
+    H, residual = _fit(src, dst)
+    if H is None:
         raise ValueError("這組點求不出單應性——常見原因是四點共線或重複，請換位置重標")
 
-    H = H / H[2, 2]                       # haware_forward 會檢查 H[2,2] ≈ 1
+    n = len(pairs)
+    rms = float(np.sqrt((residual ** 2).mean()))
+    overdetermined = n > MIN_PAIRS
+    warnings = []
 
-    proj = (H @ np.hstack([src, np.ones((len(src), 1))]).T).T
-    w = proj[:, 2:3]
-    if not np.isfinite(w).all() or (np.abs(w) < 1e-12).any():
-        raise ValueError("投影出現無窮遠點，這組點退化，請換位置重標")
-    residual = np.linalg.norm(proj[:, :2] / w - dst, axis=1)
+    # --- 哪一點該重標：leave-one-out ---
+    # 需要拿掉一點後還剩 >MIN_PAIRS 個點，否則剩下的又被解死、RMS 恆為 0，分不出好壞
+    suspect_index, suspect_gain = None, None
+    if n > MIN_PAIRS + 1:
+        best = None
+        for i in range(n):
+            keep = [j for j in range(n) if j != i]
+            _, r2 = _fit(src[keep], dst[keep])
+            if r2 is None:
+                continue                       # 剩下的點退化，這個 i 沒有資訊
+            loo = float(np.sqrt((r2 ** 2).mean()))
+            if best is None or loo < best[0]:
+                best = (loo, i)
+        if best and rms > 1e-9 and best[0] < rms * 0.5:
+            suspect_index, suspect_gain = best[1], rms - best[0]
 
-    err = {
-        "rms_px": float(np.sqrt((residual ** 2).mean())),
+    # --- 涵蓋範圍：點擠成一團時，其餘區域是外推的 ---
+    coverage = None
+    if sat_size and len(dst) >= 3:
+        import cv2
+        hull = cv2.convexHull(dst.astype(np.float32))
+        area = float(cv2.contourArea(hull))
+        coverage = area / float(sat_size[0] * sat_size[1])
+        if coverage < MIN_COVERAGE:
+            warnings.append({
+                "code": "coverage",
+                "text": f"對應點只涵蓋底圖 {coverage * 100:.0f}% 的範圍，其餘區域是外推的——"
+                        f"請把點分散到畫面四周",
+            })
+
+    if not overdetermined:
+        warnings.append({
+            "code": "exact_fit",
+            "text": "剛好 4 組點會被單應性解死，誤差必然為 0——標第 5 組才看得出準不準",
+        })
+
+    to_m = (lambda v: v / px_per_meter) if px_per_meter else (lambda v: None)
+    per_point_m = [to_m(float(v)) for v in residual] if px_per_meter else None
+    if px_per_meter and overdetermined and float(residual.max()) / px_per_meter > BAD_RESIDUAL_M:
+        warnings.append({
+            "code": "residual",
+            "text": f"最大偏差 {float(residual.max()) / px_per_meter:.2f} m，超過 "
+                    f"{BAD_RESIDUAL_M} m——有點標歪了",
+        })
+
+    return H.tolist(), {
+        "rms_px": rms,
         "max_px": float(residual.max()),
         "per_point_px": [float(v) for v in residual],
-        "worst_index": int(residual.argmax()),
+        "worst_index": int(residual.argmax()),      # 描述用：殘差最大的那點
+        "suspect_index": suspect_index,             # 建議用：真正該重標的那點
+        "suspect_gain_px": suspect_gain,
+        "rms_m": to_m(rms),
+        "max_m": to_m(float(residual.max())),
+        "per_point_m": per_point_m,
+        "coverage": coverage,
+        "warnings": warnings,
         # 單應性 8 個自由度：剛好 4 組點會被解死，**再怎麼標歪殘差都是 0**。
         # 沒有這個旗標，介面上的「誤差 0.00 px」會被誤讀成標得很準。
-        "overdetermined": len(pairs) > MIN_PAIRS,
+        "overdetermined": overdetermined,
     }
-    return H.tolist(), err
 
 
 def build_g_projection(code, pairs, px_per_meter, cctv_path="", sat_path="",

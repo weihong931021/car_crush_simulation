@@ -1,7 +1,9 @@
 # 網頁化進場流程（經緯度＋影片 → 底圖確認 → 標註 → Three.js）— 設計文件
 
 日期：2026-08-16（2026-08-17 更新實作狀態）
-狀態：**① ② ③ 已實作並實機驗證**（`satellite_pipeline/webapp.py`，全網頁）；④ 待做
+狀態：**① ② ③ ④ 全數實作**（`satellite_pipeline/webapp.py`，全程瀏覽器）。
+④ 的三支子行程（推論／enrich／build_scene）串接與挑車介面已驗；**真實影片端到端未跑過**
+（需要一支真的事故影片與數分鐘推論時間）。
 
 ## 背景
 
@@ -16,7 +18,7 @@
 ① 輸入      lat / lon / 代號 / 影片
 ② 框範圍    自動截圖 → 滑桿框大小 → 鎖定（＝裁切定案，不做任何影像加工）
 ③ 標註      網頁內完成：影片首幀 ↔ 衛星圖點對應點 → 單應性 → G_projection.json
-④ 呈現      車辨識 + 軌跡淨化 + build_scene → Three.js 播放頁
+④ 整合      偵測 → 挑兩台當事車 → 標碰撞幀 → 場景包 → Three.js 播放頁
 ```
 
 **② 不做任何影像加工**（2026-08-20 使用者拍板）：去車與銳化都改成鎖定後的**選配**按鈕。
@@ -176,6 +178,42 @@ trafficlab-project/location/<code>/
 
 > 注意這與 `build_scene.pick_sat` 的偏好相反（它以 `sat_genai.png` 為第一優先）。合成軌跡
 > 路徑影響僅止於視覺（車會偏離畫上去的車道線 0.2 m）；但真實影片的標註路徑不可妥協。
+
+## ④ 整合重建（2026-08-20 完成，`web/integrate.html` + `integrate.py`）
+
+存檔完對應點直接切到 `/integrate?code=<code>`，四步：
+
+1. **偵測**：背景跑 `scripts/run_inference.py`，log 即時串到畫面
+2. **挑兩台當事車**：`list_track_candidates()` 從推論輸出算展開度／輪關鍵點／可用率，
+   品質判據**直接重用 `build_scene.kp_quality` 與它的門檻**（各寫一份遲早漂移，
+   然後兩個畫面對同一台車講出不同結論）
+3. **標碰撞幀**：追蹤器碰撞前 0.5 s 會凍結，這幀無法自動判定
+4. **產場景包**：`filter_and_enrich_output.py --ids` → `build_scene.py --collider` → 播放器
+
+不重寫任何軌跡邏輯，只串既有腳本。三個踩過才知道的環境事實：
+
+- **三支腳本要三個不同的直譯器**：推論要 ultralytics + supervision（只有
+  `littering_prediction/venv` 有）、enrich 要 numpy + trafficlab（`.venv-pifpaf`）、
+  build_scene 純標準庫。`pick_python()` 逐一探測。
+- **repo 內 7 組 inference config 的權重全部指向不存在的檔案**，而 `run_inference.py`
+  沒有 `--weights` 覆寫。改用 `--config-path` 自帶一份（`make_inference_config()`
+  複製第一組、只換權重），不去動隊友凍結中的 `inference_config.yaml`。
+- **播放器要同站服務**：`scene-loader.js` 走 `../scenes/` 相對路徑，所以 webapp 加了
+  `threejs/` 與 `scenes/` 的靜態路由（`safe_static()` 白名單 + resolve 覆核，
+  和上傳檔名同一類穿越風險）。實測播放器從 :8765 開起來零 console error。
+
+## 標歪偵測：殘差會指錯人（2026-08-20 改）
+
+原本「最大偏差 > 8px → 建議重標」有三個問題，都修了：
+
+| 問題 | 為什麼是問題 | 改成 |
+| --- | --- | --- |
+| 看**最大殘差** | 最小平方會把單一錯點的誤差**分攤到所有點**。實測 6 組點只有 index 2 標歪 30px，殘差最大的卻是 index 4——照它叫人重標，就是叫他去改沒問題的點 | **leave-one-out**：逐一拿掉重擬合，看剩下的變多乾淨。同組資料指向 index 2，正確 |
+| 門檻用**像素** | 8px 在 58px/m 是 0.14 m、在 29px/m 是 0.28 m，同一個數字意義隨底圖倍率浮動 | 改用**公尺**（`BAD_RESIDUAL_M = 0.30`）。理由：29px/m 一像素 3.4 cm，人工點擊約 ±3px ≈ ±0.1 m，標得好的 RMS 落在 0.07–0.17 m |
+| 只看殘差 | 點全擠在一角時殘差可以很小，但其餘區域全是**外推** | 加**涵蓋範圍**（凸包／底圖面積），低於 10% 就警告 |
+
+LOO 需要拿掉一點後還剩 >4 個點（否則剩下的又被解死、RMS 恆為 0），所以 6 組點以上才給
+建議；拿掉某點後若剩下的退化（共線）就跳過該點，不讓整組診斷壞掉。
 
 ## satellite_pipeline 需先補的缺口
 

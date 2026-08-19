@@ -29,10 +29,19 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from common import validate_code  # noqa: E402
 from paths import (               # noqa: E402  所有路徑的唯一事實來源
-    LOCATION_ROOT, OUTPUT_DIR, TRAFFICLAB_DIR, UPLOAD_DIR, WEB_DIR,
+    LOCATION_ROOT, OUTPUT_DIR, REPO_ROOT, TRAFFICLAB_DIR, UPLOAD_DIR, WEB_DIR,
 )
 
 VARIANTS = ("sat_raw.png", "sat_clean.png", "sat_genai.png")
+
+# 播放器要從這台 server 開，而 scene-loader.js 走 `../scenes/` 相對路徑，
+# 所以站根必須同時看得到這兩個同層目錄（CLAUDE.md 的部署約束）。只開這兩個。
+STATIC_ROOTS = ("threejs", "scenes")
+CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript",
+                 ".mjs": "text/javascript", ".json": "application/json",
+                 ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg",
+                 ".glb": "model/gltf-binary", ".svg": "image/svg+xml",
+                 ".wasm": "application/wasm"}
 BLANK_STD_THRESHOLD = 6.0     # 灰階標準差低於此值視為「無影像的空白圖磚」
 ZOOM_CANDIDATES = (21, 20, 19)
 
@@ -142,6 +151,21 @@ def extract_first_frame(video: Path, dst_png: Path) -> tuple[int, int]:
         raise ValueError(f"讀不到影片首幀：{video.name}")
     cv2.imwrite(str(dst_png), frame)
     return frame.shape[1], frame.shape[0]
+
+
+def safe_static(root: str, rel: str):
+    """站內靜態檔路徑；不在白名單目錄、或跨出該目錄一律回 None。
+
+    與上傳檔名同一類問題（用戶端字串接路徑），但這條是 GET——任何網頁都能誘導
+    瀏覽器來讀，所以同樣要 resolve 後覆核。
+    """
+    if root not in STATIC_ROOTS:
+        return None
+    base = (REPO_ROOT / root).resolve()
+    candidate = (base / rel).resolve()
+    if not candidate.is_relative_to(base) or not candidate.is_file():
+        return None
+    return candidate
 
 
 def resolve_upload(code: str, name, must_exist: bool = False):
@@ -339,18 +363,21 @@ def run_capture(lat, lon, code, want_zoom=None) -> dict:
     return read_state(code)
 
 
-def run_enhance(code, genai=False, upscale=2, decar=False) -> dict:
-    """對目前的 raw 銳化 2x（選配去車、選配 genai）。
+def run_enhance(code, genai=False, upscale=2) -> dict:
+    """對目前的 raw 銳化 2x（選配 genai HD）。
 
-    decar 預設 False（使用者決定：標註對應點不需要乾淨路面，去車反而多一層 Gemini 隨機性）。
-    開了去車時 Gemini 偵測有隨機性，可重跑到滿意為止。
+    銳化只動像素密度不動幾何（UnsharpMask + LANCZOS 整數倍，image_enhance 內有尺寸
+    assert），呼叫端把 px_per_meter 乘上倍率即可（handoff 已經這樣算）。
+
+    **不做去車**：那是 Gemini 偵測 + inpaint，有隨機性又要等，而標對應點根本用不到
+    乾淨路面（2026-08-20 使用者拍板移除）。CLI 端 `image_enhance --code` 仍保留該功能。
     """
     import image_enhance
     validate_code(code)
-    image_enhance.enhance(code, upscale=upscale, decar=decar)   # 寫 decar_status、保留 locked
+    image_enhance.enhance(code, upscale=upscale, decar=False)   # 寫 decar_status、保留 locked
     if genai:
         try:
-            image_enhance.genai_enhance(code, style_ref="refs/road_style_ref.png")
+            image_enhance.genai_enhance(code, style_ref=None)   # 風格參考圖已停用，見 image_enhance 的 --style-ref 說明
         except SystemExit as e:      # genai_enhance 用 sys.exit 報錯，不能讓它殺掉 server
             print(f"  genai 失敗：{e}")
     return read_state(code)
@@ -364,7 +391,7 @@ def run_genai(code, provider=None) -> dict:
     """
     import image_enhance
     validate_code(code)
-    kwargs = {"style_ref": "refs/road_style_ref.png"}
+    kwargs = {"style_ref": None}   # 風格參考圖已停用（會與新 prompt 矛盾並搬入他地樣貌）
     if provider:
         kwargs["provider"] = provider
     try:
@@ -374,7 +401,7 @@ def run_genai(code, provider=None) -> dict:
     return read_state(code)
 
 
-def run_lock(code, size_m, genai=False, upscale=2, decar=False) -> dict:
+def run_lock(code, size_m, genai=False, upscale=2) -> dict:
     """鎖定大小 → 對裁好的 raw 去車銳化 → 選配 genai HD。
 
     鎖定前先確認目前這張是**能裝下 size_m 的最高 zoom**。使用者為了看更大範圍按過
@@ -397,10 +424,10 @@ def run_lock(code, size_m, genai=False, upscale=2, decar=False) -> dict:
             capture_best_zoom(meta["lat"], meta["lon"], code, want_zoom=meta["zoom"])
 
     lock_size(out_dir, size_m)
-    # 鎖定＝裁切定案，不做任何影像加工。去車／銳化／AI 高清都是鎖定後的**選配**動作
-    # （使用者決定：標對應點不需要乾淨路面，每多一道加工就多一層隨機性與等待）。
-    st = run_enhance(code, genai=genai, upscale=upscale, decar=decar) if (decar or genai) \
-        else read_state(code)
+    # 鎖定後一定跑**銳化**：下一步就是在圖上點對應點，786px 的原圖糊到點不準。
+    # 銳化是本機、確定性、不動幾何的（UnsharpMask + LANCZOS 整數倍，內有尺寸 assert），
+    # 約 1 秒。**去車**才是有隨機性、要等的那個（Gemini），維持選配。
+    st = run_enhance(code, genai=genai, upscale=upscale)
     if upgraded:
         st["zoom_upgraded"] = upgraded
     return st
@@ -419,6 +446,140 @@ def read_state(code: str) -> dict:
                               "w": w, "h": h}
     return {"code": code, "meta": meta, "variants": variants,
             "coverage_m": meta["img_w"] / meta["px_per_meter"]}
+
+
+# ---------- 整合階段（④）：背景跑推論 → 挑當事車 → 產場景包 ----------
+
+JOBS = {}          # {code: {"phase", "log": [...], "returncode", "error"}}
+JOBS_LOCK = __import__("threading").Lock()
+
+
+def _job_set(code, **kw):
+    with JOBS_LOCK:
+        JOBS.setdefault(code, {"phase": "idle", "log": []}).update(kw)
+
+
+def _job_log(code, line):
+    with JOBS_LOCK:
+        job = JOBS.setdefault(code, {"phase": "idle", "log": []})
+        job["log"].append(line.rstrip())
+        del job["log"][:-400]          # 只留尾巴，log 可能很長
+
+
+def _run_streaming(code, cmd, cwd):
+    """跑子行程並把輸出即時收進 job log。回傳 returncode。"""
+    import subprocess
+    _job_log(code, f"$ {' '.join(str(c) for c in cmd)}")
+    proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+    for line in proc.stdout:
+        _job_log(code, line)
+    proc.wait()
+    return proc.returncode
+
+
+def start_inference(code: str):
+    """背景跑 trafficlab 推論。權重與直譯器都要先探測——repo 的 config 全指向不存在的檔案。"""
+    import threading
+
+    import integrate
+
+    validate_code(code)
+    loc_dir = LOCATION_ROOT / code
+    videos = sorted((loc_dir / "footage").glob("*.mp4")) + \
+        sorted((loc_dir / "footage").glob("*.mov"))
+    if not videos:
+        raise ValueError(f"{code} 沒有影片（location/{code}/footage/），無法跑偵測")
+    if not (loc_dir / f"G_projection_{code}.json").exists():
+        raise ValueError("還沒完成對應點標註，先把 G_projection 存檔")
+
+    py = integrate.pick_python(integrate.INFERENCE_PYTHONS, "ultralytics")
+    if py is None:
+        raise ValueError("找不到裝有 ultralytics 的直譯器——推論跑不了")
+    weights = integrate.find_weights(TRAFFICLAB_DIR / "models")
+    cfg = integrate.make_inference_config(
+        TRAFFICLAB_DIR / "inference_config.yaml", weights,
+        OUTPUT_DIR / code / "inference_web.yaml")
+    video = videos[0]
+    cmd = integrate.inference_cmd(py, cfg, code, video, TRAFFICLAB_DIR / "output")
+
+    _job_set(code, phase="detect", log=[], error=None, returncode=None,
+             video=video.name, weights=weights.name)
+
+    def worker():
+        try:
+            rc = _run_streaming(code, cmd, TRAFFICLAB_DIR)
+            raw = integrate.find_raw_output(TRAFFICLAB_DIR / "output", code, video.stem)
+            if rc != 0 or raw is None:
+                _job_set(code, phase="failed", returncode=rc,
+                         error=f"偵測失敗（returncode {rc}）" if rc else "偵測跑完但找不到輸出檔")
+                return
+            _job_set(code, phase="picking", returncode=0, raw_output=str(raw))
+        except Exception as e:                                  # noqa: BLE001
+            _job_set(code, phase="failed", error=f"{type(e).__name__}: {e}")
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"phase": "detect", "video": video.name, "weights": weights.name}
+
+
+def job_status(code: str) -> dict:
+    validate_code(code)
+    with JOBS_LOCK:
+        job = dict(JOBS.get(code) or {"phase": "idle", "log": []})
+    job["log"] = job.get("log", [])[-40:]
+    return job
+
+
+def track_candidates(code: str) -> dict:
+    """推論輸出 → 可挑的當事車清單（含品質欄位）。"""
+    import gzip
+
+    import integrate
+
+    validate_code(code)
+    with JOBS_LOCK:
+        raw_path = (JOBS.get(code) or {}).get("raw_output")
+    if not raw_path:
+        raise ValueError("還沒有偵測結果")
+    with gzip.open(raw_path, "rt", encoding="utf-8") as f:
+        raw = json.load(f)
+    return {"tracks": integrate.list_track_candidates(raw),
+            "frame_count": raw.get("mp4_frame_count") or len(raw.get("frames") or []),
+            "fps": (raw.get("meta") or {}).get("fps")}
+
+
+def build_scene_for(code: str, colliders, collision_frame):
+    """enrich（只留當事車）→ build_scene（產場景包）。同步跑，兩步都很快。"""
+    import integrate
+
+    validate_code(code)
+    with JOBS_LOCK:
+        raw_path = (JOBS.get(code) or {}).get("raw_output")
+    if not raw_path:
+        raise ValueError("還沒有偵測結果")
+    loc_dir = LOCATION_ROOT / code
+    traj = OUTPUT_DIR / code / "trajectory_filtered.json"
+
+    py_enrich = integrate.pick_python(integrate.ENRICH_PYTHONS, "numpy")
+    if py_enrich is None:
+        raise ValueError("找不到裝有 numpy 的直譯器——enrich 跑不了")
+
+    _job_set(code, phase="building")
+    rc = _run_streaming(code, integrate.enrich_cmd(
+        py_enrich, raw_path, traj, [c["track_id"] for c in colliders],
+        loc_dir / f"G_projection_{code}.json"), TRAFFICLAB_DIR)
+    if rc != 0:
+        _job_set(code, phase="failed", error=f"軌跡處理失敗（returncode {rc}）")
+        raise ValueError(f"軌跡處理失敗（returncode {rc}），詳見記錄")
+
+    rc = _run_streaming(code, integrate.build_scene_cmd(
+        Path(sys.executable), code, traj, loc_dir, colliders, collision_frame), REPO_ROOT)
+    if rc != 0:
+        _job_set(code, phase="failed", error=f"場景包產生失敗（returncode {rc}）")
+        raise ValueError(f"場景包產生失敗（returncode {rc}），詳見記錄")
+
+    _job_set(code, phase="done")
+    return {"scene": f"scenes/{code}", "player": f"/threejs/index.html?scene={code}"}
 
 
 # ---------- HTTP ----------
@@ -497,6 +658,25 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_error(404)
         if path == "/annotate" or path == "/annotate.html":
             return self._file(WEB_DIR / "annotate.html", "text/html; charset=utf-8")
+        seg = path.lstrip("/").split("/", 1)
+        if len(seg) == 2 and seg[0] in STATIC_ROOTS:
+            target = safe_static(seg[0], seg[1])
+            if target is None:
+                return self.send_error(404)
+            return self._file(target, CONTENT_TYPES.get(target.suffix.lower(),
+                                                        "application/octet-stream"))
+        if path.startswith("/api/integrate/status/"):
+            try:
+                return self._json(job_status(path.rsplit("/", 1)[-1]))
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
+        if path.startswith("/api/integrate/tracks/"):
+            try:
+                return self._json(track_candidates(path.rsplit("/", 1)[-1]))
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
+        if path in ("/integrate", "/integrate.html"):
+            return self._file(WEB_DIR / "integrate.html", "text/html; charset=utf-8")
         if path.startswith("/api/annotation/"):
             code = path[len("/api/annotation/"):]
             try:
@@ -540,7 +720,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(st)
             if self.path == "/api/solve":
                 import annotate
-                H, err = annotate.solve_homography(body["pairs"])
+                # 帶入比例尺與底圖尺寸，診斷才講得出公尺與涵蓋範圍
+                H, err = annotate.solve_homography(
+                    body["pairs"], px_per_meter=body.get("px_per_meter"),
+                    sat_size=body.get("sat_size"))
                 return self._json({"H": H, "error": err})
             if self.path == "/api/save_annotation":
                 import annotate
@@ -558,6 +741,11 @@ class Handler(BaseHTTPRequestHandler):
                     cctv_size=body.get("cctv_size"), sat_size=body.get("sat_size"))
                 return self._json({"path": str(path), "px_per_meter": ppm,
                                    "pairs": len(body["pairs"])})
+            if self.path == "/api/integrate/start":
+                return self._json(start_inference(body["code"]))
+            if self.path == "/api/integrate/build":
+                return self._json(build_scene_for(
+                    body["code"], body["colliders"], int(body["collision_frame"])))
             if self.path == "/api/handoff":
                 code = validate_code(body["code"])
                 video = resolve_upload(code, body.get("video"), must_exist=True)
@@ -572,13 +760,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(launch_trafficlab_gui())
             if self.path == "/api/genai":
                 return self._json(run_genai(body["code"], body.get("provider")))
-            if self.path == "/api/enhance":
-                return self._json(run_enhance(body["code"], genai=bool(body.get("genai")),
-                                              decar=bool(body.get("decar"))))
             if self.path == "/api/lock":
                 return self._json(run_lock(body["code"], float(body["size_m"]),
-                                           genai=bool(body.get("genai")),
-                                           decar=bool(body.get("decar"))))
+                                           genai=bool(body.get("genai"))))
             return self._json({"error": "unknown endpoint"}, 404)
         except (ValueError, KeyError) as e:
             return self._json({"error": str(e)}, 400)

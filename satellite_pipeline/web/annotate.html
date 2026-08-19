@@ -112,7 +112,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const code = new URLSearchParams(location.search).get("code");
-const A = { pairs: [], pending: null, imgC: null, imgS: null, err: null, saving: false };
+const A = { pairs: [], pending: null, imgC: null, imgS: null, err: null, saving: false, ppm: null };
 
 const toast = (t, bad) => {
   const el = $("toast");
@@ -130,6 +130,7 @@ $("back").onclick = () => location.href = "/";
   const d = await r.json();
   if(!r.ok) return toast(d.error, true);
 
+  A.ppm = d.sat_meta?.px_per_meter || null;
   A.imgS = await load(d.sat_url);
   fit($("cvS"), A.imgS);
   if(d.cctv_url){ A.imgC = await load(d.cctv_url); fit($("cvC"), A.imgC); }
@@ -186,7 +187,8 @@ async function solve(){
   if(A.pairs.length >= 4){
     try{
       const r = await fetch("/api/solve", { method:"POST", headers:{"Content-Type":"application/json"},
-                                            body: JSON.stringify({ pairs: A.pairs }) });
+        body: JSON.stringify({ pairs: A.pairs, px_per_meter: A.ppm,
+                               sat_size: A.imgS ? [A.imgS.width, A.imgS.height] : null }) });
       const d = await r.json();
       if(r.ok) A.err = d.error; else toast(d.error, true);
     }catch(e){ toast(e.message, true); }
@@ -206,18 +208,21 @@ function render(){
   paint($("cvC"), A.imgC, p => p.coords_cctv, A.pending?.coords_cctv);
   paint($("cvS"), A.imgS, p => p.coords_sat, null);
 
-  // 誤差：4 點必然完美貼合，這時的 0.00 是假的
+  // 誤差用公尺（像素門檻會隨底圖倍率浮動）；4 點必然完美貼合，這時的 0.00 是假的
   const e = A.err;
-  $("rms").textContent = e ? (e.overdetermined ? e.rms_px.toFixed(2) + " px" : "—") : "—";
+  const fm = v => v == null ? null : (v < 1 ? (v * 100).toFixed(0) + " cm" : v.toFixed(2) + " m");
+  $("rms").textContent = e && e.overdetermined ? (fm(e.rms_m) ?? e.rms_px.toFixed(1) + " px") : "—";
   $("rmsLabel").textContent = e && e.overdetermined ? "重投影誤差 RMS" : "重投影誤差";
-  $("note").className = "note" + (e && !e.overdetermined ? " warn" : (e && e.max_px > 8 ? " bad" : ""));
+
+  const w = e?.warnings?.[0];
+  $("note").className = "note" + (w ? (w.code === "exact_fit" ? " warn" : " bad") : "");
   $("note").innerHTML = !e
     ? `還需要 ${Math.max(0, 4 - A.pairs.length)} 組對應點才能求解`
-    : (!e.overdetermined
-        ? "剛好 4 組點會被解死，誤差必然為 0——<strong>標第 5 組</strong>才看得出準不準"
-        : (e.max_px > 8
-            ? `第 ${e.worst_index + 1} 組偏 ${e.max_px.toFixed(1)} px，建議重標`
-            : `最大偏差 ${e.max_px.toFixed(1)} px`));
+    // suspect 是 leave-one-out 算的「真正該重標的那點」——殘差最大的那點常常是被連累的
+    : (e.suspect_index != null
+        ? `<strong>第 ${e.suspect_index + 1} 組</strong>可能標歪了，拿掉它誤差會少 `
+          + `${fm(e.suspect_gain_px / (A.ppm || 1)) ?? e.suspect_gain_px.toFixed(1) + " px"}`
+        : (w ? w.text : `最大偏差 ${fm(e.max_m) ?? e.max_px.toFixed(1) + " px"}`));
 
   $("save").disabled = A.pairs.length < 4 || A.saving;
   $("undo").disabled = !A.pairs.length && !A.pending;
@@ -231,7 +236,7 @@ function paint(cv, img, pick, pending){
   ctx.drawImage(img, 0, 0);
   const r = Math.max(5, cv.width / 130);
   A.pairs.forEach((p, i) => dot(ctx, pick(p), r, i + 1,
-    A.err?.overdetermined && A.err.per_point_px[i] > 8 ? "#C3402A" : "#0E8C7E"));
+    A.err?.suspect_index === i ? "#C3402A" : "#0E8C7E"));
   if(pending) dot(ctx, pending, r, "?", "#C88A00");
 }
 
@@ -253,12 +258,16 @@ function renderTable(){
     el.innerHTML = `<div class="empty">還沒有對應點。挑路口角、斑馬線端點、標線交會處這類兩邊都看得清楚的位置，至少 4 組（建議 5–6 組分散在畫面四周）。</div>`;
     return;
   }
+  const od = A.err?.overdetermined;
   const rows = A.pairs.map((p, i) => {
-    const d = A.err?.overdetermined ? A.err.per_point_px[i] : null;
-    return `<tr class="${d > 8 ? "bad" : ""}"><td>${i+1}</td>`
+    const m = od && A.err.per_point_m ? A.err.per_point_m[i] : null;
+    const px = od ? A.err.per_point_px[i] : null;
+    const txt = m != null ? (m < 1 ? (m*100).toFixed(0) + " cm" : m.toFixed(2) + " m")
+                          : (px == null ? "—" : px.toFixed(1) + " px");
+    return `<tr class="${A.err?.suspect_index === i ? "bad" : ""}"><td>${i+1}</td>`
       + `<td>${p.coords_cctv.map(v=>v.toFixed(0)).join(", ")}</td>`
       + `<td>${p.coords_sat.map(v=>v.toFixed(0)).join(", ")}</td>`
-      + `<td>${d == null ? "—" : d.toFixed(1) + " px"}</td>`
+      + `<td>${txt}</td>`
       + `<td><button class="del" data-i="${i}">✕</button></td></tr>`;
   }).join("");
   const pend = A.pending
@@ -281,7 +290,8 @@ $("save").onclick = async () => {
         sat_size: A.imgS ? [A.imgS.width, A.imgS.height] : null }) });
     const d = await r.json();
     if(!r.ok) throw new Error(d.error);
-    toast(`已存 G_projection_${code}.json（${d.pairs} 組點，${d.px_per_meter.toFixed(1)} px/m）`);
+    toast(`已存 ${d.pairs} 組對應點，接著跑車輛偵測…`);
+    setTimeout(() => location.href = `/integrate?code=${encodeURIComponent(code)}`, 900);
   }catch(e){ toast(e.message, true); }
   finally{ A.saving = false; render(); }
 };
