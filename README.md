@@ -4,19 +4,36 @@
 
 ## Pipeline
 
+從 2026-08 起，整條進場流程都在瀏覽器裡完成（`satellite_pipeline/webapp.py`）：
+
 ```text
-CCTV 影片 (.mp4)
-    ↓  [TrafficLab：校正 + 推論]（偵測品質由隊友主導）
-trafficlab-project/output/*.json.gz（所有車輛軌跡）
-    ↓  [filter_and_enrich_output.py：篩選 + 補欄位]
-軌跡 JSON（含 position_m / velocity_mps）＋ G-projection 校正參考圖 sat_<code>.png
-    ↓  [tools/build_scene.py：半自動產生場景包]  ※ 地面圖須與軌跡同座標系，見「新增場景」
-scenes/<code>/（scene.json + ground.png + trajectory.json）
-    ↓  [Three.js 播放器：JS 碰撞物理 + 互動 UI + 渲染]
-可分享的網頁 demo（渲染全在瀏覽器）
+① 選地點   經緯度 + 事故影片
+              ↓  Google Static API 擷取 → 2x 銳化（本機、不動幾何）
+② 框範圍   滑桿框大小 → 鎖定（size_m / px_per_meter 就此定案＝座標系）
+              ↓
+③ 標註     左影片首幀、右衛星底圖點對應點 → 單應性 → G_projection_<code>.json
+              ↓
+④ 整合     偵測 → 挑兩台當事車 → 標碰撞幀 → 場景包 → 播放器
 ```
 
-當前方向見 [docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md](docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md)。
+④ 底下是 trafficlab 既有的四段腳本，**不重寫軌跡邏輯**只做串接：
+
+```text
+scripts/run_inference.py            YOLO 偵測 + 追蹤   → *.json.gz（sat_coords，無 status）
+    ↓
+scripts/eval_haware_replay.py       PifPaf + haware 定位 → 補 status / kp_sat / spread_m
+    ↓                               ※ 少了這段整條必爆：enrich 只接受 status=='ok'
+scripts/filter_and_enrich_output.py 只留當事車 + 補 position_m
+    ↓
+tools/build_scene.py                → scenes/<code>/（scene.json + ground.png + trajectory.json）
+    ↓
+threejs/index.html?scene=<code>     JS 碰撞物理 + 互動 UI，渲染全在瀏覽器
+```
+
+只剩兩個人工判斷：**挑兩台當事車**、**標碰撞幀**（追蹤器碰前 0.5 s 會凍結，無法自動判定）。
+
+設計文件：[進場流程](docs/specs/2026-08-16-web-onboarding-flow-design.md)、
+[場景包與播放器](docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md)。
 
 ### Haware 定位準確度方向與現況
 
@@ -48,13 +65,13 @@ Fallback 是主要路徑之一；零輪點不代表必然 fallback，只要非�
   連線、線段間僅些微角度）→ 投影（幾何/時序分離：每點時刻與速度剖面原樣保留）→
   縱向慣性上限 → 證據終點外插（畫面虛線標示）；各車依實際出現時刻進場（`startT`）、
   車身朝向受轉向率上限（單車模型＋側向抓地）約束
-- 打包腳本化候選：`tools/build_demo_page.py`（目前組頁流程在 session scratchpad）
 - 功能與完整版一致：車速倍率滑桿（即時重模擬）、碰撞/未碰撞結論、求安全車速區間、
   最近間距標註；依會議決定呈現至碰撞瞬間為止
-- 產生方式：`scenes/test1/` 資料 + lib bundle 組頁（來源：session scratchpad，
-  之後可整理成 `tools/build_demo_page.py`）
-- 完整互動 3D 版仍在 `threejs/index.html`（本地 `python3 -m http.server` 開啟；
-  GitHub Pages 待 repo 管理者於 Settings → Pages 啟用 main / root）
+- 產生方式：`scenes/test1/` 資料 + `threejs/lib/` bundle 組頁。**組頁流程沒有腳本化**，
+  當初在 session scratchpad 裡完成，要重產得重寫（候選檔名 `tools/build_demo_page.py`，
+  目前不存在）
+- 完整互動 3D 版在 `threejs/index.html`，本地用網頁工作台或 `python3 -m http.server` 開；
+  GitHub Pages 待 repo 管理者於 Settings → Pages 啟用 main / root
 
 ## 資料夾結構
 
@@ -63,8 +80,10 @@ blender_crash_project/
 ├── CLAUDE.md                       ← Claude 行為指令
 ├── README.md
 ├── index.html                      ← 根目錄轉址至 threejs/index.html
+├── .kiro/specs/                    ← Kiro spec（haware 定位準確度：requirements/design/tasks）
 ├── docs/
 │   ├── specs/                      ← 設計文件（含當前方向 spec）
+│   ├── diagrams/                   ← 對外簡報圖（改字請改 make_diagrams.py 再重跑）
 │   ├── papers/                     ← 外部參考文獻 PDF
 │   ├── PROJECT.md                  ← 專案總覽、競品分析、已知風險
 │   ├── todonext.md                 ← 待辦清單
@@ -79,15 +98,25 @@ blender_crash_project/
 │   ├── synth_trajectory.py         ← 合成軌跡（換場景驗證用）
 │   ├── verify_scenes.mjs           ← 全場景 headless 冒煙驗證（加新場景必跑）
 │   └── tests/                      ← build_scene 單元測試 + 邊界測試
-├── satellite_pipeline/            ← 衛星底圖自動化（lat/lon → 去車 → sat_*.png）
-│   ├── pipeline.py                ← 一鍵流程（擷取 + 增強）
+├── satellite_pipeline/            ← 網頁工作台 + 衛星底圖自動化
+│   ├── webapp.py                  ← ★ 進場流程 server（①②③④，同時服務 threejs/ 與 scenes/）
+│   ├── web/                       ← 前端三頁
+│   │   ├── index.html             ←   ①② 選地點 / 框範圍
+│   │   ├── annotate.html          ←   ③ 對應點標註（縮放平移、leave-one-out 診斷）
+│   │   └── integrate.html         ←   ④ 偵測 → 挑當事車 → 標碰撞幀 → 場景包
+│   ├── annotate.py                ← 對應點 → 單應性 → G_projection（schema 對齊 trafficlab）
+│   ├── integrate.py               ← 串接 trafficlab 四段腳本（含直譯器/PYTHONPATH 探測）
+│   ├── paths.py                   ← 所有路徑的唯一事實來源
+│   ├── pipeline.py                ← CLI 一鍵流程（擷取 + 增強）
 │   ├── map_capture.py             ← Google Static API 擷取
-│   ├── image_enhance.py           ← Gemini 去車 + 銳化 / --genai HD（OpenAI gpt-image-2）
+│   ├── image_enhance.py           ← 去車 + 銳化 / --genai HD（預設 gemini，可選 gpt-image-2）
+│   ├── measure_genai_drift.py     ← 量生圖把幾何搬了多遠（分塊相位相關）
 │   ├── common.py                  ← 地點代號驗證
-│   ├── models/FSRCNN_x4.pb        ← 超解析模型（gitignored；目前無程式引用，待清理）
+│   ├── models/FSRCNN_x4.pb        ← 超解析模型（gitignored；無程式引用，待清理）
 │   └── output/<code>/             ← sat_raw / sat_clean / sat_genai / meta.json
 ├── archive/images/                 ← 淘汰衛星圖版本 + 開發過程驗證截圖
 ├── detection_tests/                ← VisDrone fine-tune vs COCO 驗收實驗
+├── threejs-v1/                     ← 播放器前一版（保留對照，simulate/solve/main 有差異）
 ├── threejs/
 │   ├── index.html                  ← Three.js r165，場景載入 + 播放控制 UI
 │   ├── main.js                     ← 核心動畫、碰撞物理、互動邏輯
@@ -116,56 +145,62 @@ blender_crash_project/
 ## 啟動方式
 
 ```bash
-# Three.js 預覽（從專案根目錄）
-python3 -m http.server 8765
-# → http://localhost:8765/threejs/index.html
+# 網頁工作台（進場流程 ①②③④ 全在這裡；同時也服務 threejs/ 與 scenes/）
+python3 satellite_pipeline/webapp.py
+# → http://127.0.0.1:8765/                        選地點 → 框範圍 → 標註 → 整合
+# → http://127.0.0.1:8765/threejs/index.html?scene=test1   直接看既有場景
 
-# TrafficLab GUI（trafficlab conda env 不存在，用 littering_prediction 的 venv）
-PYTORCH_ENABLE_MPS_FALLBACK=1 /Users/weihong/Documents/littering_prediction/venv/bin/python trafficlab-project/main.py
+# 只想看播放器（不跑工作台）
+python3 -m http.server 8765     # 站根要同時看得到 threejs/ 與 scenes/
+
+# TrafficLab 桌面 GUI（選配；網頁標註已涵蓋校正，這條不是預設路徑）
+python3 trafficlab-project/main.py
 ```
+
+> **直譯器分工**（踩過才知道，別憑印象挑）：
+> 桌面 GUI 用**系統 `python3`**——`littering_prediction/venv` 沒有 PyQt5、
+> `.venv-pifpaf` 有 PyQt5 但缺 cocoa platform plugin，兩個都開不起視窗。
+> 推論要 ultralytics + supervision（只有 `littering_prediction/venv` 有）；
+> haware 定位與 enrich 要 numpy + trafficlab（`.venv-pifpaf`），而且**必須設
+> `PYTHONPATH=trafficlab-project`**，否則 `from trafficlab...` 直接 ModuleNotFoundError。
+> 網頁工作台的 `integrate.py` 會自動探測與帶入，手動跑才需要自己注意。
 
 ## 新增場景（新影片進場）
 
-**地面圖必須用 G-projection 的校正參考圖**：軌跡的 `position_m` 就活在
-`trafficlab-project/location/<code>/sat_<code>.png` 這張圖的平面上（原點＝圖左上角，
-尺度＝`trajectory.meta.px_per_meter`）。換一張新擷取的衛星圖＝換一個座標系，車會錯位。
+**建議走網頁工作台**：`python3 satellite_pipeline/webapp.py` → 填經緯度、選影片，
+四步走完就有可播放的重建。底圖、比例尺、校正檔、場景包都自動落到正確位置。
+
+### 座標系是怎麼定的（無論走哪條路都要懂）
+
+軌跡的 `position_m` 活在**校正參考圖**的平面上：原點＝圖左上角，尺度＝`px_per_meter`。
+換一張不同取景的衛星圖＝換一個座標系，車就會錯位。
+
+- 走網頁流程時，②鎖定的那張圖**就是**校正參考圖（③ 直接對著它標），所以不會有這個問題
+- 走 CLI 且沿用隊友既有校正時，地面圖必須是
+  `trafficlab-project/location/<code>/sat_<code>.png` 或它的等比縮放
+
+### CLI 備援
 
 ```bash
-# 1. 算出該平面的實際尺寸（sat 圖寬高 ÷ trajectory.meta.px_per_meter）
-python3 - <<'PY'
-import json, struct
-code = "<code>"; traj = "<軌跡JSON路徑>"
-ppm = json.load(open(traj))["meta"]["px_per_meter"]
-p = f"trafficlab-project/location/{code}/sat_{code}.png"
-w, h = struct.unpack(">II", open(p, "rb").read(24)[16:24])
-print(f"--ground-image {p} --px-per-meter {ppm} --size-m {w/ppm:.2f} {h/ppm:.2f}")
-PY
-
-# 2. 先列 track 挑碰撞車（人工判讀），再帶上一步印出的參數產場景包
-python3 tools/build_scene.py --trajectory T.json --list
+# 沿用既有校正：--location-dir 會自動算出 size_m 與 origin_offset_m，不必人工算
+python3 tools/build_scene.py --trajectory T.json --list        # 先挑當事車（有品質欄位輔助）
 python3 tools/build_scene.py --code <code> --trajectory T.json \
-  --ground-image trafficlab-project/location/<code>/sat_<code>.png \
-  --px-per-meter <ppm> --size-m <W> <H> \
+  --location-dir trafficlab-project/location/<code> \
   --collider <id>:Car --collider <id>:Two_Wheeler --source-collision <frame>
 
-# 3. 播放器零改碼開啟，並跑冒煙驗證
-#    http://localhost:8765/threejs/index.html?scene=<code>
-node tools/verify_scenes.mjs
+node tools/verify_scenes.mjs      # 加新場景包後必跑：唯一會實際渲染的驗證
 ```
 
-必要的人工判斷只有兩處：**挑兩台 collider 的 track ID**、**標碰撞幀**（追蹤器碰撞前 0.5s
-會凍結，無法自動判定）。
-
-`--sat-dir`（satellite_pipeline 新擷取的 Google 圖）**只適用於在衛星座標系合成的軌跡**
-（如 `scenes/tainan_yongkang/`），對真實影片軌跡會錯位。satellite_pipeline 的定位是
-合成場景的地面來源，不是真實影片的地面來源。
+`--sat-dir`（satellite_pipeline 新擷取的圖）只適用於**在衛星座標系合成的軌跡**
+（如 `scenes/tainan_yongkang/`）。走網頁流程則沒有這個限制——那張圖本身就是座標系。
 
 ## 測試
 
 ```bash
-node --test threejs/lib/tests/*.test.js                     # 物理/軌跡模組（必用 glob）
-python3 -m unittest discover -s tools/tests                  # 場景包產生器（只用標準庫）
-python3 -m unittest discover -s satellite_pipeline/tests     # 代號驗證 + 產生程式碼跳脫
+node --test threejs/lib/tests/*.test.js                     # 物理/軌跡模組 86 測（必用 glob）
+python3 -m unittest discover -s tools/tests                  # 場景包產生器 46 測（只用標準庫）
+python3 -m unittest discover -s satellite_pipeline/tests     # 網頁流程/標註/整合/底圖 105 測
+(cd trafficlab-project && .venv-pifpaf/bin/python -m unittest discover -s tests)   # haware 266 測
 node tools/verify_scenes.mjs                                 # 全場景 headless 冒煙
 ```
 

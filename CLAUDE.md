@@ -4,16 +4,24 @@
 
 ---
 
-## 當前工作方向（2026-07-20 起）
+## 當前工作方向（2026-08-20 起）
 
-**組件整合優先，Three.js 是最終呈現。** 偵測／軌跡品質由隊友主導，不做 inference 優化。
-完整設計見 `docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md`。
+**整條進場流程都在瀏覽器裡**（`satellite_pipeline/webapp.py`），前面的成果全部接進去了。
+spec：`docs/specs/2026-08-16-web-onboarding-flow-design.md`。
 
-1. **場景包**：每個事故場景一個 `scenes/<code>/`（scene.json + ground.png + trajectory.json），
-   `main.js` 的硬綁常數（OFFSET、track ID、圖路徑）全數遷入
-2. **`tools/build_scene.py`**：軌跡 JSON + satellite_pipeline 輸出 → 半自動產生場景包
-3. **Three.js 播放器**：物理留在 JS（保住互動調車速）、加碰後旋轉、光影、相機 preset、
-   播放速度、本地 vendor + 靜態部署——**這就是最終呈現，渲染全在網頁**
+```text
+① 選地點（經緯度 + 影片）→ ② 框範圍鎖定 → ③ 對應點標註 → ④ 偵測/挑車/碰撞幀 → 播放器
+```
+
+**不重寫任何軌跡邏輯**，④ 只是串接 trafficlab 既有的四段腳本。偵測／軌跡品質仍由隊友主導。
+只剩兩個人工判斷：挑兩台當事車、標碰撞幀。
+
+前一階段（已完成，仍然有效）：
+
+1. **場景包**：每個事故場景一個 `scenes/<code>/`（scene.json + ground.png + trajectory.json）
+2. **`tools/build_scene.py`**：軌跡 JSON + 地面圖 → 半自動產生場景包
+3. **Three.js 播放器**：物理留在 JS（保住互動調車速）、碰後旋轉、光影、相機 preset、
+   本地 vendor——**這就是最終呈現，渲染全在網頁**
 
 > **2026-08-05：全面轉 Three.js 網頁渲染，Blender 工具鏈已移除。** 車輛 GLB 是 committed
 > 資產（`threejs/models/`），執行期只靠 `GLTFLoader` + `registry.json`，不需要 Blender。
@@ -34,7 +42,7 @@ spec：`docs/specs/2026-07-20-collision-simulation-design.md`。前向模擬 + O
 ```bash
 node --test threejs/lib/tests/*.test.js                     # 期望 fail 0（todo 3 是已知缺口）
 python3 -m unittest discover -s tools/tests                  # 期望 OK（46 測，已無 expected failure）
-python3 -m unittest discover -s satellite_pipeline/tests     # 代號驗證 + 增強幾何 + 網頁流程 + 對應點標註 + 生圖尺寸（62 測）
+python3 -m unittest discover -s satellite_pipeline/tests     # 網頁流程/標註/整合/底圖（105 測）
 (cd trafficlab-project && .venv-pifpaf/bin/python -m unittest discover -s tests)  # haware 手性回歸
 node tools/verify_scenes.mjs                                 # 全場景 headless 冒煙，期望全過
 ```
@@ -444,20 +452,17 @@ Kalman 關鍵參數：`kalman_process_noise=0.1`、`kalman_measure_noise=2.0`、
 
 ## 待辦（詳見 docs/todonext.md）
 
-主線＝場景包 demo（spec：`docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md`）：
+進場流程 ①②③④ 全數實作完成（PR #2 已併入 main）。**但真實影片端到端還沒跑過**——
+④ 的四段串接、直譯器探測、指令組裝都驗過了，YOLO 與 PifPaf 沒有實際跑滿一支事故影片。
 
-- [x] `scenes/test1/` 場景包 + scene.json schema 定案（`schema_version: 1`）
-- [x] `tools/build_scene.py` 半自動場景包產生器
-- [x] Three.js 播放器改造：讀場景包、碰後旋轉、光影、相機 preset、播放速度、本地 vendor
-- [x] 確認 car.glb / moto.glb 各自的前方軸向，MODEL_FLIP 改 per-model 設定（registry.json）
-- [ ] 靜態部署（丟連結就能看，含手機）← **唯一真未完成的主線項**（Pages 未啟用）
-- [x] 第二場景驗證（tainan_yongkang，換場景零程式碼修改）
+接下來（優先序）：
 
-接下來（依 2026-07-24 全鏈驗證，優先序）：
-
-1. 跟隊友要一份新影片的真實 `filtered_output` 樣本，驗格式契約並寫進文件
-2. `build_scene.py` 帶入 `trajectory.meta.fps`（測試已寫好，補實作即轉綠）
-3. 靜態部署（注意 `threejs/` 與 `scenes/` 同層的路徑約束）
-4. 座標對位（等真實影片＋衛星圖組合出現才做得動）
+1. **拿一支真事故影片跑完 ④**：要確認的是 PifPaf 實際耗時（文件說 1.5–2.5 秒/幀）、
+   `--yolo-boxes-json` 的 track id 橋接是否真的對得上、挑車畫面的品質欄位是否有鑑別力
+2. **`center_box + z_cam=0` 的座標模型**（Codex 審查指出）：推論取 bbox 中心當地面接觸點，
+   但單應性是在路面上標的——系統性偏移，正解需要相機高度，不是改參數就好
+3. 靜態部署（注意 `threejs/` 與 `scenes/` 同層的路徑約束；Pages 未啟用）
+4. 網頁流程的健壯性：per-code 併發鎖、job 狀態只在記憶體（server 重啟就沒了）、
+   `/api/solve` 的請求競態
 
 凍結（隊友主導）：TrafficLab inference config、Kalman、Motorcycle 濾波器。
