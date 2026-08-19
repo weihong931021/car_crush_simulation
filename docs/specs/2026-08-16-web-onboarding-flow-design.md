@@ -125,6 +125,16 @@ server 預設只綁 127.0.0.1，但 `--host` 可改，而且瀏覽器裡任何�
 修法：`resolve_upload()` 只收單一檔名，再用 `resolve()` + `is_relative_to()` 覆核一次
 （回歸測試 5 個，涵蓋絕對路徑、上跳、子目錄、代號本身）。
 
+#### 上傳暫存檔會消失，要當成常態處理
+
+`output/_uploads/<code>/` 是暫存，換 code、清測試檔、重開機都可能讓它不見，但瀏覽器那邊
+`S.upload` 還記著。原本會讓 `shutil.copy2` 拋 `FileNotFoundError` 並**把內部路徑吐給使用者**
+（`.../satellite_pipeline/output/_uploads/...`）——看到的人既不知道那是什麼，也不知道該做什麼。
+
+現在兩層處理：`resolve_upload(..., must_exist=True)` 自己擋下並回「找不到先前上傳的
+「X」，可能已被清除——請重新選一次檔案」；前端偵測到這個訊息就用**記憶體裡還握著的
+File 物件自動重傳**再試一次，使用者根本不用重選。
+
 已知但不修：`build_scene.pick_sat` 用 `png_width / size_m` 重算 px/m 而非沿用鎖定值，
 38 m 場景最大位置誤差 **1 cm（0.027%）**，且 build_scene 自身自洽——遠小於軌跡噪音，
 不值得為此改動另一條線的檔案。

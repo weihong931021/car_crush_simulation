@@ -341,8 +341,8 @@ $("video").onchange = () => {
   if(f && /^[A-Za-z0-9_-]+$/.test($("code").value.trim())) upload().catch(() => {});
 };
 
-async function upload(){
-  if(!S.file || S.upload) return S.upload;
+async function upload(force){
+  if(!S.file || (S.upload && !force)) return S.upload;
   const code = $("code").value.trim();
   setFileLabel(`上傳中… ${S.file.name}`);
   try{
@@ -367,11 +367,24 @@ $("handoff").onclick = async () => {
   $("handoff").disabled = true; msg("準備標註畫面…", true);
   try{
     await upload();                                    // 還沒送上去的話補送
-    const r = await send({ code:S.code, [S.upload.kind]: S.upload.name });
+    const r = await sendWithRetry();
     if(!r.annotation_ready) throw new Error("缺少影片畫面，無法標註");
     location.href = `/annotate?code=${encodeURIComponent(S.code)}`;
   }catch(e){ msg(e.message === "已取消" ? "已取消" : "失敗：" + e.message); $("handoff").disabled = false; }
 };
+
+// 伺服器上的暫存檔可能已被清掉（換 code、清暫存、重開機）。瀏覽器這邊還握著 File 物件，
+// 所以直接重傳一次再試，不必叫使用者重選。
+async function sendWithRetry(){
+  const body = () => ({ code:S.code, [S.upload.kind]: S.upload.name });
+  try{ return await send(body()); }
+  catch(e){
+    if(!/找不到先前上傳/.test(e.message)) throw e;
+    msg("暫存檔已被清除，重新上傳中…", true);
+    await upload(true);
+    return send(body());
+  }
+}
 
 async function send(body){
   try{ return await api("/api/handoff", body); }

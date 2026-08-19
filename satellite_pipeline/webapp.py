@@ -144,7 +144,7 @@ def extract_first_frame(video: Path, dst_png: Path) -> tuple[int, int]:
     return frame.shape[1], frame.shape[0]
 
 
-def resolve_upload(code: str, name):
+def resolve_upload(code: str, name, must_exist: bool = False):
     """把用戶端給的檔名解析成上傳目錄內的路徑；跨出目錄就拒絕。
 
     不能直接 `UPLOAD_DIR / code / name`：
@@ -160,6 +160,10 @@ def resolve_upload(code: str, name):
     candidate = (base / str(name)).resolve()
     if Path(str(name)).name != str(name) or not candidate.is_relative_to(base):
         raise ValueError(f"檔名不合法：{name!r}（只接受上傳目錄內的單一檔名）")
+    # 上傳檔可能已被清掉（換 code、清暫存、重開機）。這裡自己擋下並講人話，
+    # 不要讓 shutil/PIL 的 FileNotFoundError 把內部路徑吐到使用者面前。
+    if must_exist and not candidate.is_file():
+        raise ValueError(f"找不到先前上傳的「{name}」，可能已被清除——請重新選一次檔案")
     return candidate
 
 
@@ -556,8 +560,8 @@ class Handler(BaseHTTPRequestHandler):
                                    "pairs": len(body["pairs"])})
             if self.path == "/api/handoff":
                 code = validate_code(body["code"])
-                video = resolve_upload(code, body.get("video"))
-                cctv = resolve_upload(code, body.get("cctv_image"))
+                video = resolve_upload(code, body.get("video"), must_exist=True)
+                cctv = resolve_upload(code, body.get("cctv_image"), must_exist=True)
                 info = handoff_to_trafficlab(OUTPUT_DIR / code, LOCATION_ROOT, code,
                                              video=video, cctv_image=cctv,
                                              force=bool(body.get("force")))

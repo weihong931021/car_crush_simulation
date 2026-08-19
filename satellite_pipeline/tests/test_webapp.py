@@ -270,6 +270,20 @@ class UploadPathTest(unittest.TestCase):
         self.assertIsNone(webapp.resolve_upload("loc", None))
         self.assertIsNone(webapp.resolve_upload("loc", ""))
 
+    def test_檔案不存在要給看得懂的訊息而不是內部路徑(self):
+        """上傳檔可能已被清掉（換 code、清暫存、重開機）。原本會漏出
+        `FileNotFoundError: ... /satellite_pipeline/output/_uploads/...` 這種內部路徑，
+        使用者只看得到一串跟自己無關的路徑，也不知道該做什麼。
+        """
+        import webapp
+        with self.assertRaises(ValueError) as cm:
+            webapp.resolve_upload("loc", "gone.mp4", must_exist=True)
+        text = str(cm.exception)
+        self.assertIn("gone.mp4", text)
+        self.assertIn("重新選", text)
+        self.assertNotIn("_uploads", text)      # 不吐內部路徑
+        self.assertNotIn("Errno", text)
+
 
 @unittest.skipUnless(HAVE_DEPS, "需要 PIL / numpy / cv2")
 class HandoffTest(unittest.TestCase):
