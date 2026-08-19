@@ -100,6 +100,21 @@
 
 PyQt5 GUI 仍可用（`/api/launch_gui`），但不是預設路徑。
 
+#### Codex 交叉審查修掉的（2026-08-20）
+
+- **`force` 覆蓋會留下過期標註**：換了底圖但舊 `G_projection_<code>.json` 還在原地，
+  trafficlab 的 `pick_stage` 會自動載入它、網頁標註也會把錨點帶回來——兩邊都拿舊座標配新
+  底圖而且不報錯。現在改名成 `.superseded.<原檔時間>` 保留證據
+- **沒有 CCTV 也算交付成功**：標註要兩張圖對點，只有底圖是標不了的。回傳
+  `annotation_ready`，前端沒選影片就不讓進標註頁
+- **去車狀態沒跟著交付**：`sat_clean` 可能是「想去車但沒 key／失敗」的產物，
+  下游只看到一張圖會誤以為乾淨。`decar_status`／`vehicles_removed` 併入 `sat_meta`
+- **前端解析度少報一半**：顯示 2x 的 `sat_clean` 卻報 raw 的 px/m，與 `sat_meta` 對不上
+
+已知但不修：`build_scene.pick_sat` 用 `png_width / size_m` 重算 px/m 而非沿用鎖定值，
+38 m 場景最大位置誤差 **1 cm（0.027%）**，且 build_scene 自身自洽——遠小於軌跡噪音，
+不值得為此改動另一條線的檔案。
+
 交付本身（`POST /api/handoff`）擺出的檔案：
 
 ```text

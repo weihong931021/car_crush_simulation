@@ -144,6 +144,12 @@ def extract_first_frame(video: Path, dst_png: Path) -> tuple[int, int]:
     return frame.shape[1], frame.shape[0]
 
 
+def _file_stamp(path: Path) -> str:
+    """用檔案自己的 mtime 當停用標記，比當下時間更能說明「那份是什麼時候標的」。"""
+    from datetime import datetime
+    return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y%m%d-%H%M%S")
+
+
 def handoff_to_trafficlab(out_dir, loc_root, code: str, video=None, cctv_image=None,
                           force: bool = False) -> dict:
     """把 ② 鎖定的底圖擺成 trafficlab 標註 GUI 認得的樣子：
@@ -178,6 +184,16 @@ def handoff_to_trafficlab(out_dir, loc_root, code: str, video=None, cctv_image=N
     dst_dir.mkdir(parents=True, exist_ok=True)
     written = []
 
+    if gproj.exists():
+        # force：底圖要被換掉，舊 G_projection 的像素座標就失效了。**不能留在原地**——
+        # trafficlab 的 pick_stage 會自動載入同名檔、網頁標註也會把錨點帶回來，
+        # 兩邊都會拿舊座標配新底圖而且不報錯。改名保留，讓人還能回頭查。
+        stamp = _file_stamp(gproj)
+        superseded = gproj.with_suffix(f".json.superseded.{stamp}")
+        gproj.rename(superseded)
+        written.append(superseded.name)
+        print(f"  舊標註已停用：{superseded.name}")
+
     shutil.copy2(src, dst_dir / f"sat_{code}.png")
     written.append(f"sat_{code}.png")
 
@@ -185,6 +201,10 @@ def handoff_to_trafficlab(out_dir, loc_root, code: str, video=None, cctv_image=N
     sat_meta = {
         "location_code": code,
         "sat_variant": src.name,
+        # 去車狀態要跟著走：sat_clean 可能是「想去車但沒 key／失敗」的產物，
+        # 下游只看到一張圖會誤以為路面已經清乾淨
+        "decar_status": meta.get("decar_status"),
+        "vehicles_removed": meta.get("vehicles_removed"),
         "px_per_meter": meta["px_per_meter"] * factor,
         "px_per_meter_raw": meta["px_per_meter"],
         "upscale_factor": factor,
@@ -207,8 +227,11 @@ def handoff_to_trafficlab(out_dir, loc_root, code: str, video=None, cctv_image=N
         Image.open(cctv_image).convert("RGB").save(dst_dir / f"cctv_{code}.png")
         written.append(f"cctv_{code}.png")
 
+    has_cctv = (dst_dir / f"cctv_{code}.png").exists()
     return {"location_dir": str(dst_dir), "written": written, "sat_meta": sat_meta,
-            "has_cctv": (dst_dir / f"cctv_{code}.png").exists()}
+            "has_cctv": has_cctv,
+            # 標註要兩張圖對點；只有底圖是標不了的，先講清楚而不是讓人點進去才發現
+            "annotation_ready": has_cctv}
 
 
 def _qt_works(py: Path) -> bool:

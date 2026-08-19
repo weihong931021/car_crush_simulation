@@ -240,6 +240,8 @@ function apply(st){
   $("lock").textContent = locked ? "已鎖定" : "鎖定範圍";
   $("extras").hidden = !locked;
   $("handoffSec").hidden = !locked;
+  $("handoff").textContent = S.upload ? "開始標註對應點 →" : "先選一支影片才能標註";
+  $("handoff").disabled = !S.upload;
 
   // 只在真的有問題時說話：該 zoom 沒有實際影像（Google 拿低 zoom 放大充數）
   alert_("bad", st.meta.detail_ok === false
@@ -285,10 +287,15 @@ function draw(){
     ctx.beginPath(); ctx.moveTo(x, y+dy*24); ctx.lineTo(x, y); ctx.lineTo(x+dx*24, y); ctx.stroke();
   });
 
-  // 一行事實：鎖定後實際會拿到什麼（後端會自動升到裝得下的最高 zoom）
+  // 一行事實：鎖定後實際會拿到什麼（後端會自動升到裝得下的最高 zoom）。
+  // 鎖定後要報**交付出去那張**的解析度——按了去車就是 sat_clean 的 2 倍密度，
+  // 照報 raw 的 px/m 會少一半，跟 sat_meta 寫進去的值對不上。
   const z = locked ? m.zoom : bestZoom(m.lat, size);
-  const pm = locked ? m.px_per_meter : ppmAt(m.lat, z);
-  $("facts").textContent = `zoom ${z} · ${pm.toFixed(1)} px/m · ${Math.round(size * pm)} px`;
+  const variant = S.variants["sat_clean.png"] || S.variants["sat_raw.png"];
+  const factor = locked && variant ? variant.w / m.img_w : 1;
+  const pm = (locked ? m.px_per_meter : ppmAt(m.lat, z)) * factor;
+  $("facts").textContent = `zoom ${z} · ${pm.toFixed(1)} px/m · ${Math.round(size * pm)} px`
+    + (factor !== 1 ? ` (${factor}x)` : "");
 }
 
 /* ---------- 動作 ---------- */
@@ -335,17 +342,20 @@ $("video").onchange = async () => {
     const j = await r.json(); if(!r.ok) throw new Error(j.error);
     S.upload = j;
     label.textContent = `✓ ${j.name}`;
+    if(S.meta?.locked) apply({ code:S.code, meta:S.meta, variants:S.variants, coverage_m:S.coverage });
   }catch(e){ label.textContent = "＋ 事故影片（上傳失敗）"; msg(e.message); }
 };
 
 /* ---------- 交付 ---------- */
 $("handoff").onclick = async () => {
   // 交付是實作細節，不用讓使用者知道「送進 trafficlab」這件事——按下去就進標註頁
-  $("handoff").disabled = true; msg("準備標註畫面…", true);
-  const body = { code:S.code };
-  if(S.upload) body[S.upload.kind] = S.upload.name;
+  msg(""); $("handoff").disabled = true;
+  if(!S.upload) return msg("標註需要影片畫面對點——請先在上方選一支事故影片或一張截圖");
+  const body = { code:S.code, [S.upload.kind]: S.upload.name };
+  msg("準備標註畫面…", true);
   try{
-    await send(body);
+    const r = await send(body);
+    if(!r.annotation_ready) throw new Error("缺少影片畫面，無法標註");
     location.href = `/annotate?code=${encodeURIComponent(S.code)}`;
   }catch(e){ msg(e.message === "已取消" ? "已取消" : "失敗：" + e.message); $("handoff").disabled = false; }
 };

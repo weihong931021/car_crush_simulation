@@ -314,6 +314,49 @@ class HandoffTest(unittest.TestCase):
             webapp.handoff_to_trafficlab(out_dir, loc_root, "loc", force=True)   # 明示才放行
             self.assertTrue((loc_root / "loc" / "sat_loc.png").exists())
 
+    def test_force覆蓋時舊的G_projection不可留下(self):
+        """底圖被換掉，舊 G_projection 的像素座標就失效了。
+
+        留著它最危險：trafficlab 的 pick_stage 會**自動載入**同名檔，網頁標註也會把錨點
+        帶回來——兩邊都會拿舊座標配新底圖，而且完全不報錯。改名成 .superseded 保留證據。
+        """
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            (loc_root / "loc").mkdir(parents=True)
+            gp = loc_root / "loc" / "G_projection_loc.json"
+            gp.write_text('{"old": true}')
+            info = webapp.handoff_to_trafficlab(out_dir, loc_root, "loc", force=True)
+            still_there = gp.exists()
+            backups = list((loc_root / "loc").glob("G_projection_loc.json.superseded*"))
+        self.assertFalse(still_there, "舊 G_projection 必須移走")
+        self.assertEqual(len(backups), 1, "但要保留成 .superseded 當證據")
+        self.assertIn("superseded", " ".join(info["written"]))
+
+    def test_沒有cctv時標示為不可標註(self):
+        """標註需要兩張圖對點；只有底圖是標不了的，要講清楚而不是讓人點進去才發現。"""
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            info = webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
+        self.assertFalse(info["has_cctv"])
+        self.assertFalse(info["annotation_ready"])
+
+    def test_去車狀態要跟著交付過去(self):
+        """sat_clean 可能是「想去車但沒 key」的產物，下游看不到狀態就會誤以為路面乾淨。"""
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            m = json.loads((out_dir / "meta.json").read_text())
+            m["decar_status"] = "failed"
+            (out_dir / "meta.json").write_text(json.dumps(m))
+            webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
+            sm = json.loads((loc_root / "loc" / "sat_meta_loc.json").read_text())
+        self.assertEqual(sm["decar_status"], "failed")
+
     def test_影片抽首幀成cctv(self):
         import cv2
         import numpy as np
