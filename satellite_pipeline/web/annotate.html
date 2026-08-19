@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>對應點標註</title>
+<style>
+  :root{
+    --bg:#F4F6F8; --panel:#FFFFFF; --line:#DDE3E9; --line2:#EDF1F4;
+    --ink:#1A2430; --dim:#69798A; --teal:#0E8C7E; --teal-soft:#E4F5F2;
+    --tape:#C88A00; --bad:#C3402A; --bad-soft:#FDECE8; --ok:#0E7A52; --ok-soft:#E6F6EF;
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+    --sans:-apple-system,"PingFang TC","Noto Sans TC",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans)}
+  button{font:600 13.5px var(--sans);cursor:pointer;border:1px solid var(--line);border-radius:7px;
+    background:var(--panel);color:var(--ink);padding:8px 13px}
+  button:hover:not(:disabled){border-color:var(--teal);color:var(--teal)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--teal);border-color:var(--teal);color:#fff}
+  button.primary:hover:not(:disabled){background:#0B7A6D;color:#fff}
+  input:focus-visible,button:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+
+  header{display:flex;align-items:center;gap:18px;padding:13px 22px;background:var(--panel);
+    border-bottom:1px solid var(--line)}
+  header h1{margin:0;font-size:15px;font-weight:600}
+  header .code{font:600 13px var(--mono);color:var(--teal);background:var(--teal-soft);
+    padding:3px 9px;border-radius:5px}
+  header .spacer{flex:1}
+  header .hint{font-size:12.5px;color:var(--dim)}
+
+  .panes{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
+    height:calc(100vh - 56px - 132px)}
+  @media (max-width:900px){.panes{grid-template-columns:1fr;height:auto}}
+  .pane{background:var(--panel);display:flex;flex-direction:column;min-height:280px;position:relative}
+  .pane h2{margin:0;padding:9px 14px;font:600 11.5px var(--sans);letter-spacing:.1em;
+    color:var(--dim);text-transform:uppercase;border-bottom:1px solid var(--line2);
+    display:flex;align-items:center;gap:9px}
+  .pane h2 .n{margin-left:auto;font:600 12px var(--mono);color:var(--teal)}
+  .pane .wrap{flex:1;overflow:hidden;position:relative;background:#F8FAFB}
+  .pane canvas{position:absolute;left:0;top:0;transform-origin:0 0;cursor:crosshair;
+    image-rendering:auto}
+  .pane.panning canvas{cursor:grabbing}
+  .zoom{position:absolute;right:8px;bottom:8px;z-index:5;display:flex;gap:5px;align-items:center;
+    background:rgba(255,255,255,.94);border:1px solid var(--line);border-radius:7px;padding:3px 5px;
+    font:600 11.5px var(--mono);color:var(--dim)}
+  .zoom button{padding:2px 8px;font:600 13px var(--mono);border-radius:5px}
+  .pane.armed{box-shadow:inset 0 0 0 2px var(--teal)}
+  .missing{color:var(--dim);font-size:13.5px;text-align:center;padding:26px;line-height:1.7}
+
+  .dock{height:132px;background:var(--panel);border-top:1px solid var(--line);
+    display:grid;grid-template-columns:1fr 300px;gap:0}
+  @media (max-width:900px){.dock{grid-template-columns:1fr;height:auto}}
+  .pairs{overflow-y:auto;padding:10px 14px}
+  .pairs table{width:100%;border-collapse:collapse;font:12px var(--mono)}
+  .pairs th{text-align:left;font:600 10.5px var(--sans);letter-spacing:.08em;color:var(--dim);
+    text-transform:uppercase;padding:0 8px 5px;position:sticky;top:0;background:var(--panel)}
+  .pairs td{padding:4px 8px;border-top:1px solid var(--line2)}
+  .pairs tr.bad td{background:var(--bad-soft)}
+  .pairs tr.pending td{color:var(--dim);font-style:italic}
+  .pairs .del{padding:1px 7px;font-size:12px;border-color:transparent;color:var(--dim)}
+  .pairs .del:hover{color:var(--bad);border-color:var(--bad)}
+  .empty{color:var(--dim);font-size:13px;padding:16px 8px}
+
+  .side{border-left:1px solid var(--line);padding:12px 16px;display:flex;flex-direction:column;gap:9px}
+  .stat{font:600 22px var(--mono);line-height:1.1}
+  .stat small{display:block;font:400 11.5px var(--sans);color:var(--dim);margin-top:3px}
+  .note{font-size:11.5px;line-height:1.5;color:var(--dim)}
+  .note.warn{color:var(--tape)}
+  .note.bad{color:var(--bad)}
+  .row{display:flex;gap:8px;margin-top:auto}
+  .row button{flex:1}
+  .toast{position:fixed;left:50%;bottom:150px;transform:translateX(-50%);padding:10px 18px;
+    border-radius:8px;font-size:13.5px;background:var(--ok-soft);color:var(--ok);
+    border:1px solid rgba(14,122,82,.3);box-shadow:0 6px 20px rgba(26,36,48,.14)}
+  .toast[hidden]{display:none}
+  .toast.bad{background:var(--bad-soft);color:var(--bad);border-color:rgba(195,64,42,.3)}
+</style>
+</head>
+<body>
+<header>
+  <h1>對應點標註</h1><span class="code" id="code">—</span>
+  <span class="hint" id="hint">在影片畫面點一個位置，再到衛星圖點同一個位置（滾輪縮放・拖曳平移・雙擊回到符合視窗）</span>
+  <span class="spacer"></span>
+  <button id="back">← 回底圖</button>
+</header>
+
+<div class="panes">
+  <div class="pane" id="paneC">
+    <h2>影片畫面 <span class="n" id="nC"></span></h2>
+    <div class="wrap" id="wrapC"><canvas id="cvC"></canvas>
+      <div class="missing" id="missC" hidden>沒有影片畫面<br><small>回底圖頁選一支影片再交付，會自動抽首幀</small></div>
+      <div class="zoom"><button data-z="C" data-d="-1">−</button><span id="zC">100%</span>
+        <button data-z="C" data-d="1">＋</button><button data-z="C" data-d="0">符合</button></div>
+    </div>
+  </div>
+  <div class="pane" id="paneS">
+    <h2>衛星底圖 <span class="n" id="nS"></span></h2>
+    <div class="wrap" id="wrapS"><canvas id="cvS"></canvas>
+      <div class="zoom"><button data-z="S" data-d="-1">−</button><span id="zS">100%</span>
+        <button data-z="S" data-d="1">＋</button><button data-z="S" data-d="0">符合</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="dock">
+  <div class="pairs" id="pairs"></div>
+  <div class="side">
+    <div><span class="stat" id="rms">—</span><small id="rmsLabel">重投影誤差</small></div>
+    <div class="note" id="note"></div>
+    <div class="row">
+      <button id="undo">復原</button>
+      <button id="save" class="primary" disabled>存檔</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const code = new URLSearchParams(location.search).get("code");
+const A = { pairs: [], pending: null, imgC: null, imgS: null, err: null, saving: false, ppm: null };
+
+const toast = (t, bad) => {
+  const el = $("toast");
+  el.textContent = t; el.className = "toast" + (bad ? " bad" : ""); el.hidden = false;
+  clearTimeout(toast.t); toast.t = setTimeout(() => el.hidden = true, 3200);
+};
+
+$("back").onclick = () => location.href = "/";
+
+/* ---------- 載入 ---------- */
+(async function boot(){
+  if(!code) return toast("網址缺少 ?code=", true);
+  $("code").textContent = code;
+  const r = await fetch(`/api/annotation/${encodeURIComponent(code)}`);
+  const d = await r.json();
+  if(!r.ok) return toast(d.error, true);
+
+  A.ppm = d.sat_meta?.px_per_meter || null;
+  A.imgS = await load(d.sat_url);
+  fit($("cvS"), A.imgS);
+  if(d.cctv_url){ A.imgC = await load(d.cctv_url); fit($("cvC"), A.imgC); }
+  else { $("cvC").hidden = true; $("missC").hidden = false; }
+
+  // 已標過就把錨點帶回來，可以接著改而不是從頭
+  if(d.existing?.homography?.anchors_list?.length){
+    A.pairs = d.existing.homography.anchors_list.map(a => ({
+      coords_cctv: a.coords_cctv, coords_sat: a.coords_sat }));
+    toast(`載入既有 ${A.pairs.length} 組對應點`);
+  }
+  render();
+})();
+
+const load = src => new Promise((ok, no) => {
+  const im = new Image(); im.onload = () => ok(im); im.onerror = no; im.src = src;
+});
+
+// 畫布用影像原生尺寸（座標＝原生像素，直接寫進 G_projection），縮放全部交給 CSS transform。
+// 這樣 xy() 用 getBoundingClientRect 換算就自動含縮放，不必在座標運算裡處理任何倍率。
+const VIEW = { C: {s:1, x:0, y:0}, S: {s:1, x:0, y:0} };
+
+function fit(cv, img){
+  cv.width = img.width; cv.height = img.height;
+  fitView(cv === $("cvC") ? "C" : "S");
+}
+
+function fitView(k){
+  const cv = $("cv" + k), wrap = $("wrap" + k);
+  if(!cv.width) return;
+  const pad = 16;
+  const s = Math.min((wrap.clientWidth - pad) / cv.width, (wrap.clientHeight - pad) / cv.height);
+  VIEW[k] = { s, x: (wrap.clientWidth - cv.width * s) / 2, y: (wrap.clientHeight - cv.height * s) / 2 };
+  applyView(k);
+}
+
+function applyView(k){
+  const v = VIEW[k];
+  $("cv" + k).style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.s})`;
+  $("z" + k).textContent = Math.round(v.s * 100) + "%";
+}
+
+function zoomAt(k, factor, cx, cy){
+  const v = VIEW[k], wrap = $("wrap" + k), r = wrap.getBoundingClientRect();
+  // 游標下的那一點要留在原地：先換算它在影像上的座標，縮放後再把它移回同一個螢幕位置
+  const px = (cx - r.left - v.x) / v.s, py = (cy - r.top - v.y) / v.s;
+  const s = Math.min(12, Math.max(0.05, v.s * factor));
+  VIEW[k] = { s, x: cx - r.left - px * s, y: cy - r.top - py * s };
+  applyView(k);
+}
+
+["C", "S"].forEach(k => {
+  const wrap = $("wrap" + k);
+  wrap.addEventListener("wheel", ev => {
+    ev.preventDefault();
+    zoomAt(k, Math.exp(-ev.deltaY * 0.0015), ev.clientX, ev.clientY);
+  }, { passive: false });
+
+  // 拖曳＝平移；沒有移動超過門檻才算點擊，所以平移不會誤放對應點
+  let drag = null;
+  wrap.addEventListener("pointerdown", ev => {
+    if(ev.button !== 0) return;
+    drag = { x: ev.clientX, y: ev.clientY, ox: VIEW[k].x, oy: VIEW[k].y, moved: false };
+    // 沒有 capture 也能用（只是滑出視窗會斷），不值得為它中斷整個拖曳
+    try { wrap.setPointerCapture(ev.pointerId); } catch {}
+  });
+  wrap.addEventListener("pointermove", ev => {
+    if(!drag) return;
+    const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+    if(!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true;
+    $("pane" + k).classList.add("panning");
+    VIEW[k].x = drag.ox + dx; VIEW[k].y = drag.oy + dy;
+    applyView(k);
+  });
+  wrap.addEventListener("pointerup", ev => {
+    const moved = drag?.moved;
+    drag = null;
+    $("pane" + k).classList.remove("panning");
+    if(moved) ev.stopPropagation();          // 這是平移不是點擊
+    else place(k, ev);
+  });
+  wrap.addEventListener("dblclick", () => fitView(k));
+});
+
+document.querySelectorAll(".zoom button").forEach(b => b.onclick = ev => {
+  ev.stopPropagation();
+  const k = b.dataset.z, d = +b.dataset.d;
+  if(d === 0) return fitView(k);
+  const r = $("wrap" + k).getBoundingClientRect();
+  zoomAt(k, d > 0 ? 1.4 : 1 / 1.4, r.left + r.width / 2, r.top + r.height / 2);
+});
+
+addEventListener("resize", () => ["C", "S"].forEach(fitView));
+
+/* ---------- 點選 ---------- */
+function xy(ev, cv){
+  const r = cv.getBoundingClientRect();
+  return [ (ev.clientX - r.left) * cv.width / r.width,
+           (ev.clientY - r.top)  * cv.height / r.height ];
+}
+
+function place(k, ev){
+  const cv = $("cv" + k);
+  if(!cv.width) return;
+  const p = xy(ev, cv);
+  // 點在影像外（縮小後周圍的空白）不算
+  if(p[0] < 0 || p[1] < 0 || p[0] > cv.width || p[1] > cv.height) return;
+  if(k === "C"){
+    A.pending = { coords_cctv: p };            // 先點影片，再點衛星圖配成一組
+    render();
+    return;
+  }
+  if(!A.pending){
+    if(A.imgC) return toast("先在左邊影片畫面點同一個位置", true);
+    return;                                    // 沒有影片畫面時無從配對
+  }
+  A.pairs.push({ coords_cctv: A.pending.coords_cctv, coords_sat: p });
+  A.pending = null;
+  solve();
+}
+
+$("undo").onclick = () => {
+  if(A.pending) A.pending = null; else A.pairs.pop();
+  solve();
+};
+
+/* ---------- 求解 ---------- */
+async function solve(){
+  A.err = null;
+  if(A.pairs.length >= 4){
+    try{
+      const r = await fetch("/api/solve", { method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ pairs: A.pairs, px_per_meter: A.ppm,
+                               sat_size: A.imgS ? [A.imgS.width, A.imgS.height] : null }) });
+      const d = await r.json();
+      if(r.ok) A.err = d.error; else toast(d.error, true);
+    }catch(e){ toast(e.message, true); }
+  }
+  render();
+}
+
+/* ---------- 畫面 ---------- */
+function render(){
+  $("nC").textContent = A.imgC ? `${A.imgC.width}×${A.imgC.height}` : "";
+  $("nS").textContent = A.imgS ? `${A.imgS.width}×${A.imgS.height}` : "";
+  $("paneC").classList.toggle("armed", !A.pending && !!A.imgC);
+  $("paneS").classList.toggle("armed", !!A.pending);
+  $("hint").textContent = A.pending ? "現在到右邊衛星圖點同一個位置"
+                                    : "在影片畫面點一個位置，再到衛星圖點同一個位置";
+
+  paint($("cvC"), A.imgC, p => p.coords_cctv, A.pending?.coords_cctv);
+  paint($("cvS"), A.imgS, p => p.coords_sat, null);
+
+  // 誤差用公尺（像素門檻會隨底圖倍率浮動）；4 點必然完美貼合，這時的 0.00 是假的
+  const e = A.err;
+  const fm = v => v == null ? null : (v < 1 ? (v * 100).toFixed(0) + " cm" : v.toFixed(2) + " m");
+  $("rms").textContent = e && e.overdetermined ? (fm(e.rms_m) ?? e.rms_px.toFixed(1) + " px") : "—";
+  $("rmsLabel").textContent = e && e.overdetermined ? "重投影誤差 RMS" : "重投影誤差";
+
+  const w = e?.warnings?.[0];
+  $("note").className = "note" + (w ? (w.code === "exact_fit" ? " warn" : " bad") : "");
+  $("note").innerHTML = !e
+    ? `還需要 ${Math.max(0, 4 - A.pairs.length)} 組對應點才能求解`
+    // suspect 是 leave-one-out 算的「真正該重標的那點」——殘差最大的那點常常是被連累的
+    : (e.suspect_index != null
+        ? `<strong>第 ${e.suspect_index + 1} 組</strong>可能標歪了，拿掉它誤差會少 `
+          + `${fm(e.suspect_gain_px / (A.ppm || 1)) ?? e.suspect_gain_px.toFixed(1) + " px"}`
+        : (w ? w.text : `最大偏差 ${fm(e.max_m) ?? e.max_px.toFixed(1) + " px"}`));
+
+  $("save").disabled = A.pairs.length < 4 || A.saving;
+  $("undo").disabled = !A.pairs.length && !A.pending;
+  renderTable();
+}
+
+function paint(cv, img, pick, pending){
+  if(!img) return;
+  const ctx = cv.getContext("2d");
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(img, 0, 0);
+  // 標記畫在影像座標上，但要讓它在**螢幕上**維持固定大小——否則放大到 8× 時
+  // 圓點會膨脹成一大塊，正好蓋住你要對準的位置
+  const v = VIEW[cv === $("cvC") ? "C" : "S"];
+  const r = Math.max(2, 6 / (v?.s || 1));
+  A.pairs.forEach((p, i) => dot(ctx, pick(p), r, i + 1,
+    A.err?.suspect_index === i ? "#C3402A" : "#0E8C7E"));
+  if(pending) dot(ctx, pending, r, "?", "#C88A00");
+}
+
+function dot(ctx, [x, y], r, label, color){
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fillStyle = color; ctx.fill();
+  ctx.lineWidth = Math.max(1.5, r / 4); ctx.strokeStyle = "#fff"; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x - r*2.2, y); ctx.lineTo(x + r*2.2, y);
+  ctx.moveTo(x, y - r*2.2); ctx.lineTo(x, y + r*2.2);
+  ctx.strokeStyle = color; ctx.lineWidth = Math.max(1, r / 5); ctx.stroke();
+  ctx.font = `600 ${r * 2.2}px ui-monospace, Menlo, monospace`;
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = color; ctx.lineWidth = r / 1.6;
+  ctx.strokeText(label, x + r * 1.5, y - r * 1.5);
+  ctx.fillText(label, x + r * 1.5, y - r * 1.5);
+}
+
+function renderTable(){
+  const el = $("pairs");
+  if(!A.pairs.length && !A.pending){
+    el.innerHTML = `<div class="empty">還沒有對應點。挑路口角、斑馬線端點、標線交會處這類兩邊都看得清楚的位置，至少 4 組（建議 5–6 組分散在畫面四周）。</div>`;
+    return;
+  }
+  const od = A.err?.overdetermined;
+  const rows = A.pairs.map((p, i) => {
+    const m = od && A.err.per_point_m ? A.err.per_point_m[i] : null;
+    const px = od ? A.err.per_point_px[i] : null;
+    const txt = m != null ? (m < 1 ? (m*100).toFixed(0) + " cm" : m.toFixed(2) + " m")
+                          : (px == null ? "—" : px.toFixed(1) + " px");
+    return `<tr class="${A.err?.suspect_index === i ? "bad" : ""}"><td>${i+1}</td>`
+      + `<td>${p.coords_cctv.map(v=>v.toFixed(0)).join(", ")}</td>`
+      + `<td>${p.coords_sat.map(v=>v.toFixed(0)).join(", ")}</td>`
+      + `<td>${txt}</td>`
+      + `<td><button class="del" data-i="${i}">✕</button></td></tr>`;
+  }).join("");
+  const pend = A.pending
+    ? `<tr class="pending"><td>${A.pairs.length+1}</td>`
+      + `<td>${A.pending.coords_cctv.map(v=>v.toFixed(0)).join(", ")}</td>`
+      + `<td colspan="3">等待衛星圖上的對應位置…</td></tr>` : "";
+  el.innerHTML = `<table><thead><tr><th>#</th><th>影片 x, y</th><th>衛星 x, y</th><th>偏差</th><th></th></tr></thead>`
+    + `<tbody>${rows}${pend}</tbody></table>`;
+  el.querySelectorAll(".del").forEach(b => b.onclick = () => { A.pairs.splice(+b.dataset.i, 1); solve(); });
+}
+
+/* ---------- 存檔 ---------- */
+$("save").onclick = async () => {
+  A.saving = true; render();
+  try{
+    const r = await fetch("/api/save_annotation", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ code, pairs: A.pairs,
+        cctv_size: A.imgC ? [A.imgC.width, A.imgC.height] : null,
+        sat_size: A.imgS ? [A.imgS.width, A.imgS.height] : null }) });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error);
+    toast(`已存 ${d.pairs} 組對應點，接著跑車輛偵測…`);
+    setTimeout(() => location.href = `/integrate?code=${encodeURIComponent(code)}`, 900);
+  }catch(e){ toast(e.message, true); }
+  finally{ A.saving = false; render(); }
+};
+</script>
+</body>
+</html>

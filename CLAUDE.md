@@ -33,13 +33,15 @@ spec：`docs/specs/2026-07-20-collision-simulation-design.md`。前向模擬 + O
 
 ```bash
 node --test threejs/lib/tests/*.test.js                     # 期望 fail 0（todo 3 是已知缺口）
-python3 -m unittest discover -s tools/tests                  # 期望 OK（23 測，已無 expected failure）
-python3 -m unittest discover -s satellite_pipeline/tests     # 代號驗證 + 增強幾何 + 網頁鎖定流程 + 生圖尺寸（26 測）
+python3 -m unittest discover -s tools/tests                  # 期望 OK（46 測，已無 expected failure）
+python3 -m unittest discover -s satellite_pipeline/tests     # 代號驗證 + 增強幾何 + 網頁流程 + 對應點標註 + 生圖尺寸（62 測）
 (cd trafficlab-project && .venv-pifpaf/bin/python -m unittest discover -s tests)  # haware 手性回歸
 node tools/verify_scenes.mjs                                 # 全場景 headless 冒煙，期望全過
 ```
 
-haware 那套**必須用 `.venv-pifpaf`**（需要 numpy；系統 python3 沒有）。
+haware 那套**必須用 `.venv-pifpaf`**——**理由不是 numpy**（系統 python3 有 2.4.4），
+而是整包 discover 會經 `trafficlab/gui/` → `inference/pipeline.py` 載 `ultralytics`，系統 python3 沒有。
+（單跑 `tests.test_haware_localization` 用系統 python3 是會過的，所以照「缺 numpy」去修會修錯地方。）
 
 `tools/verify_scenes.mjs` 自動掃 `scenes/*/`、自起自收 http server，逐場景驗零 console
 error／零外部請求（three.js 必須全走本地 vendor）／collider 恰 2 台無 NaN／無錯誤 overlay。
@@ -123,8 +125,10 @@ python3 tools/build_scene.py --code <code> --trajectory T.json \
 ```
 
 只剩兩個必要人工判斷：**挑兩台 collider 的 track ID**、**標碰撞幀**（追蹤器碰前凍結，
-無法自動判定）。可重現性已驗證：用 committed 參數重建 tainan_yongkang，ground.png 與
-trajectory.json **sha256 位元組級相同**。
+無法自動判定）。可重現性**只有 `trajectory.json` 那半成立**（實測 sha256 位元組相同）。
+`ground.png` 不可重現：`satellite_pipeline/output/` 在 gitignore、來源圖從未入庫，且
+2026-08-20 已用 `size_m 35` 重抓覆蓋（舊的 25 m 那張已不存在）。要保住這條保證只有兩條路：
+把 `sat_raw.png` + `meta.json` 入庫，或只承諾 trajectory 那半。
 
 **挑 collider 現在有資料輔助**（2026-07-28）：`--list` 會從 `kp_sat` 自算並顯示
 展開度中位數／輪關鍵點中位數／可用率（門檻 `spread ≤ 8m` 且 `n_wheel_kp ≥ 2`，
@@ -140,22 +144,57 @@ trajectory.json **sha256 位元組級相同**。
 python3 satellite_pipeline/webapp.py     # → http://127.0.0.1:8765/
 ```
 
-網頁化進場流程的 ①②（輸入經緯度 → 底圖確認鎖定），stdlib http.server 零依賴，
-輸出與 CLI 共用 `output/<code>/`。三條必記的規則：
+網頁化進場流程的 **①②③**（輸入經緯度 → 底圖確認鎖定 → 對應點標註產出 G_projection），
+輸出與 CLI 共用 `output/<code>/`。**HTTP 層零框架**（stdlib http.server），但影像處理仍需
+numpy／cv2／PIL（`detail_score` 用 cv2、`is_blank` 用 numpy）。三條必記的規則：
 
-- **去車在裁切之後**：Gemini 對整張 1280² 只偵測到 7 台車、對裁好的 728² 偵測到 38 台。
-  所以「擷取」只抓原圖，選好大小按「鎖定」時才去車——順序反了偵測率掉一個量級
+- **鎖定＝裁切定案，不做任何影像加工**（2026-08-20 拍板）：去車／銳化／AI 高清都是鎖定後的
+  選配按鈕，預設全程無 LLM 呼叫。要去車的話**一定在裁切之後**——Gemini 對整張 1280² 只偵測到
+  7 台車、對裁好的 728² 偵測到 38 台，順序反了偵測率掉一個量級
+- **③ 標註已網頁化**（`web/annotate.html` + `annotate.py`）：左影片首幀、右衛星圖點對應點
+  → 單應性 → `G_projection_<code>.json`（schema 對齊 `trafficlab_config.default_config()`）。
+  交付檔案（`/api/handoff` 擺出 `location/<code>/` 的 sat_/sat_meta_/cctv_/footage/）是實作
+  細節，介面不提，按下按鈕直接切頁。PyQt5 GUI 仍可用但不是預設路徑
+- **用戶端給的檔名一律走 `resolve_upload()`**：`Path("/a/b") / "/tmp/x"` 在 pathlib 會**整個
+  丟掉前綴**，直接接路徑＝任意檔案讀寫（實測可把 /tmp 的檔複製進 repo、任意圖片經
+  `/location/...` 外洩）。只收單一檔名並用 `resolve()` + `is_relative_to()` 覆核
+- **4 點陷阱**：單應性 8 個自由度，剛好 4 組對應點必然解死、RMS 恆為 0——**標歪也看不出來**。
+  `solve_homography()` 回 `overdetermined` 旗標，介面要求標第 5 組才顯示誤差
+- **找標歪的點不能看殘差**：最小平方會把單一錯點的誤差分攤到所有點（實測只有 index 2 標歪
+  30px，殘差最大的是 index 4）。用 **leave-one-out**（`suspect_index`）才指得對。
+  門檻也改用**公尺**（`BAD_RESIDUAL_M=0.30`）——像素門檻會隨底圖倍率浮動
+- **④ 整合重建**（`web/integrate.html` + `integrate.py`）：偵測 → 挑兩台當事車 → 標碰撞幀
+  → 場景包 → 播放器。**不重寫軌跡邏輯**，只串既有腳本；挑車判據直接重用
+  `build_scene.kp_quality`。
+- **軌跡鏈是四段不是三段**：`run_inference` → **`eval_haware_replay`** → `filter_and_enrich`
+  → `build_scene`。少了中間那段整條必爆——`run_inference` 只寫 `sat_coords` 不寫 `status`，
+  而 enrich 的 localization 政策只接受 `status=='ok'`，會全格判證據不足然後 `sys.exit`。
+  PifPaf 逐格 1.5–2.5 秒，是整條鏈最慢的一段
+- **跑 trafficlab 腳本要設 `PYTHONPATH`**：`eval_haware_replay` 與 `filter_and_enrich` 都
+  `from trafficlab...` import，但那個 repo 沒裝成套件，不設就 ModuleNotFoundError。
+  三支腳本還要三個不同直譯器（推論的 ultralytics 只有 `littering_prediction/venv` 有），
+  且 repo 內 7 組 inference config 權重全部不存在 → 用 `--config-path` 自帶一份
+- **`px_per_meter` 一路帶到底**：`sat_meta_<code>.json` 由 ② 的 Web Mercator 解析值寫入，
+  ③ 直接採用；`DistStage` 也加了「採用已知比例尺」讀同一份，免去人工量兩點
 - **`locked: true` 之後 `size_m`／`px_per_meter` 就是座標系**，要改只能重新擷取（整組覆蓋）
 - **標註只能對著 `sat_clean`**：`sat_genai` 是生圖重畫，實測位移中位數 0.20 m（gemini）／
   0.30 m（gpt-image-2），`sat_clean` 是 0.00 m。標在 genai 上＝把 0.2m 誤差烙進 G-projection。
   量法：`satellite_pipeline/measure_genai_drift.py`（分塊相位相關）
-- `meta.decar_status`（ok／no_vehicles／no_key／failed）讓去車降級不再靜默；Gemini 偵測有
-  隨機性（同圖三次 5／13／4 台），前端有「再跑一次去車」
+- `meta.decar_status`（ok／no_vehicles／no_key／failed／**skipped**）讓去車降級不再靜默——注意 `skipped` 是使用者主動不去車，**不是降級**，前端不該警示；Gemini 偵測有
+  隨機性（同圖三次 5／13／4 台），鎖定後才出現的「去車」按鈕可重複按
+- **zoom 只降不升會白白損失一半解析度**：使用者為了看大範圍按「降 zoom 重抓」後，最終選的
+  尺寸常常在高 zoom 也放得下（38 m < zoom 21 的 43.97 m 涵蓋）。`run_lock` 會用
+  `best_zoom_for_size()` 自動升回裝得下的最高 zoom（並在高 zoom 無真實影像時退回）
+- **座標打錯不會報錯，只會給你一張糊圖**：Google 該 zoom 沒影像時不回空白磚，而是把低 zoom
+  的圖放大充數（尺寸／px_per_meter／灰階 std 全部正常）。`meta.detail_score`
+  （Laplacian 變異數，正常路口約 120、放大充數 15–35）與 `detail_ok` 就是為此，
+  前端會出紅色警示。**不自動降 zoom**——平坦路口會被誤判成一路降到底
 
 **地面圖增強的安全邊界**：`image_enhance.py --input/--output` 走的是
 「Gemini 偵測車框 → cv2 inpaint 去車 → UnsharpMask 銳化 → LANCZOS 整數倍放大」，
 **只動局部像素與像素密度，不動幾何**，所以 `size_m` 不變、只有 `px_per_meter` 乘上倍率。
-函式內有最後一道 assert，尺寸若不是精確整數倍會直接 raise。
+函式內有最後一道守衛（`image_enhance.py` 的 `RuntimeError`，**不是 assert**，`python -O` 拔不掉），
+尺寸若不是精確整數倍會直接 raise。
 **`--genai` 不可用於此路徑**（生圖模型重畫整張，路面內容會被改寫），CLI 會直接擋下。
 `--genai-provider` 預設 `gemini`（實測較忠於原圖）；選 `openai` 時成本（1280×1280 實測）
 low $0.033／medium $0.089／high 約 $0.28 一張，輸入那份約 $0.026 不隨 quality 變。
@@ -206,8 +245,9 @@ heading 那半只對隊友的 replay/GUI 有用（播放器自己從線段算 he
 1. **位置準度從未被量過**：兩站點都沒有位置 ground truth，先前全部是內部一致性指標。
    我們知道手性修正「改變」了位置 1.52m，**不知道「改對」了多少**。唯一可得的準參考是
    h=0 的輪關鍵點（模板裡唯一實測而非估計的高度）
-2. **品質判據還沒接進 `build_scene.py`**：`spread_m`／`n_wheel_kp` 已輸出但沒人用來過濾，
-   挑 track 仍是純人工判讀
+2. ~~品質判據還沒接進 `build_scene.py`~~ ✅ **已接**（與上方「挑 collider 現在有資料輔助」
+   同一件事，這裡原本寫了相反的話）：`--list` 印展開度／輪點／可用率三欄與門檻，
+   挑到不合門檻的 track 會發 `UserWarning`。**但只警示不擋下**，最終仍由人決定
 3. **`path.js` 淨化參數只在 test1 一份資料上調過**（RDP ε=0.06、a≤3.0/b≤7.5），
    真實新影片的噪音特性、取樣率、碰前凍結窗都不同
 
@@ -220,7 +260,8 @@ heading 那半只對隊友的 replay/GUI 有用（播放器自己從線段算 he
 
 #### 驗收場地
 
-**不要用 taipei-cm 驗收**：它 z_cam=3.596m 是 repo 內 8 個地點最低（1/k 幾何懲罰 1.85×
+**不要用 taipei-cm 驗收**：它 z_cam=3.596m 在 8 個地點中第二低（僅次於 test4 的 3.418m），
+也是**有真實影片的地點裡最低**的（1/k 幾何懲罰 1.85×
 vs kee-cc 1.29×），而且有**獨立的 homography 度量缺陷**——用 h=0 輪對量觀測軸距，
 模板 2.546m 但實測中位數 5.92m、落在合理區間的只有 12.5%（kee-cc 是 53.2%）。
 改用 kee-cc / taoyuan-tc。
@@ -250,7 +291,10 @@ vs kee-cc 1.29×），而且有**獨立的 homography 度量缺陷**——用 h=
   `--location-dir trafficlab-project/location/<code>`，會自動讀 `sat_<code>.png` 尺寸 ×
   `trajectory.meta.px_per_meter` 算出 `size_m`，不必再人工算三個數字。
 - ~~車種 class 大小寫不符~~ ✅ **2026-07-28 修掉**：`build_scene.normalize_class()`
-  與 `scene-loader.js` 的 `lookupClass()` 都改成不分大小寫（含 motorcycle/scooter 等別名）
+  與 `scene-loader.js` 的 `lookupClass()` 都改成不分大小寫。**但別名表兩邊不同**：
+  build_scene 的 `CLASS_ALIASES` 含 motorcycle/scooter/motorbike/twowheeler 等；
+  scene-loader 查的是 `registry.json` 的 `class_fallback`，目前**只有** Car/SUV/Van/Truck/Bus/
+  Two_Wheeler/motor/motorcycle——**缺 scooter**，上游若吐 scooter，extras 會查表 miss
 - ~~fps 寫死 30~~ ✅ **2026-07-28 修掉**：`build_scene.resolve_fps()` 從
   `trajectory.meta.fps` 帶入，含 0／負／NaN／∞／型別錯的驗證與回退警告
 - ~~壞格式軌跡報錯不乾淨~~ ✅ **2026-07-28 修掉**：`scan_tracks()` 一律拋 `SceneBuildError`
@@ -266,8 +310,8 @@ vs kee-cc 1.29×），而且有**獨立的 homography 度量缺陷**——用 h=
   沒有任何程式讀 `cfg.collision`——`simulate.js:16-17` 寫死 `RESTITUTION=0.15`／`MU=0.7`
   （MU 只管碰後地面滑行；碰撞當下的切向摩擦是 `physics.js:118` 另一個寫死的
   `muContact=0.5`，simulate 也沒傳）。build_scene 仍照樣把這組沒人讀的值寫進 scene.json。
-  `frames.anim_*` 同理：被驗證但播放器不讀（時間軸由 simulate 輸出決定，`animStart` 是
-  main.js 寫死的 1），`--anim` 預設 1,32,89 是死值
+  `frames.anim_*` 同理：被驗證但播放器不讀（時間軸由 simulate 輸出決定，`animStart` 由 `main.js:902` 從較晚出現那台的 `startT`
+  往前推 `LEAD_IN_SEC=2` 秒算出，不讀 scene.json），`--anim` 預設 1,32,89 是死值
 - **部署約束**：`scene-loader.js` 用 `../scenes/` 相對路徑 → 站根必須同時含 `threejs/`
   與 `scenes/` 兩個同層目錄，只部署 `threejs/` 會全數 404
 - **HD 底圖的幾何漂移已量化**（2026-08-17，分塊相位相關，同一張 sat_raw 同 prompt）：

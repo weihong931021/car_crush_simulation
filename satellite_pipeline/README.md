@@ -24,11 +24,25 @@ python3 satellite_pipeline/webapp.py        # → http://127.0.0.1:8765/
 零依賴（stdlib http.server），輸出與 CLI 同一個 `output/<code>/`。流程：
 
 1. 輸入經緯度＋代號 → **擷取原圖**：由高到低探測可用 zoom（空白圖磚自動降級）、抓整張 1280²
-2. 滑桿選底圖大小（≤ 涵蓋範圍純前端裁中央、零延遲；要更大按「降 zoom 重抓」，解析度減半）
-3. **鎖定並去車銳化**：raw 裁中央 → Gemini 偵測＋inpaint → 2x 銳化（選配 genai HD）→ 人眼檢視
+2. 滑桿選底圖大小（≤ 涵蓋範圍純前端裁中央、零延遲；要更大按「降 zoom 重抓」，解析度減半）。
+   滑桿即時顯示「鎖定後會用哪個 zoom／幾 px/m／幾 px」，**鎖定時後端會自動升到裝得下該尺寸的
+   最高 zoom**（`best_zoom_for_size`）——降過 zoom 之後最終選的尺寸常常在高 zoom 也放得下，
+   不自動升級就白白損失一半解析度（實例：38 m 鎖在 zoom 20 只有 553px，zoom 21 是 1106px）
+3. **鎖定**＝raw 裁中央、`size_m`／`px_per_meter` 定案。**不做任何影像加工**；
+   去車／AI 高清是鎖定後的選配按鈕
    - 去車放在鎖定**之後**是實測結果：Gemini 對整張 1280² 只抓到 7 台、對 728² 裁切抓到 38 台
    - Gemini 偵測有隨機性（同一張圖 5／13 台）→ 「再跑一次去車」可重抽，不必重擷取
-4. 鎖定後 `meta.json` 帶 `locked: true`，`size_m`／`px_per_meter` 就是後續標註的座標系，不可再改
+4. **標註**：按「開始標註對應點」→ 檔案交付到 `trafficlab-project/location/<code>/`
+   （`sat_` + `sat_meta_` + `cctv_` + `footage/`）並切到 `/annotate?code=<code>`。
+   左影片首幀、右衛星圖交替點擊配對，≥4 組即時求單應性，存成
+   `G_projection_<code>.json`（schema 與 trafficlab 相容）。
+   **≥5 組才看得出誤差**（4 組必然解死、RMS 恆為 0）。
+   已有 `G_projection_<code>.json` 會先問過才覆蓋
+5. **AI 高清化（選配）**：鎖定後按「AI 高清化」跑 LLM 生圖（`/api/genai`，約 25 秒，預設
+   `gemini-3.1-flash-image`）。這與步驟 3 的本機銳化是**兩回事**——3 是 UnsharpMask+2x 放大
+   （幾何 100% 忠實），這一步是整張重畫（路面乾淨、標線銳利，但位移 0.20 m）。
+   切到該分頁會出黃色警示提醒不可用於標註。獨立端點，不會連帶重跑去車。
+6. 鎖定後 `meta.json` 帶 `locked: true`，`size_m`／`px_per_meter` 就是後續標註的座標系，不可再改
    （要改就重新擷取，會整組覆蓋）
 
 `meta.json` 新欄位：`decar_status`（`ok`／`no_vehicles`／`no_key`／`failed`）——降級不再與
@@ -38,6 +52,17 @@ python3 satellite_pipeline/webapp.py        # → http://127.0.0.1:8765/
 實機驗證（台南永康）：zoom 21 → 29.11 px/m 涵蓋 43.97 m（約 1 秒）；按「降 zoom 重抓」
 → zoom 20 → 14.56 px/m 涵蓋 87.93 m（解析度減半、範圍加倍）；鎖定 25 m 含去車銳化約 12 秒。
 同一張圖重跑去車三次得 5／13／4 台——**Gemini 偵測有隨機性**，所以有「再跑一次去車」。
+
+**銳化看不看得出來**：`sat_clean` 是 raw 的 2 倍尺寸＋UnsharpMask（同尺度銳利度實測
+117 → 211，1.80×），但塞進畫布再縮到約 560px 顯示時細節會被丟掉，看起來像沒做。
+分頁標籤標了各自的實際像素（`原圖 903²` / `去車銳化 1806²`），解析度讀數會顯示該分頁的
+實際 px/m（含 `2x` 標記）；要真的比較請勾「1:1 原尺寸檢視」，取中央原生像素不縮放。
+
+經緯度／代號會存進 localStorage（最多 8 筆，「最近用過」可一鍵帶回或刪除）。
+
+`meta` 另有 `detail_score` / `detail_ok`：Google 在該 zoom 沒影像時會把低 zoom 的圖放大充數
+（尺寸與 px_per_meter 都正常、只是糊的，空白磚偵測抓不到）。正常路口約 120，放大充數約 15–35，
+`detail_ok=false` 時前端出紅色警示，請確認經緯度或降 zoom 重抓。
 
 > **標註只能對著 `sat_clean`**：`sat_genai` 是生圖重畫，實測位移中位數 0.20–0.30 m
 > （見下方「生圖的幾何代價」）。拿它當標註底圖 = 把 0.2 m 誤差烙進座標系。
@@ -168,7 +193,9 @@ python3 satellite_pipeline/pipeline.py --code .. --skip-capture   # 只重新增
 | 檔案 | 角色 |
 | --- | --- |
 | `pipeline.py` | 一鍵編排 |
-| `webapp.py` + `web/index.html` | 網頁版（擷取 → 選大小 → 鎖定去車 → 檢視），API：`/api/capture`、`/api/lock`、`/api/enhance`、`/api/state/<code>` |
+| `webapp.py` + `web/index.html` | 網頁工作台（擷取 → 框範圍 → 鎖定 → 交付標註）。API：`/api/capture`、`/api/lock`、`/api/enhance`、`/api/genai`、`/api/upload`、`/api/handoff`、`/api/state/<code>` |
+| `annotate.py` + `web/annotate.html` | 網頁標註（③）：對應點 → 單應性 → G_projection.json |
+| `paths.py` | **所有路徑的唯一事實來源**（output / web / trafficlab location / uploads） |
 | `map_capture.py` | Google Static API 擷取 |
 | `image_enhance.py` | Gemini 去車 + 銳化高清化；`--genai` 生圖（gemini／openai 雙供應商）|
 | `measure_genai_drift.py` | 量生圖模型的幾何漂移（分塊相位相關）|

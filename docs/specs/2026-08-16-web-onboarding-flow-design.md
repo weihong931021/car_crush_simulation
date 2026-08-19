@@ -1,7 +1,9 @@
 # 網頁化進場流程（經緯度＋影片 → 底圖確認 → 標註 → Three.js）— 設計文件
 
 日期：2026-08-16（2026-08-17 更新實作狀態）
-狀態：**① ② 已實作並實機驗證**（`satellite_pipeline/webapp.py`）；③ ④ 待做
+狀態：**① ② ③ ④ 全數實作**（`satellite_pipeline/webapp.py`，全程瀏覽器）。
+④ 的三支子行程（推論／enrich／build_scene）串接與挑車介面已驗；**真實影片端到端未跑過**
+（需要一支真的事故影片與數分鐘推論時間）。
 
 ## 背景
 
@@ -13,11 +15,15 @@
 ## 頁面流程
 
 ```text
-① 輸入      lat / lon / 影片 / 底圖大小(m)
-② 底圖確認  自動截圖＋去車銳化 → 預覽 → 使用者可調大小或重截 → 確認鎖定
-③ 標註      對著 ② 鎖定的底圖標影片對應點（G-projection）；挑 collider、標碰撞幀
-④ 呈現      車辨識 + 軌跡淨化 + build_scene → Three.js 播放頁
+① 輸入      lat / lon / 代號 / 影片
+② 框範圍    自動截圖 → 滑桿框大小 → 鎖定（＝裁切定案，不做任何影像加工）
+③ 標註      網頁內完成：影片首幀 ↔ 衛星圖點對應點 → 單應性 → G_projection.json
+④ 整合      偵測 → 挑兩台當事車 → 標碰撞幀 → 場景包 → Three.js 播放頁
 ```
+
+**② 不做任何影像加工**（2026-08-20 使用者拍板）：去車與銳化都改成鎖定後的**選配**按鈕。
+標對應點不需要乾淨路面，每多一道加工就多一層 Gemini 隨機性與等待；預設路徑因此是
+「擷取 → 框 → 鎖 → 交付」，全程沒有 LLM 呼叫。
 
 ## 關鍵決策
 
@@ -67,6 +73,95 @@
    小圖準得多，所以擷取只抓原圖、鎖定時才去車。
 2. **縮小純前端裁切**是對的：滑桿即時反應，只有要超過當前 zoom 的涵蓋範圍才需重抓。
 
+### 2026-08-19 修：抓到「Google 拿低 zoom 放大充數」
+
+使用者把緯度 23.026901 打成 23.062901（4 km 外的農田），②頁面**靜默給出一張糊底圖**。
+原因是 Google 在該處沒有 zoom 21 的影像時，不回空白磚（`is_blank` 抓得到），而是把低 zoom
+的圖放大——尺寸、`px_per_meter`、灰階 std 全部正常，只是沒有資訊量。
+
+實測同一點：z21 銳利度 35／z20 105／z19 128／z18 317，正常永康路口 z21 是 122。
+現在 `capture_best_zoom` 會算 `detail_score`（Laplacian 變異數）寫進 meta，
+`detail_ok=false` 時 ② 頁面出紅色警示。**不自動降 zoom**——真的平坦的路口會被誤判成
+一路降到底，判斷交給使用者按既有的「降 zoom 重抓」。
+
+### ③ 網頁標註（2026-08-20 完成，`web/annotate.html` + `annotate.py`）
+
+**標註不再跳出桌面程式。** 整條鏈其他段都已經是網頁，只為了點幾組對應點就開 PyQt5
+是流程裡唯一的斷點。按「開始標註對應點」→ 交付檔案（實作細節，介面不提）→ 直接切到
+`/annotate?code=<code>`：左影片首幀、右衛星底圖，交替點擊配對，≥4 組即時求單應性。
+
+- **輸出 schema 對齊 `trafficlab_config.default_config()`**：頂層與各子區段的鍵全部齊全
+  （實測相容），下游只讀 `homography.H` 與 `parallax.px_per_meter`
+- **`px_per_meter` 直接帶入**（Web Mercator 解析值），不必人工量兩點
+- **4 點陷阱**：單應性 8 個自由度，剛好 4 組點會被解死，**再怎麼標歪 RMS 都是 0**。
+  `solve_homography()` 回傳 `overdetermined` 旗標，介面據此顯示「標第 5 組才看得出準不準」，
+  不會拿假的 0.00 px 給人「標得很準」的錯覺
+- **逐點偏差**：>8px 的點在表格與畫布上都標紅，直接指出哪一組要重標
+- 既有 `G_projection` 會載回錨點接著改；`parallax` 的相機位置／高度網頁標不了，留 0
+  （要視差補償仍須回 GUI 補，故 `proj_method` 用無視差的 `down_h_2`）
+
+PyQt5 GUI 仍可用（`/api/launch_gui`），但不是預設路徑。
+
+#### Codex 交叉審查修掉的（2026-08-20）
+
+- **`force` 覆蓋會留下過期標註**：換了底圖但舊 `G_projection_<code>.json` 還在原地，
+  trafficlab 的 `pick_stage` 會自動載入它、網頁標註也會把錨點帶回來——兩邊都拿舊座標配新
+  底圖而且不報錯。現在改名成 `.superseded.<原檔時間>` 保留證據
+- **沒有 CCTV 也算交付成功**：標註要兩張圖對點，只有底圖是標不了的。回傳
+  `annotation_ready`，前端沒選影片就不讓進標註頁
+- **去車狀態沒跟著交付**：`sat_clean` 可能是「想去車但沒 key／失敗」的產物，
+  下游只看到一張圖會誤以為乾淨。`decar_status`／`vehicles_removed` 併入 `sat_meta`
+- **前端解析度少報一半**：顯示 2x 的 `sat_clean` 卻報 raw 的 px/m，與 `sat_meta` 對不上
+
+#### 安全：`/api/handoff` 的路徑穿越（2026-08-20 修，推送後掃描抓到）
+
+`video` / `cctv_image` 是用戶端給的字串，原本直接 `UPLOAD_DIR / code / name`。兩條路都打通過：
+
+- `"/tmp/x"` —— pathlib 的 `Path("/a/b") / "/tmp/x"` 會**整個丟掉前綴**變成 `/tmp/x`
+- `"../../../..."` —— 一般相對路徑上跳
+
+實測把 `/tmp` 的 canary 檔複製進了 repo。`cctv_image` 那條更嚴重：會被
+`Image.open(...).save(cctv_<code>.png)` 轉存，再經 `/location/...` 對外提供＝任意本機圖片外洩。
+server 預設只綁 127.0.0.1，但 `--host` 可改，而且瀏覽器裡任何網頁都打得到本機。
+
+修法：`resolve_upload()` 只收單一檔名，再用 `resolve()` + `is_relative_to()` 覆核一次
+（回歸測試 5 個，涵蓋絕對路徑、上跳、子目錄、代號本身）。
+
+#### 上傳暫存檔會消失，要當成常態處理
+
+`output/_uploads/<code>/` 是暫存，換 code、清測試檔、重開機都可能讓它不見，但瀏覽器那邊
+`S.upload` 還記著。原本會讓 `shutil.copy2` 拋 `FileNotFoundError` 並**把內部路徑吐給使用者**
+（`.../satellite_pipeline/output/_uploads/...`）——看到的人既不知道那是什麼，也不知道該做什麼。
+
+現在兩層處理：`resolve_upload(..., must_exist=True)` 自己擋下並回「找不到先前上傳的
+「X」，可能已被清除——請重新選一次檔案」；前端偵測到這個訊息就用**記憶體裡還握著的
+File 物件自動重傳**再試一次，使用者根本不用重選。
+
+已知但不修：`build_scene.pick_sat` 用 `png_width / size_m` 重算 px/m 而非沿用鎖定值，
+38 m 場景最大位置誤差 **1 cm（0.027%）**，且 build_scene 自身自洽——遠小於軌跡噪音，
+不值得為此改動另一條線的檔案。
+
+交付本身（`POST /api/handoff`）擺出的檔案：
+
+```text
+trafficlab-project/location/<code>/
+├── sat_<code>.png          ← sat_clean 優先，沒有就 sat_raw；**永遠不用 sat_genai**
+├── sat_meta_<code>.json    ← 已知 px/m（含變體放大倍率）、size_m、lat/lon/zoom
+├── cctv_<code>.png         ← 影片首幀（或使用者給的截圖）
+└── footage/<影片>          ← 給 Inference 分頁
+```
+
+- **比例尺一併帶過去**：`DistStage` 新增 `load_known_scale()` 與「採用已知比例尺」按鈕，
+  讀 `sat_meta_<code>.json`。原本要人手在衛星圖上點兩個錨點量距離，現在直接採用
+  Web Mercator 解析值，少一個人為誤差來源。**沒有 sat_meta 的舊地點照舊人工量測**，
+  不影響既有流程（回歸測試：`trafficlab-project/tests/test_dist_stage_known_scale.py`）
+- **已標註過的地點拒絕覆蓋**：`G_projection_<code>.json` 存在就擋下（覆蓋底圖會讓既有座標
+  全部失效），要重來得明示 force
+- **GUI 啟動挑得動 Qt 的直譯器**：`.venv-pifpaf` 有 PyQt5 但缺 cocoa platform plugin，
+  拿它開會靜默失敗；`launch_trafficlab_gui()` 會先探測再啟動
+- 順手修掉 `main.py` 的 `apply_dark_theme` **無限遞迴**（2.x 分支呼叫自己而不是
+  `qdarktheme.setup_theme()`）——這台裝的正是 2.x，標註 GUI 本來就開不起來
+
 ### ⚠ 交給 ③ 標註的硬約束：只能對著 `sat_clean` 標
 
 2026-08-17 另一條線用分塊相位相關量出生圖的幾何漂移（`satellite_pipeline/measure_genai_drift.py`）：
@@ -83,6 +178,90 @@
 
 > 注意這與 `build_scene.pick_sat` 的偏好相反（它以 `sat_genai.png` 為第一優先）。合成軌跡
 > 路徑影響僅止於視覺（車會偏離畫上去的車道線 0.2 m）；但真實影片的標註路徑不可妥協。
+
+## ④ 整合重建（2026-08-20 完成，`web/integrate.html` + `integrate.py`）
+
+存檔完對應點直接切到 `/integrate?code=<code>`，四步：
+
+1. **偵測**：背景跑 `scripts/run_inference.py`，log 即時串到畫面
+2. **挑兩台當事車**：`list_track_candidates()` 從推論輸出算展開度／輪關鍵點／可用率，
+   品質判據**直接重用 `build_scene.kp_quality` 與它的門檻**（各寫一份遲早漂移，
+   然後兩個畫面對同一台車講出不同結論）
+3. **標碰撞幀**：追蹤器碰撞前 0.5 s 會凍結，這幀無法自動判定
+4. **產場景包**：`filter_and_enrich_output.py --ids` → `build_scene.py --collider` → 播放器
+
+不重寫任何軌跡邏輯，只串既有腳本。三個踩過才知道的環境事實：
+
+- **三支腳本要三個不同的直譯器**：推論要 ultralytics + supervision（只有
+  `littering_prediction/venv` 有）、enrich 要 numpy + trafficlab（`.venv-pifpaf`）、
+  build_scene 純標準庫。`pick_python()` 逐一探測。
+- **repo 內 7 組 inference config 的權重全部指向不存在的檔案**，而 `run_inference.py`
+  沒有 `--weights` 覆寫。改用 `--config-path` 自帶一份（`make_inference_config()`
+  複製第一組、只換權重），不去動隊友凍結中的 `inference_config.yaml`。
+- **播放器要同站服務**：`scene-loader.js` 走 `../scenes/` 相對路徑，所以 webapp 加了
+  `threejs/` 與 `scenes/` 的靜態路由（`safe_static()` 白名單 + resolve 覆核，
+  和上傳檔名同一類穿越風險）。實測播放器從 :8765 開起來零 console error。
+
+## 標歪偵測：殘差會指錯人（2026-08-20 改）
+
+原本「最大偏差 > 8px → 建議重標」有三個問題，都修了：
+
+| 問題 | 為什麼是問題 | 改成 |
+| --- | --- | --- |
+| 看**最大殘差** | 最小平方會把單一錯點的誤差**分攤到所有點**。實測 6 組點只有 index 2 標歪 30px，殘差最大的卻是 index 4——照它叫人重標，就是叫他去改沒問題的點 | **leave-one-out**：逐一拿掉重擬合，看剩下的變多乾淨。同組資料指向 index 2，正確 |
+| 門檻用**像素** | 8px 在 58px/m 是 0.14 m、在 29px/m 是 0.28 m，同一個數字意義隨底圖倍率浮動 | 改用**公尺**（`BAD_RESIDUAL_M = 0.30`）。理由：29px/m 一像素 3.4 cm，人工點擊約 ±3px ≈ ±0.1 m，標得好的 RMS 落在 0.07–0.17 m |
+| 只看殘差 | 點全擠在一角時殘差可以很小，但其餘區域全是**外推** | 加**涵蓋範圍**（凸包／底圖面積），低於 10% 就警告 |
+
+LOO 需要拿掉一點後還剩 >4 個點（否則剩下的又被解死、RMS 恆為 0），所以 6 組點以上才給
+建議；拿掉某點後若剩下的退化（共線）就跳過該點，不讓整組診斷壞掉。
+
+### Codex 全鏈審查修掉的（2026-08-20，1 blocker + 4 high）
+
+**BLOCKER：鏈少了一段，整條必爆。** `run_inference.py` 用 G-projection 算 `sat_coords`
+但**不寫 `status`**，而 `filter_and_enrich_output.py` 的 localization 政策只接受
+`status == 'ok'`——直接串接的話每一格都被判證據不足、`position_m` 全 null，然後 `sys.exit`。
+實測重現，錯誤訊息自己指出正解：位置那半的產出者是 `scripts/eval_haware_replay.py`
+（PifPaf 關鍵點 → haware localize → 寫 status / kp_sat / spread_m / n_wheel_kp）。正確的鏈是：
+
+```text
+run_inference → eval_haware_replay → filter_and_enrich → build_scene
+                ^^^^^^^^^^^^^^^^^^ 原本漏掉的一段（PifPaf 逐格 1.5–2.5 秒，最慢）
+```
+
+其餘四項：
+
+- **`PYTHONPATH` 沒設**：`eval_haware_replay` 與 `filter_and_enrich` 都 `from trafficlab...`
+  import，但 trafficlab-project 沒裝成套件——實測直接 ModuleNotFoundError
+- **重鎖可繞過**：`run_lock` 原本先做 zoom 升級才檢查 `locked`，重抓寫出的新 meta 不含
+  `locked`，接著就能用不同尺寸再鎖一次。現在第一件事就擋
+- **4 點仍可存檔**：前端警告可以被忽略，而這份檔決定所有 `position_m`。後端加
+  `MIN_PAIRS_TO_SAVE = 5`
+- **SVG 校正檔沒被認**：trafficlab 支援 `G_projection_svg_<code>.json`，只認普通版會讓
+  該類地點被判「還沒標註」、換底圖時舊座標也不會停用。改用 `find_g_projection()` /
+  `all_g_projections()`
+- **碰撞幀只有數字滑桿**：這是整條鏈唯二的人工判斷，沒有畫面等於在猜。加影格預覽
+  （`/api/frame/<code>/<n>`）、逐格按鈕與左右鍵，滑桿範圍自動縮到**兩台當事車同時在場**
+  的區間（實測 0–9 → 3–8）
+
+尚未處理（記錄在案）：`center_box + z_cam=0` 把 bbox 中心當地面接觸點（需要相機高度才能
+正解）、per-code 併發鎖、job 狀態只在記憶體、`/api/solve` 的請求競態。
+
+### 標註看起來糊 ≠ 底圖沒銳化（2026-08-20）
+
+回報「底圖還是拿沒銳化的」時實際交付的就是 `sat_clean`（1630px，同尺度銳利度 208 vs
+原圖 114）。糊的原因是**顯示縮放**：1630px 的圖被塞進約 520px 的窗格＝**32%**，
+Retina 上再被放大回 1900 裝置像素。而且底層 Google 影像本來就只有 29 px/m，
+28 m 寬＝815 個真實像素——銳化不會生出不存在的細節。
+
+真正該做的是讓人**放大來點**，所以標註頁加了滾輪縮放／拖曳平移／雙擊回到符合視窗。
+兩個實作細節：
+
+- **拖曳不能誤放對應點**：位移超過 4px 才算平移，否則算點擊（實測拖曳 60px 只平移、
+  不放點；原地單擊正常配對）
+- **標記大小要除以縮放倍率**：不然放大到 8× 時圓點會膨脹成一大塊，正好蓋住要對準的位置
+
+座標運算完全不受影響——畫布維持影像原生尺寸，縮放全交給 CSS transform，
+`getBoundingClientRect()` 換算時自動含倍率。
 
 ## satellite_pipeline 需先補的缺口
 

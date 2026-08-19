@@ -18,6 +18,27 @@ from PyQt5.QtWidgets import (
 
 from .undistort_stage import ImageViewer
 
+
+def load_known_scale(project_root, loc_code):
+    """讀 satellite_pipeline webapp 交付時寫的 `location/<code>/sat_meta_<code>.json`。
+
+    回 {"px_per_meter", "sat_variant", "size_m", ...} 或 None。None 就照舊人工量測——
+    這個入口只是多一條捷徑，不能讓沒有 sat_meta 的舊地點壞掉。
+    """
+    import json
+    if not project_root or not loc_code:
+        return None
+    path = os.path.join(project_root, "location", loc_code, f"sat_meta_{loc_code}.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        ppm = float(data.get("px_per_meter", 0))
+    except (OSError, ValueError, TypeError):
+        return None
+    if not (ppm > 0) or ppm != ppm:      # 0／負／NaN 都不可用
+        return None
+    return data
+
 class DistStage(QWidget):
     """
     Distance Reference Stage.
@@ -94,6 +115,20 @@ class DistStage(QWidget):
         self.lbl_result = QLabel("Scale: Not Computed")
         self.lbl_result.setStyleSheet("color: #ffd700; font-weight: bold;")
         side_vbox.addWidget(self.lbl_result)
+
+        # satellite_pipeline webapp 交付的底圖帶有已知比例尺（Web Mercator 解析值），
+        # 比人手點兩個錨點準；有 sat_meta 時才顯示
+        self.known_scale = None
+        self.btn_known = QPushButton("採用已知比例尺")
+        self.btn_known.setToolTip("讀 location/<code>/sat_meta_<code>.json（satellite_pipeline 交付時寫入）")
+        self.btn_known.setStyleSheet("background-color: #2ca02c; color: white; font-weight: bold;")
+        self.btn_known.clicked.connect(self._on_use_known)
+        self.btn_known.setVisible(False)
+        side_vbox.addWidget(self.btn_known)
+        self.lbl_known = QLabel("")
+        self.lbl_known.setWordWrap(True)
+        self.lbl_known.setStyleSheet("color: #8fd18f; font-size: 11px;")
+        side_vbox.addWidget(self.lbl_known)
         
         side_vbox.addStretch()
         
@@ -149,8 +184,37 @@ class DistStage(QWidget):
             if img is not None:
                 self.viewer.load_pixmap(QPixmap.fromImage(self._cv_to_qimage(img)))
                 self.viewer.fitToView()
+
+        # 3. 已知比例尺（satellite_pipeline 交付）
+        self.known_scale = load_known_scale(proj_root, loc_code)
+        if self.known_scale:
+            ppm = self.known_scale["px_per_meter"]
+            self.btn_known.setVisible(True)
+            self.lbl_known.setText(
+                f"sat_meta：{ppm:.2f} px/m（{self.known_scale.get('sat_variant', '?')}，"
+                f"{self.known_scale.get('size_m', 0):.1f} m 邊長）")
+        else:
+            self.btn_known.setVisible(False)
+            self.lbl_known.setText("")
                 
         self._update_visualization()
+
+    def _on_use_known(self):
+        if not self.known_scale:
+            return
+        px_per_m = float(self.known_scale["px_per_meter"])
+        host = getattr(self, 'host_tab', None) or self.parent()
+        if host and getattr(host, 'inspect_obj', None):
+            par = host.inspect_obj.setdefault('parallax', {})
+            par['scale'] = {
+                "source": "sat_meta (satellite_pipeline webapp handoff)",
+                "sat_variant": self.known_scale.get("sat_variant"),
+                "size_m": self.known_scale.get("size_m"),
+            }
+            par['px_per_meter'] = px_per_m
+            self.lbl_result.setText(f"Scale: {px_per_m:.2f} px/m (known)")
+            QMessageBox.information(self, "Success",
+                                    f"採用已知比例尺：\n{px_per_m:.4f} px/m")
 
     def _update_visualization(self):
         # Clear dynamic overlays (keep pixmap)

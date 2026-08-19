@@ -40,6 +40,19 @@ class DecarStatusTest(unittest.TestCase):
         self.assertEqual(info["decar_status"], "no_key")
         self.assertEqual(info["vehicles_removed"], 0)
 
+    def test_decar關閉時狀態為skipped且不碰Gemini(self):
+        """使用者不要去車：只銳化＋2x。狀態要與 no_key（想去但沒 key）區分開，前端才不會誤報紅字。"""
+        import image_enhance
+        with tempfile.TemporaryDirectory() as d:
+            src = Path(d) / "s.png"
+            _noise_img(64, 48).save(src)
+            # key 給一個假值：decar=False 時根本不該呼叫 Gemini，所以不會因為假 key 而失敗
+            info = image_enhance.enhance_file(src, Path(d) / "o.png", key="FAKE", upscale=2, decar=False)
+            out = Image.open(Path(d) / "o.png")
+        self.assertEqual(info["decar_status"], "skipped")
+        self.assertEqual(info["vehicles_removed"], 0)
+        self.assertEqual(out.size, (128, 96))          # 銳化＋2x 照做
+
     def test_enhance把decar_status寫進meta(self):
         import image_enhance
         with tempfile.TemporaryDirectory() as d:
@@ -89,15 +102,86 @@ class BlankTileTest(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_DEPS, "需要 PIL / numpy / cv2")
+class UpsampleDetectionTest(unittest.TestCase):
+    """Google 在該 zoom 沒影像時，不是回空白磚，而是把低 zoom 的圖放大充數。
+
+    實例：23.062901,120.249615（使用者打錯的座標）zoom 21 銳利度 35、zoom 18 是 317——
+    宣稱 29 px/m 實際只有 ~3.6 px/m 的資訊量。灰階 std 10.26 遠高於 is_blank 的門檻 6，
+    所以舊的空白偵測完全抓不到，webapp 靜默給出一張糊底圖。
+    """
+
+    def test_放大充數的圖被判為細節不足(self):
+        import webapp
+        sharp = _noise_img(512, 512, 3)
+        # 模擬 Google 的行為：降到 1/4 再放大回來——尺寸相同，但高頻資訊沒了
+        blurred = sharp.resize((128, 128), Image.LANCZOS).resize((512, 512), Image.LANCZOS)
+        self.assertGreater(webapp.detail_score(sharp), webapp.detail_score(blurred) * 3)
+        self.assertTrue(webapp.looks_upsampled(blurred))
+
+    def test_真正銳利的圖不被誤判(self):
+        import webapp
+        self.assertFalse(webapp.looks_upsampled(_noise_img(512, 512, 4)))
+
+    def test_空白磚也算細節不足(self):
+        import webapp
+        self.assertTrue(webapp.looks_upsampled(Image.new("RGB", (256, 256), (229, 227, 223))))
+
+
+class BestZoomTest(unittest.TestCase):
+    """選 zoom 的規則：能裝下需求尺寸的**最高** zoom。
+
+    這條規則原本只存在於 CLI 的人腦裡，網頁版沒有 → 使用者為了拿 38m 按了「降 zoom 重抓」，
+    拿到 14.56 px/m 的糊圖，但 38m 在 zoom 21（涵蓋 43.97m）底下本來就放得下、解析度是兩倍。
+    """
+
+    LAT = 23.026901        # 台南永康；zoom 21 涵蓋 43.97m、20 → 87.9m、19 → 175.8m
+
+    def test_小尺寸選最高zoom(self):
+        import webapp
+        self.assertEqual(webapp.best_zoom_for_size(self.LAT, 25.0), 21)
+
+    def test_剛好放得下仍選最高zoom(self):
+        """38m < 43.97m，必須留在 zoom 21——這正是使用者踩到的那格。"""
+        import webapp
+        self.assertEqual(webapp.best_zoom_for_size(self.LAT, 38.0), 21)
+
+    def test_超過最高zoom涵蓋範圍才降級(self):
+        import webapp
+        self.assertEqual(webapp.best_zoom_for_size(self.LAT, 60.0), 20)
+        self.assertEqual(webapp.best_zoom_for_size(self.LAT, 100.0), 19)
+
+    def test_大到全部裝不下就回最低zoom(self):
+        import webapp
+        self.assertEqual(webapp.best_zoom_for_size(self.LAT, 9999.0), 19)
+
+
+@unittest.skipUnless(HAVE_DEPS, "需要 PIL / numpy / cv2")
 class LockSizeTest(unittest.TestCase):
     """確認鎖定：所有變體裁中央到 size_m、meta 更新，且不同像素密度的變體按比例裁。"""
 
-    def _seed(self, out_dir, ppm=29.0):
+    def _seed(self, out_dir, ppm=29.0, genai=False):
         out_dir.mkdir(parents=True)
         _noise_img(1280, 1280, 1).save(out_dir / "sat_raw.png")
         _noise_img(2560, 2560, 2).save(out_dir / "sat_clean.png")   # 2x 增強版
+        if genai:
+            # genai_enhance 會把產出縮回來源尺寸，所以 sat_genai 是 1x（與 raw 同尺寸）
+            _noise_img(1280, 1280, 5).save(out_dir / "sat_genai.png")
         (out_dir / "meta.json").write_text(json.dumps({
             "px_per_meter": ppm, "img_w": 1280, "img_h": 1280, "size_m": 1280 / ppm}))
+
+    def test_genai變體是1x_裁切後與raw同尺寸(self):
+        """三種變體像素密度各不同（raw 1x、clean 2x、genai 1x），裁切必須各自按比例。"""
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir = Path(d) / "loc"
+            self._seed(out_dir, genai=True)
+            webapp.lock_size(out_dir, 25.0)
+            sizes = {n: Image.open(out_dir / n).size
+                     for n in ("sat_raw.png", "sat_clean.png", "sat_genai.png")}
+        side = round(25.0 * 29.0)
+        self.assertEqual(sizes["sat_raw.png"], (side, side))
+        self.assertEqual(sizes["sat_genai.png"], (side, side))      # 1x，與 raw 相同
+        self.assertEqual(sizes["sat_clean.png"], (side * 2, side * 2))
 
     def test_鎖定後各變體涵蓋同一公尺數(self):
         import webapp
@@ -137,6 +221,62 @@ class LockSizeTest(unittest.TestCase):
         self.assertEqual(meta["decar_status"], "no_key")
         self.assertEqual(meta["enhanced_px"], round(25.0 * 29.0) * 2)
 
+    def test_鎖定必定產出銳化版且不去車(self):
+        """鎖定後標註馬上要用得到清楚的底圖，所以銳化是必做的（本機 1 秒、無隨機性）。
+        去車是另一回事（Gemini、有隨機性、要等）——維持選配。
+        """
+        import image_enhance
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir = Path(d) / "loc"
+            self._seed(out_dir)
+            image_enhance.enhance("loc", key="FAKE", upscale=2, out_dir=out_dir, decar=False)
+            meta = json.loads((out_dir / "meta.json").read_text())
+            clean = Image.open(out_dir / "sat_clean.png")
+        self.assertEqual(meta["decar_status"], "skipped")
+        self.assertEqual(clean.size, (2560, 2560))
+
+    def test_run_lock必定留下可標註的銳化底圖(self):
+        """整合層：鎖定完就要能直接標註，所以 run_lock 一定要留下 sat_clean。
+
+        （seed 成 zoom 21＝最高，best_zoom_for_size 不會想升級，所以這條路不碰網路。）
+        """
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir = webapp.OUTPUT_DIR / "unittest_lock_tmp"
+            self.addCleanup(lambda: __import__("shutil").rmtree(out_dir, ignore_errors=True))
+            out_dir.mkdir(parents=True, exist_ok=True)
+            _noise_img(1280, 1280, 7).save(out_dir / "sat_raw.png")
+            (out_dir / "meta.json").write_text(json.dumps({
+                "lat": 23.0, "lon": 120.0, "zoom": 21, "scale": 2,
+                "px_per_meter": 29.0, "img_w": 1280, "img_h": 1280, "size_m": 1280 / 29.0}))
+            st = webapp.run_lock("unittest_lock_tmp", 25.0)
+            side = round(25.0 * 29.0)
+            self.assertIn("sat_clean.png", st["variants"], "鎖定後沒有銳化底圖，標註會拿到糊的原圖")
+            self.assertEqual(st["variants"]["sat_clean.png"]["w"], side * 2)
+            self.assertEqual(st["meta"]["decar_status"], "skipped")   # 銳化做、去車不做
+
+    def test_run_lock對已鎖定的地點要直接拒絕(self):
+        """繞過路徑（Codex 審查抓到）：`run_lock` 若先做 zoom 升級才檢查 locked，
+        重抓寫出的新 meta **不含 locked**，接著 `lock_size` 就能用不同尺寸再鎖一次，
+        整個「鎖定後只能重新擷取」的約定就被繞過去了。所以第一件事就是擋。
+        """
+        import webapp
+        out_dir = webapp.OUTPUT_DIR / "unittest_relock_tmp"
+        self.addCleanup(lambda: __import__("shutil").rmtree(out_dir, ignore_errors=True))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        _noise_img(600, 600, 9).save(out_dir / "sat_raw.png")
+        # zoom 20 + 已鎖定：若先跑升級就會重抓並洗掉 locked
+        (out_dir / "meta.json").write_text(json.dumps({
+            "lat": 23.0, "lon": 120.0, "zoom": 20, "scale": 2,
+            "px_per_meter": 14.5, "img_w": 600, "img_h": 600,
+            "size_m": 600 / 14.5, "locked": True}))
+        with self.assertRaises(ValueError):
+            webapp.run_lock("unittest_relock_tmp", 25.0)
+        meta = json.loads((out_dir / "meta.json").read_text())
+        self.assertTrue(meta["locked"])              # 沒有被重抓洗掉
+        self.assertEqual(meta["zoom"], 20)
+
     def test_已鎖定不可再鎖(self):
         import webapp
         with tempfile.TemporaryDirectory() as d:
@@ -145,6 +285,314 @@ class LockSizeTest(unittest.TestCase):
             webapp.lock_size(out_dir, 30.0)
             with self.assertRaises(ValueError):
                 webapp.lock_size(out_dir, 20.0)
+
+
+class UploadPathTest(unittest.TestCase):
+    """`/api/handoff` 的 video / cctv_image 是**用戶端給的字串**，直接拿去接路徑會穿越。
+
+    兩條實際打通過的路：
+      1. `"/tmp/x"` —— pathlib 的 `Path("/a/b") / "/tmp/x"` 會**整個丟掉前綴**變成 `/tmp/x`
+      2. `"../../../..."` —— 一般的相對路徑上跳
+    後果：`shutil.copy2` 把機器上任意檔案複製進 repo；`cctv_image` 那條還會被
+    `Image.open(...).save(cctv_<code>.png)` 轉存並經 `/location/...` 對外提供。
+    這支 server 預設只綁 127.0.0.1，但 `--host` 可以改，而且瀏覽器裡任何網頁都打得到本機。
+    """
+
+    def test_絕對路徑會被擋下(self):
+        import webapp
+        for bad in ("/tmp/x.mp4", "/etc/passwd"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                webapp.resolve_upload("loc", bad)
+
+    def test_相對上跳會被擋下(self):
+        import webapp
+        for bad in ("../x.mp4", "../../etc/passwd", "a/../../../x.mp4", "sub/x.mp4"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                webapp.resolve_upload("loc", bad)
+
+    def test_正常檔名可通過且落在上傳目錄內(self):
+        import webapp
+        got = webapp.resolve_upload("loc", "clip.mp4")
+        self.assertEqual(got, webapp.UPLOAD_DIR / "loc" / "clip.mp4")
+        self.assertTrue(str(got).startswith(str(webapp.UPLOAD_DIR / "loc")))
+
+    def test_代號本身也要驗(self):
+        import webapp
+        with self.assertRaises(ValueError):
+            webapp.resolve_upload("../evil", "clip.mp4")
+
+    def test_空字串與None回None(self):
+        import webapp
+        self.assertIsNone(webapp.resolve_upload("loc", None))
+        self.assertIsNone(webapp.resolve_upload("loc", ""))
+
+    def test_檔案不存在要給看得懂的訊息而不是內部路徑(self):
+        """上傳檔可能已被清掉（換 code、清暫存、重開機）。原本會漏出
+        `FileNotFoundError: ... /satellite_pipeline/output/_uploads/...` 這種內部路徑，
+        使用者只看得到一串跟自己無關的路徑，也不知道該做什麼。
+        """
+        import webapp
+        with self.assertRaises(ValueError) as cm:
+            webapp.resolve_upload("loc", "gone.mp4", must_exist=True)
+        text = str(cm.exception)
+        self.assertIn("gone.mp4", text)
+        self.assertIn("重新選", text)
+        self.assertNotIn("_uploads", text)      # 不吐內部路徑
+        self.assertNotIn("Errno", text)
+
+
+@unittest.skipUnless(HAVE_DEPS, "需要 PIL / numpy / cv2")
+class SaveGateTest(unittest.TestCase):
+    """4 組點的「誤差 0.00」是假的（被解死），不能讓它就這樣進推論。
+
+    前端已經警告，但後端也要擋——警告可以被忽略，而這份 G_projection 之後會決定
+    所有 position_m。
+    """
+
+    PAIRS4 = [{"coords_cctv": [0, 0], "coords_sat": [10, 20]},
+              {"coords_cctv": [300, 0], "coords_sat": [610, 20]},
+              {"coords_cctv": [300, 200], "coords_sat": [610, 420]},
+              {"coords_cctv": [0, 200], "coords_sat": [10, 420]}]
+
+    def test_四點不得存檔(self):
+        import annotate
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError) as cm:
+                annotate.save_g_projection(Path(d), "abc", self.PAIRS4, px_per_meter=29.0)
+        self.assertIn("5", str(cm.exception))
+
+    def test_五點可存檔(self):
+        import annotate
+        pairs = self.PAIRS4 + [{"coords_cctv": [150, 100], "coords_sat": [310, 220]}]
+        with tempfile.TemporaryDirectory() as d:
+            path = annotate.save_g_projection(Path(d), "abc", pairs, px_per_meter=29.0)
+            exists = Path(path).exists()
+        self.assertTrue(exists)
+
+
+@unittest.skipUnless(HAVE_DEPS, "需要 PIL / numpy / cv2")
+class FramePreviewTest(unittest.TestCase):
+    """碰撞幀是整條鏈唯二的人工判斷，但沒有畫面就只是在猜一個數字。"""
+
+    def _video(self, d, n=10):
+        import cv2
+        import numpy as np
+        path = Path(d) / "clip.mp4"
+        w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 10, (64, 48))
+        for i in range(n):
+            w.write(np.full((48, 64, 3), 10 + i * 20, np.uint8))
+        w.release()
+        return path
+
+    def test_取得指定影格(self):
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            png = webapp.extract_frame(self._video(d), 3)
+        self.assertTrue(png.startswith(b"\x89PNG"))
+
+    def test_超出範圍的影格要報錯而不是回空白(self):
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError):
+                webapp.extract_frame(self._video(d, 5), 999)
+
+    def test_負數影格要擋(self):
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError):
+                webapp.extract_frame(self._video(d), -1)
+
+
+class StaticServeTest(unittest.TestCase):
+    """播放器要能從這台 server 開，所以得服務 threejs/ 與 scenes/。
+
+    這是第二個「用戶端字串接路徑」的地方（第一個是上傳檔名），同樣要擋穿越——
+    而且靜態檔是 GET，任何網頁都能誘導瀏覽器去讀。
+    """
+
+    def test_正常路徑可通過(self):
+        import webapp
+        got = webapp.safe_static("threejs", "index.html")
+        self.assertEqual(got, webapp.REPO_ROOT / "threejs" / "index.html")
+        self.assertEqual(webapp.safe_static("scenes", "test1/scene.json"),
+                         webapp.REPO_ROOT / "scenes" / "test1" / "scene.json")
+
+    def test_穿越會被擋下(self):
+        import webapp
+        for bad in ("../satellite_pipeline/.env", "../../etc/passwd", "/etc/passwd",
+                    "a/../../.env"):
+            with self.subTest(bad=bad):
+                self.assertIsNone(webapp.safe_static("threejs", bad))
+
+    def test_只開放白名單目錄(self):
+        import webapp
+        self.assertIsNone(webapp.safe_static("satellite_pipeline", "webapp.py"))
+        self.assertIsNone(webapp.safe_static("..", "x"))
+
+
+@unittest.skipUnless(HAVE_DEPS, "需要 PIL / numpy / cv2")
+class HandoffTest(unittest.TestCase):
+    """② 鎖定完 → 交給 trafficlab 標註 GUI（③）。
+
+    trafficlab 的 Calibration 分頁直接列 `location/*`，所以 handoff 要把檔案擺成它認得的樣子：
+    `location/<code>/sat_<code>.png`（必）、`cctv_<code>.png`（影片首幀）、`footage/*.mp4`。
+    另外寫 `sat_meta_<code>.json` 把**已知的 px/m** 帶過去——DistStage 原本要人手量兩點，
+    現在可以直接採用，少一個人為誤差來源。
+    """
+
+    def _seed(self, out_dir, ppm=29.0, side=400):
+        out_dir.mkdir(parents=True)
+        _noise_img(side, side, 1).save(out_dir / "sat_raw.png")
+        _noise_img(side * 2, side * 2, 2).save(out_dir / "sat_clean.png")   # 2x
+        _noise_img(side, side, 3).save(out_dir / "sat_genai.png")
+        (out_dir / "meta.json").write_text(json.dumps({
+            "lat": 23.0, "lon": 120.0, "zoom": 21, "px_per_meter": ppm,
+            "img_w": side, "img_h": side, "size_m": side / ppm, "locked": True}))
+
+    def test_交付給標註的是2x銳化版而不是原圖(self):
+        """標註要在圖上點準位置，786px 的原圖糊到點不準。
+
+        銳化是**本機、確定性、不動幾何**的（UnsharpMask + LANCZOS 整數倍放大，
+        image_enhance 內有尺寸 assert），跟去車／生圖那些會亂動內容的步驟不同類，
+        所以標註底圖一律用它；px_per_meter 跟著 ×2 一起帶過去，座標才對得上。
+        """
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            (out_dir / "sat_genai.png").unlink()
+            info = webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
+            sat = Image.open(loc_root / "loc" / "sat_loc.png")
+        self.assertEqual(sat.size, (800, 800))                  # sat_clean，raw 的 2 倍
+        self.assertEqual(info["sat_meta"]["sat_variant"], "sat_clean.png")
+        self.assertAlmostEqual(info["sat_meta"]["px_per_meter"], 58.0)
+        self.assertEqual(info["sat_meta"]["upscale_factor"], 2.0)
+
+    def test_沒有增強版時交付原圖(self):
+        """使用者決定不去車也不銳化 → 只有 sat_raw。交付要用它，比例尺就是 raw 的 px/m。"""
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            (out_dir / "sat_clean.png").unlink()
+            (out_dir / "sat_genai.png").unlink()
+            info = webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
+            sat = Image.open(loc_root / "loc" / "sat_loc.png")
+            meta = json.loads((loc_root / "loc" / "sat_meta_loc.json").read_text())
+        self.assertEqual(sat.size, (400, 400))
+        self.assertEqual(meta["sat_variant"], "sat_raw.png")
+        self.assertAlmostEqual(meta["px_per_meter"], 29.0)        # 沒放大，就是 raw 的值
+        self.assertEqual(meta["upscale_factor"], 1.0)
+
+    def test_交付sat_clean並帶已知比例尺(self):
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            info = webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
+            sat = Image.open(loc_root / "loc" / "sat_loc.png")
+            meta = json.loads((loc_root / "loc" / "sat_meta_loc.json").read_text())
+        self.assertEqual(sat.size, (800, 800))                   # 用的是 sat_clean（2x）
+        self.assertAlmostEqual(meta["px_per_meter"], 58.0)       # 29 × 2
+        self.assertEqual(meta["sat_variant"], "sat_clean.png")
+        self.assertEqual(meta["size_m"], 400 / 29.0)
+        self.assertIn("sat_loc.png", info["written"])
+
+    def test_不交付genai版本(self):
+        """sat_genai 是重畫（位移 0.2m），絕不能當標註底圖——即使它存在也只拿 sat_clean。"""
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
+            sat = Image.open(loc_root / "loc" / "sat_loc.png")
+            genai = Image.open(out_dir / "sat_genai.png")
+        self.assertNotEqual(sat.size, genai.size)
+
+    def test_未鎖定拒絕交付(self):
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            m = json.loads((out_dir / "meta.json").read_text()); m["locked"] = False
+            (out_dir / "meta.json").write_text(json.dumps(m))
+            with self.assertRaises(ValueError):
+                webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
+
+    def test_已有G_projection時拒絕覆蓋(self):
+        """已經標過的地點，覆蓋 sat 會讓既有 G_projection 的座標全部失效。"""
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            (loc_root / "loc").mkdir(parents=True)
+            (loc_root / "loc" / "G_projection_loc.json").write_text("{}")
+            with self.assertRaises(ValueError):
+                webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
+            webapp.handoff_to_trafficlab(out_dir, loc_root, "loc", force=True)   # 明示才放行
+            self.assertTrue((loc_root / "loc" / "sat_loc.png").exists())
+
+    def test_force覆蓋時舊的G_projection不可留下(self):
+        """底圖被換掉，舊 G_projection 的像素座標就失效了。
+
+        留著它最危險：trafficlab 的 pick_stage 會**自動載入**同名檔，網頁標註也會把錨點
+        帶回來——兩邊都會拿舊座標配新底圖，而且完全不報錯。改名成 .superseded 保留證據。
+        """
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            (loc_root / "loc").mkdir(parents=True)
+            gp = loc_root / "loc" / "G_projection_loc.json"
+            gp.write_text('{"old": true}')
+            info = webapp.handoff_to_trafficlab(out_dir, loc_root, "loc", force=True)
+            still_there = gp.exists()
+            backups = list((loc_root / "loc").glob("G_projection_loc.json.superseded*"))
+        self.assertFalse(still_there, "舊 G_projection 必須移走")
+        self.assertEqual(len(backups), 1, "但要保留成 .superseded 當證據")
+        self.assertIn("superseded", " ".join(info["written"]))
+
+    def test_沒有cctv時標示為不可標註(self):
+        """標註需要兩張圖對點；只有底圖是標不了的，要講清楚而不是讓人點進去才發現。"""
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            info = webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
+        self.assertFalse(info["has_cctv"])
+        self.assertFalse(info["annotation_ready"])
+
+    def test_去車狀態要跟著交付過去(self):
+        """sat_clean 可能是「想去車但沒 key」的產物，下游看不到狀態就會誤以為路面乾淨。"""
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            m = json.loads((out_dir / "meta.json").read_text())
+            m["decar_status"] = "failed"
+            (out_dir / "meta.json").write_text(json.dumps(m))
+            webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
+            sm = json.loads((loc_root / "loc" / "sat_meta_loc.json").read_text())
+        self.assertEqual(sm["decar_status"], "failed")
+
+    def test_影片抽首幀成cctv(self):
+        import cv2
+        import numpy as np
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            vid = Path(d) / "clip.mp4"
+            w = cv2.VideoWriter(str(vid), cv2.VideoWriter_fourcc(*"mp4v"), 10, (64, 48))
+            for i in range(5):
+                w.write(np.full((48, 64, 3), 40 + i * 40, np.uint8))
+            w.release()
+            info = webapp.handoff_to_trafficlab(out_dir, loc_root, "loc", video=vid)
+            cctv = Image.open(loc_root / "loc" / "cctv_loc.png")
+            footage_ok = (loc_root / "loc" / "footage" / "clip.mp4").exists()
+        self.assertEqual(cctv.size, (64, 48))
+        self.assertTrue(footage_ok)
+        self.assertIn("cctv_loc.png", info["written"])
 
 
 if __name__ == "__main__":
