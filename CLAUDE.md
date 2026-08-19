@@ -164,10 +164,16 @@ numpy／cv2／PIL（`detail_score` 用 cv2、`is_blank` 用 numpy）。三條必
   30px，殘差最大的是 index 4）。用 **leave-one-out**（`suspect_index`）才指得對。
   門檻也改用**公尺**（`BAD_RESIDUAL_M=0.30`）——像素門檻會隨底圖倍率浮動
 - **④ 整合重建**（`web/integrate.html` + `integrate.py`）：偵測 → 挑兩台當事車 → 標碰撞幀
-  → 場景包 → 播放器。**不重寫軌跡邏輯**，只串 trafficlab 既有的三支腳本；挑車判據直接
-  重用 `build_scene.kp_quality`。三支腳本要三個不同直譯器（推論 ultralytics 只有
-  `littering_prediction/venv` 有），且 repo 內 7 組 inference config 權重全部不存在
-  → 用 `--config-path` 自帶一份，不動隊友凍結的檔案
+  → 場景包 → 播放器。**不重寫軌跡邏輯**，只串既有腳本；挑車判據直接重用
+  `build_scene.kp_quality`。
+- **軌跡鏈是四段不是三段**：`run_inference` → **`eval_haware_replay`** → `filter_and_enrich`
+  → `build_scene`。少了中間那段整條必爆——`run_inference` 只寫 `sat_coords` 不寫 `status`，
+  而 enrich 的 localization 政策只接受 `status=='ok'`，會全格判證據不足然後 `sys.exit`。
+  PifPaf 逐格 1.5–2.5 秒，是整條鏈最慢的一段
+- **跑 trafficlab 腳本要設 `PYTHONPATH`**：`eval_haware_replay` 與 `filter_and_enrich` 都
+  `from trafficlab...` import，但那個 repo 沒裝成套件，不設就 ModuleNotFoundError。
+  三支腳本還要三個不同直譯器（推論的 ultralytics 只有 `littering_prediction/venv` 有），
+  且 repo 內 7 組 inference config 權重全部不存在 → 用 `--config-path` 自帶一份
 - **`px_per_meter` 一路帶到底**：`sat_meta_<code>.json` 由 ② 的 Web Mercator 解析值寫入，
   ③ 直接採用；`DistStage` 也加了「採用已知比例尺」讀同一份，免去人工量兩點
 - **`locked: true` 之後 `size_m`／`px_per_meter` 就是座標系**，要改只能重新擷取（整組覆蓋）

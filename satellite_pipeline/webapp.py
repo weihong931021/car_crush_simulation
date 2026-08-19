@@ -141,6 +141,29 @@ def best_zoom_for_size(lat: float, size_m: float,
 
 # ---------- 交付 trafficlab 標註 GUI（③）----------
 
+def extract_frame(video, index: int) -> bytes:
+    """取影片第 index 格，回傳 PNG bytes。
+
+    碰撞幀是整條鏈唯二的人工判斷（另一個是挑當事車），沒有畫面就只是在猜數字。
+    超出範圍要報錯而不是回一張空白圖——空白圖會讓人以為那一格真的沒東西。
+    """
+    import cv2
+    if index < 0:
+        raise ValueError(f"影格編號不能是負數（{index}）")
+    cap = cv2.VideoCapture(str(video))
+    try:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(index))
+        ok, frame = cap.read()
+    finally:
+        cap.release()
+    if not ok or frame is None:
+        raise ValueError(f"讀不到第 {index} 格（影片可能沒那麼長）")
+    ok, buf = cv2.imencode(".png", frame)
+    if not ok:
+        raise ValueError("影格編碼失敗")
+    return buf.tobytes()
+
+
 def extract_first_frame(video: Path, dst_png: Path) -> tuple[int, int]:
     """影片首幀 → PNG（trafficlab 的 cctv_<code>.png）。回傳 (w, h)。"""
     import cv2
@@ -223,15 +246,18 @@ def handoff_to_trafficlab(out_dir, loc_root, code: str, video=None, cctv_image=N
     if src is None:
         raise ValueError("找不到底圖（sat_clean.png / sat_raw.png 都不在）")
 
+    import integrate
+
     dst_dir = loc_root / code
-    gproj = dst_dir / f"G_projection_{code}.json"
-    if gproj.exists() and not force:
-        raise ValueError(f"{gproj.name} 已存在——這個地點已經標註過，覆蓋底圖會讓既有座標失效。"
-                         f"要重來請明示 force")
+    # 普通版與 SVG 版都要防護：只認一種的話，SVG 校正的地點會被無聲覆蓋
+    existing_gproj = integrate.all_g_projections(dst_dir, code)
+    if existing_gproj and not force:
+        raise ValueError(f"{existing_gproj[0].name} 已存在——這個地點已經標註過，"
+                         f"覆蓋底圖會讓既有座標失效。要重來請明示 force")
     dst_dir.mkdir(parents=True, exist_ok=True)
     written = []
 
-    if gproj.exists():
+    for gproj in existing_gproj:
         # force：底圖要被換掉，舊 G_projection 的像素座標就失效了。**不能留在原地**——
         # trafficlab 的 pick_stage 會自動載入同名檔、網頁標註也會把錨點帶回來，
         # 兩邊都會拿舊座標配新底圖而且不報錯。改名保留，讓人還能回頭查。
@@ -411,6 +437,11 @@ def run_lock(code, size_m, genai=False, upscale=2) -> dict:
     validate_code(code)
     out_dir = OUTPUT_DIR / code
     meta = json.loads((out_dir / "meta.json").read_text())
+    # **第一件事就擋**：底下的 zoom 升級會重抓，而 finish_capture 寫出的新 meta 不含
+    # locked——先升級再檢查的話，第二次 lock 就能用不同尺寸再鎖一次，把「鎖定後只能
+    # 重新擷取」整個繞過去。
+    if meta.get("locked"):
+        raise ValueError("此地點已鎖定，要改大小請重新擷取")
     best = best_zoom_for_size(meta["lat"], size_m)
     upgraded = None
     if best > meta["zoom"]:
@@ -470,8 +501,10 @@ def _run_streaming(code, cmd, cwd):
     """跑子行程並把輸出即時收進 job log。回傳 returncode。"""
     import subprocess
     _job_log(code, f"$ {' '.join(str(c) for c in cmd)}")
+    import integrate
     proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+                            stderr=subprocess.STDOUT, text=True, bufsize=1,
+                            env=integrate.subprocess_env())
     for line in proc.stdout:
         _job_log(code, line)
     proc.wait()
@@ -490,18 +523,27 @@ def start_inference(code: str):
         sorted((loc_dir / "footage").glob("*.mov"))
     if not videos:
         raise ValueError(f"{code} 沒有影片（location/{code}/footage/），無法跑偵測")
-    if not (loc_dir / f"G_projection_{code}.json").exists():
+    gproj = integrate.find_g_projection(loc_dir, code)      # 普通版與 SVG 版都認
+    if gproj is None:
         raise ValueError("還沒完成對應點標註，先把 G_projection 存檔")
 
     py = integrate.pick_python(integrate.INFERENCE_PYTHONS, "ultralytics")
     if py is None:
         raise ValueError("找不到裝有 ultralytics 的直譯器——推論跑不了")
+    py_haware = integrate.pick_python(integrate.ENRICH_PYTHONS, "openpifpaf")
+    if py_haware is None:
+        raise ValueError("找不到裝有 openpifpaf 的直譯器——定位那段跑不了")
     weights = integrate.find_weights(TRAFFICLAB_DIR / "models")
     cfg = integrate.make_inference_config(
         TRAFFICLAB_DIR / "inference_config.yaml", weights,
         OUTPUT_DIR / code / "inference_web.yaml")
     video = videos[0]
     cmd = integrate.inference_cmd(py, cfg, code, video, TRAFFICLAB_DIR / "output")
+
+    with JOBS_LOCK:
+        phase = (JOBS.get(code) or {}).get("phase")
+    if phase in ("detect", "localize", "building"):
+        raise ValueError(f"這個地點正在處理中（{phase}），請等它跑完")
 
     _job_set(code, phase="detect", log=[], error=None, returncode=None,
              video=video.name, weights=weights.name)
@@ -514,7 +556,18 @@ def start_inference(code: str):
                 _job_set(code, phase="failed", returncode=rc,
                          error=f"偵測失敗（returncode {rc}）" if rc else "偵測跑完但找不到輸出檔")
                 return
-            _job_set(code, phase="picking", returncode=0, raw_output=str(raw))
+
+            # 第二段：haware 定位。**不能省**——run_inference 只寫 sat_coords 不寫 status，
+            # 而 enrich 的 localization 政策只接受 status=='ok'，直接串會全格判證據不足。
+            _job_set(code, phase="localize")
+            localized = OUTPUT_DIR / code / "haware_replay.json.gz"
+            rc = _run_streaming(code, integrate.haware_cmd(
+                py_haware, video, gproj, raw, localized), TRAFFICLAB_DIR)
+            if rc != 0 or not localized.exists():
+                _job_set(code, phase="failed", returncode=rc,
+                         error=f"定位失敗（returncode {rc}）")
+                return
+            _job_set(code, phase="picking", returncode=0, raw_output=str(localized))
         except Exception as e:                                  # noqa: BLE001
             _job_set(code, phase="failed", error=f"{type(e).__name__}: {e}")
 
@@ -565,9 +618,11 @@ def build_scene_for(code: str, colliders, collision_frame):
         raise ValueError("找不到裝有 numpy 的直譯器——enrich 跑不了")
 
     _job_set(code, phase="building")
+    gproj = integrate.find_g_projection(loc_dir, code)
+    if gproj is None:
+        raise ValueError("找不到 G_projection，先完成對應點標註")
     rc = _run_streaming(code, integrate.enrich_cmd(
-        py_enrich, raw_path, traj, [c["track_id"] for c in colliders],
-        loc_dir / f"G_projection_{code}.json"), TRAFFICLAB_DIR)
+        py_enrich, raw_path, traj, [c["track_id"] for c in colliders], gproj), TRAFFICLAB_DIR)
     if rc != 0:
         _job_set(code, phase="failed", error=f"軌跡處理失敗（returncode {rc}）")
         raise ValueError(f"軌跡處理失敗（returncode {rc}），詳見記錄")
@@ -665,6 +720,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_error(404)
             return self._file(target, CONTENT_TYPES.get(target.suffix.lower(),
                                                         "application/octet-stream"))
+        if path.startswith("/api/frame/"):
+            parts = path[len("/api/frame/"):].split("/")
+            if len(parts) != 2:
+                return self.send_error(404)
+            try:
+                code = validate_code(parts[0])
+                loc = LOCATION_ROOT / code / "footage"
+                videos = sorted(loc.glob("*.mp4")) + sorted(loc.glob("*.mov"))
+                if not videos:
+                    raise ValueError("這個地點沒有影片")
+                data = extract_frame(videos[0], int(parts[1]))
+            except (ValueError, OSError) as e:
+                return self._json({"error": str(e)}, 400)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if path.startswith("/api/integrate/status/"):
             try:
                 return self._json(job_status(path.rsplit("/", 1)[-1]))

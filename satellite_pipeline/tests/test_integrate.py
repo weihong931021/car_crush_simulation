@@ -167,6 +167,95 @@ class CommandTest(unittest.TestCase):
                                           Path("/locdir"), bad, 1)
 
 
+class HawareStepTest(unittest.TestCase):
+    """鏈中間少了 haware 這一段，整條必爆（2026-08-20 Codex 審查 + 實測確認）。
+
+    `run_inference.py` 用 G-projection 算 `sat_coords` 但**不寫 `status`**；
+    `filter_and_enrich_output.py` 的 localization 政策只接受 `status == 'ok'`，
+    於是每一格都被判成證據不足、`position_m` 全是 null，然後 `sys.exit`。
+    實測錯誤訊息自己指出正解：位置那半的產出者是 `scripts/eval_haware_replay.py`
+    （PifPaf 關鍵點 → haware localize → 寫 status / kp_sat / spread_m / n_wheel_kp）。
+
+        run_inference → eval_haware_replay → filter_and_enrich → build_scene
+                        ^^^^^^^^^^^^^^^^^^ 原本漏掉的一段
+    """
+
+    def test_haware指令帶影片_G投影_與yolo框(self):
+        import integrate
+        cmd = integrate.haware_cmd(Path("/py"), Path("/v.mp4"), Path("/G.json"),
+                                   Path("/raw.json.gz"), Path("/out.json.gz"))
+        self.assertIn("scripts/eval_haware_replay.py", cmd)
+        self.assertIn("--video", cmd)
+        self.assertIn("--g-proj", cmd)
+        # 用第一步的 YOLO 追蹤結果橋接 track id，兩邊的 tracked_id 才對得起來
+        self.assertIn("--yolo-boxes-json", cmd)
+        self.assertIn("/raw.json.gz", cmd)
+        self.assertIn("--out", cmd)
+
+    def test_需要PYTHONPATH的腳本要帶環境(self):
+        """eval_haware_replay 與 filter_and_enrich 都 `from trafficlab...` import，
+        但 trafficlab-project 沒裝成套件——不設 PYTHONPATH 直接 ModuleNotFoundError。"""
+        import integrate
+        env = integrate.subprocess_env()
+        self.assertEqual(env["PYTHONPATH"].split(":")[0], str(integrate.TRAFFICLAB_DIR))
+
+    def test_PYTHONPATH保留既有值(self):
+        import os
+        import integrate
+        old = os.environ.get("PYTHONPATH")
+        os.environ["PYTHONPATH"] = "/existing"
+        try:
+            env = integrate.subprocess_env()
+        finally:
+            if old is None:
+                del os.environ["PYTHONPATH"]
+            else:
+                os.environ["PYTHONPATH"] = old
+        self.assertIn("/existing", env["PYTHONPATH"])
+
+
+class GProjectionLookupTest(unittest.TestCase):
+    """trafficlab 支援兩種校正檔名，只認一種會讓 SVG 校正的地點被靜默覆蓋。"""
+
+    def test_找得到普通版(self):
+        import integrate
+        with tempfile.TemporaryDirectory() as d:
+            loc = Path(d)
+            (loc / "G_projection_abc.json").write_text("{}")
+            self.assertEqual(integrate.find_g_projection(loc, "abc").name,
+                             "G_projection_abc.json")
+
+    def test_找得到SVG版(self):
+        import integrate
+        with tempfile.TemporaryDirectory() as d:
+            loc = Path(d)
+            (loc / "G_projection_svg_abc.json").write_text("{}")
+            self.assertEqual(integrate.find_g_projection(loc, "abc").name,
+                             "G_projection_svg_abc.json")
+
+    def test_兩種都在時普通版優先(self):
+        import integrate
+        with tempfile.TemporaryDirectory() as d:
+            loc = Path(d)
+            (loc / "G_projection_abc.json").write_text("{}")
+            (loc / "G_projection_svg_abc.json").write_text("{}")
+            self.assertEqual(integrate.find_g_projection(loc, "abc").name,
+                             "G_projection_abc.json")
+
+    def test_全部列出供覆蓋防護使用(self):
+        import integrate
+        with tempfile.TemporaryDirectory() as d:
+            loc = Path(d)
+            (loc / "G_projection_abc.json").write_text("{}")
+            (loc / "G_projection_svg_abc.json").write_text("{}")
+            self.assertEqual(len(integrate.all_g_projections(loc, "abc")), 2)
+
+    def test_都沒有時回None(self):
+        import integrate
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(integrate.find_g_projection(Path(d), "abc"))
+
+
 class RawOutputLocateTest(unittest.TestCase):
 
     def test_找得到推論產出的json_gz(self):

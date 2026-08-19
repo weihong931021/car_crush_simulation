@@ -184,10 +184,12 @@ class BuildGProjectionTest(unittest.TestCase):
 
     def test_寫檔到location目錄(self):
         import annotate
+        # 正式存檔下限是 5 組（4 組被解死、誤差恆為 0），所以這裡補一組
+        pairs = self.PAIRS + [{"coords_cctv": [50, 25], "coords_sat": [110, 70]}]
         with tempfile.TemporaryDirectory() as d:
             loc = Path(d) / "abc"
             loc.mkdir()
-            path = annotate.save_g_projection(loc, "abc", self.PAIRS, px_per_meter=29.11)
+            path = annotate.save_g_projection(loc, "abc", pairs, px_per_meter=29.11)
             obj = json.loads(Path(path).read_text())
         self.assertTrue(str(path).endswith("G_projection_abc.json"))
         self.assertEqual(obj["meta"]["location_code"], "abc")

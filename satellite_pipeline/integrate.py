@@ -144,6 +144,54 @@ def pick_python(candidates, probe: str):
     return None
 
 
+def subprocess_env() -> dict:
+    """跑 trafficlab 腳本用的環境。
+
+    `eval_haware_replay.py` 與 `filter_and_enrich_output.py` 都 `from trafficlab...` import，
+    但 trafficlab-project 沒有裝成套件（沒有 setup.py / pip install -e），所以必須把它
+    放進 PYTHONPATH，否則一跑就 ModuleNotFoundError。
+    """
+    import os
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{TRAFFICLAB_DIR}:{existing}" if existing else str(TRAFFICLAB_DIR)
+    return env
+
+
+def find_g_projection(loc_dir, code: str):
+    """`location/<code>/` 內的校正檔；trafficlab 支援普通版與 SVG 版兩種檔名。
+
+    只認普通版的話，用 SVG 校正的地點會被判成「還沒標註」，換底圖時舊的 SVG 座標
+    也不會被停用——底圖換了、座標沒換，而且不報錯。
+    """
+    return next(iter(all_g_projections(loc_dir, code)), None)
+
+
+def all_g_projections(loc_dir, code: str) -> list:
+    """兩種校正檔全部列出（普通版優先），給覆蓋防護用。"""
+    loc_dir = Path(loc_dir)
+    names = [f"G_projection_{code}.json", f"G_projection_svg_{code}.json"]
+    return [loc_dir / n for n in names if (loc_dir / n).exists()]
+
+
+def haware_cmd(python, video, g_projection, yolo_boxes, out_path, frames=-1) -> list:
+    """PifPaf 關鍵點 → haware localize → 寫 status / kp_sat / spread_m / n_wheel_kp。
+
+    **這一段不能省**：`run_inference.py` 只用 G-projection 算 `sat_coords` 而不寫 `status`，
+    而 `filter_and_enrich_output.py` 的 localization 政策只接受 `status == 'ok'`——
+    直接把兩者串起來，每一格都會被判證據不足、position_m 全 null 然後 sys.exit。
+
+    `--yolo-boxes-json` 餵第一步的追蹤結果，讓 haware 的輸出沿用同一組 tracked_id，
+    使用者在畫面上挑的 track 才對得起來。
+    """
+    return [str(python), "scripts/eval_haware_replay.py",
+            "--video", str(Path(video).resolve()),
+            "--g-proj", str(Path(g_projection).resolve()),
+            "--yolo-boxes-json", str(Path(yolo_boxes).resolve()),
+            "--out", str(Path(out_path).resolve()),
+            "--frames", str(int(frames))]
+
+
 def inference_cmd(python, config_path, code, video, output_root) -> list:
     return [str(python), "scripts/run_inference.py",
             "--config-path", str(Path(config_path).resolve()),

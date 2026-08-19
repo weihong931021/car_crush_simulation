@@ -191,10 +191,19 @@ def build_g_projection(code, pairs, px_per_meter, cctv_path="", sat_path="",
     }
 
 
+# 正式存檔的下限。4 組點會被單應性解死、殘差恆為 0——前端已經警告，但警告可以被忽略，
+# 而這份檔之後決定所有 position_m，所以後端也要擋。
+MIN_PAIRS_TO_SAVE = 5
+
+
 def save_g_projection(loc_dir, code, pairs, px_per_meter, **kw) -> Path:
     """寫 `location/<code>/G_projection_<code>.json`，回傳路徑。"""
     import json
 
+    if len(pairs) < MIN_PAIRS_TO_SAVE:
+        raise ValueError(
+            f"正式存檔至少要 {MIN_PAIRS_TO_SAVE} 組對應點（目前 {len(pairs)} 組）。"
+            f"4 組會被單應性解死、誤差必然為 0，標歪也看不出來")
     obj = build_g_projection(code, pairs, px_per_meter, **kw)
     path = Path(loc_dir) / f"G_projection_{code}.json"
     path.write_text(json.dumps(obj, indent=2, ensure_ascii=False))

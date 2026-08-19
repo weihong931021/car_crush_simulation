@@ -215,6 +215,37 @@ trafficlab-project/location/<code>/
 LOO 需要拿掉一點後還剩 >4 個點（否則剩下的又被解死、RMS 恆為 0），所以 6 組點以上才給
 建議；拿掉某點後若剩下的退化（共線）就跳過該點，不讓整組診斷壞掉。
 
+### Codex 全鏈審查修掉的（2026-08-20，1 blocker + 4 high）
+
+**BLOCKER：鏈少了一段，整條必爆。** `run_inference.py` 用 G-projection 算 `sat_coords`
+但**不寫 `status`**，而 `filter_and_enrich_output.py` 的 localization 政策只接受
+`status == 'ok'`——直接串接的話每一格都被判證據不足、`position_m` 全 null，然後 `sys.exit`。
+實測重現，錯誤訊息自己指出正解：位置那半的產出者是 `scripts/eval_haware_replay.py`
+（PifPaf 關鍵點 → haware localize → 寫 status / kp_sat / spread_m / n_wheel_kp）。正確的鏈是：
+
+```text
+run_inference → eval_haware_replay → filter_and_enrich → build_scene
+                ^^^^^^^^^^^^^^^^^^ 原本漏掉的一段（PifPaf 逐格 1.5–2.5 秒，最慢）
+```
+
+其餘四項：
+
+- **`PYTHONPATH` 沒設**：`eval_haware_replay` 與 `filter_and_enrich` 都 `from trafficlab...`
+  import，但 trafficlab-project 沒裝成套件——實測直接 ModuleNotFoundError
+- **重鎖可繞過**：`run_lock` 原本先做 zoom 升級才檢查 `locked`，重抓寫出的新 meta 不含
+  `locked`，接著就能用不同尺寸再鎖一次。現在第一件事就擋
+- **4 點仍可存檔**：前端警告可以被忽略，而這份檔決定所有 `position_m`。後端加
+  `MIN_PAIRS_TO_SAVE = 5`
+- **SVG 校正檔沒被認**：trafficlab 支援 `G_projection_svg_<code>.json`，只認普通版會讓
+  該類地點被判「還沒標註」、換底圖時舊座標也不會停用。改用 `find_g_projection()` /
+  `all_g_projections()`
+- **碰撞幀只有數字滑桿**：這是整條鏈唯二的人工判斷，沒有畫面等於在猜。加影格預覽
+  （`/api/frame/<code>/<n>`）、逐格按鈕與左右鍵，滑桿範圍自動縮到**兩台當事車同時在場**
+  的區間（實測 0–9 → 3–8）
+
+尚未處理（記錄在案）：`center_box + z_cam=0` 把 bbox 中心當地面接觸點（需要相機高度才能
+正解）、per-code 併發鎖、job 狀態只在記憶體、`/api/solve` 的請求競態。
+
 ## satellite_pipeline 需先補的缺口
 
 在 ② 之前底層要先修，否則使用者確認的圖可能已經是壞的卻沒警示：

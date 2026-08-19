@@ -256,6 +256,27 @@ class LockSizeTest(unittest.TestCase):
             self.assertEqual(st["variants"]["sat_clean.png"]["w"], side * 2)
             self.assertEqual(st["meta"]["decar_status"], "skipped")   # 銳化做、去車不做
 
+    def test_run_lock對已鎖定的地點要直接拒絕(self):
+        """繞過路徑（Codex 審查抓到）：`run_lock` 若先做 zoom 升級才檢查 locked，
+        重抓寫出的新 meta **不含 locked**，接著 `lock_size` 就能用不同尺寸再鎖一次，
+        整個「鎖定後只能重新擷取」的約定就被繞過去了。所以第一件事就是擋。
+        """
+        import webapp
+        out_dir = webapp.OUTPUT_DIR / "unittest_relock_tmp"
+        self.addCleanup(lambda: __import__("shutil").rmtree(out_dir, ignore_errors=True))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        _noise_img(600, 600, 9).save(out_dir / "sat_raw.png")
+        # zoom 20 + 已鎖定：若先跑升級就會重抓並洗掉 locked
+        (out_dir / "meta.json").write_text(json.dumps({
+            "lat": 23.0, "lon": 120.0, "zoom": 20, "scale": 2,
+            "px_per_meter": 14.5, "img_w": 600, "img_h": 600,
+            "size_m": 600 / 14.5, "locked": True}))
+        with self.assertRaises(ValueError):
+            webapp.run_lock("unittest_relock_tmp", 25.0)
+        meta = json.loads((out_dir / "meta.json").read_text())
+        self.assertTrue(meta["locked"])              # 沒有被重抓洗掉
+        self.assertEqual(meta["zoom"], 20)
+
     def test_已鎖定不可再鎖(self):
         import webapp
         with tempfile.TemporaryDirectory() as d:
@@ -318,6 +339,68 @@ class UploadPathTest(unittest.TestCase):
         self.assertIn("重新選", text)
         self.assertNotIn("_uploads", text)      # 不吐內部路徑
         self.assertNotIn("Errno", text)
+
+
+@unittest.skipUnless(HAVE_DEPS, "需要 PIL / numpy / cv2")
+class SaveGateTest(unittest.TestCase):
+    """4 組點的「誤差 0.00」是假的（被解死），不能讓它就這樣進推論。
+
+    前端已經警告，但後端也要擋——警告可以被忽略，而這份 G_projection 之後會決定
+    所有 position_m。
+    """
+
+    PAIRS4 = [{"coords_cctv": [0, 0], "coords_sat": [10, 20]},
+              {"coords_cctv": [300, 0], "coords_sat": [610, 20]},
+              {"coords_cctv": [300, 200], "coords_sat": [610, 420]},
+              {"coords_cctv": [0, 200], "coords_sat": [10, 420]}]
+
+    def test_四點不得存檔(self):
+        import annotate
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError) as cm:
+                annotate.save_g_projection(Path(d), "abc", self.PAIRS4, px_per_meter=29.0)
+        self.assertIn("5", str(cm.exception))
+
+    def test_五點可存檔(self):
+        import annotate
+        pairs = self.PAIRS4 + [{"coords_cctv": [150, 100], "coords_sat": [310, 220]}]
+        with tempfile.TemporaryDirectory() as d:
+            path = annotate.save_g_projection(Path(d), "abc", pairs, px_per_meter=29.0)
+            exists = Path(path).exists()
+        self.assertTrue(exists)
+
+
+@unittest.skipUnless(HAVE_DEPS, "需要 PIL / numpy / cv2")
+class FramePreviewTest(unittest.TestCase):
+    """碰撞幀是整條鏈唯二的人工判斷，但沒有畫面就只是在猜一個數字。"""
+
+    def _video(self, d, n=10):
+        import cv2
+        import numpy as np
+        path = Path(d) / "clip.mp4"
+        w = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 10, (64, 48))
+        for i in range(n):
+            w.write(np.full((48, 64, 3), 10 + i * 20, np.uint8))
+        w.release()
+        return path
+
+    def test_取得指定影格(self):
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            png = webapp.extract_frame(self._video(d), 3)
+        self.assertTrue(png.startswith(b"\x89PNG"))
+
+    def test_超出範圍的影格要報錯而不是回空白(self):
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError):
+                webapp.extract_frame(self._video(d, 5), 999)
+
+    def test_負數影格要擋(self):
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError):
+                webapp.extract_frame(self._video(d), -1)
 
 
 class StaticServeTest(unittest.TestCase):
