@@ -231,6 +231,46 @@ class LockSizeTest(unittest.TestCase):
                 webapp.lock_size(out_dir, 20.0)
 
 
+class UploadPathTest(unittest.TestCase):
+    """`/api/handoff` 的 video / cctv_image 是**用戶端給的字串**，直接拿去接路徑會穿越。
+
+    兩條實際打通過的路：
+      1. `"/tmp/x"` —— pathlib 的 `Path("/a/b") / "/tmp/x"` 會**整個丟掉前綴**變成 `/tmp/x`
+      2. `"../../../..."` —— 一般的相對路徑上跳
+    後果：`shutil.copy2` 把機器上任意檔案複製進 repo；`cctv_image` 那條還會被
+    `Image.open(...).save(cctv_<code>.png)` 轉存並經 `/location/...` 對外提供。
+    這支 server 預設只綁 127.0.0.1，但 `--host` 可以改，而且瀏覽器裡任何網頁都打得到本機。
+    """
+
+    def test_絕對路徑會被擋下(self):
+        import webapp
+        for bad in ("/tmp/x.mp4", "/etc/passwd"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                webapp.resolve_upload("loc", bad)
+
+    def test_相對上跳會被擋下(self):
+        import webapp
+        for bad in ("../x.mp4", "../../etc/passwd", "a/../../../x.mp4", "sub/x.mp4"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                webapp.resolve_upload("loc", bad)
+
+    def test_正常檔名可通過且落在上傳目錄內(self):
+        import webapp
+        got = webapp.resolve_upload("loc", "clip.mp4")
+        self.assertEqual(got, webapp.UPLOAD_DIR / "loc" / "clip.mp4")
+        self.assertTrue(str(got).startswith(str(webapp.UPLOAD_DIR / "loc")))
+
+    def test_代號本身也要驗(self):
+        import webapp
+        with self.assertRaises(ValueError):
+            webapp.resolve_upload("../evil", "clip.mp4")
+
+    def test_空字串與None回None(self):
+        import webapp
+        self.assertIsNone(webapp.resolve_upload("loc", None))
+        self.assertIsNone(webapp.resolve_upload("loc", ""))
+
+
 @unittest.skipUnless(HAVE_DEPS, "需要 PIL / numpy / cv2")
 class HandoffTest(unittest.TestCase):
     """② 鎖定完 → 交給 trafficlab 標註 GUI（③）。

@@ -116,8 +116,8 @@
         <input id="code" type="text" placeholder="tainan_yongkang" autocomplete="off"
                role="combobox" aria-expanded="false" aria-controls="sg-code">
         <div class="sugg" id="sg-code" role="listbox" hidden></div></div>
-      <label class="file" id="fileLabel" for="video"><span>＋ 事故影片（選配，抽首幀當 CCTV）</span>
-        <input id="video" type="file" accept=".mp4,.mov,.png,.jpg,.jpeg"></label>
+      <label class="file" id="fileLabel"><span>＋ 事故影片（標註對點用，抽首幀）</span>
+        <input id="video" type="file" accept="video/*,image/*"></label>
       <button id="go" class="go">擷取底圖</button>
       <div id="msg" class="msg"></div>
       <div id="alerts"></div>
@@ -149,7 +149,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const S = { code:null, meta:null, variants:{}, coverage:0, tab:null, img:null, upload:null };
+const S = { code:null, meta:null, variants:{}, coverage:0, tab:null, img:null, file:null, upload:null };
 
 const msg = (t, busy) => { $("msg").textContent = t; $("msg").className = "msg" + (busy ? " busy" : ""); };
 const alert_ = (kind, html) => $("alerts").innerHTML = html ? `<div class="alert ${kind}">${html}</div>` : "";
@@ -219,6 +219,7 @@ async function capture(zoom){
     const st = await api("/api/capture", { lat, lon, code, zoom });
     hAdd(lat, lon, code);
     apply(st);
+    if(S.file && !S.upload) upload().catch(() => {});   // 選在代號之前的檔案，這時才送得出去
     msg("拖滑桿框出範圍，再按鎖定");
   }catch(e){ msg("失敗：" + e.message); }
   finally{ $("go").disabled = false; }
@@ -240,8 +241,7 @@ function apply(st){
   $("lock").textContent = locked ? "已鎖定" : "鎖定範圍";
   $("extras").hidden = !locked;
   $("handoffSec").hidden = !locked;
-  $("handoff").textContent = S.upload ? "開始標註對應點 →" : "先選一支影片才能標註";
-  $("handoff").disabled = !S.upload;
+  refreshButtons();
 
   // 只在真的有問題時說話：該 zoom 沒有實際影像（Google 拿低 zoom 放大充數）
   alert_("bad", st.meta.detail_ok === false
@@ -329,32 +329,45 @@ $("genaiBtn").onclick = async () => {
 };
 
 /* ---------- 影片 ---------- */
-$("video").onchange = async () => {
-  const f = $("video").files[0]; S.upload = null;
-  const label = $("fileLabel").querySelector("span");
-  if(!f) return;
-  const code = $("code").value.trim();
-  if(!/^[A-Za-z0-9_-]+$/.test(code)){ msg("先填代號再選影片"); $("video").value = ""; return; }
-  label.textContent = `上傳 ${f.name}…`;
-  try{
-    const r = await fetch(`/api/upload?code=${encodeURIComponent(code)}&name=${encodeURIComponent(f.name)}`,
-                          { method:"POST", body:f });
-    const j = await r.json(); if(!r.ok) throw new Error(j.error);
-    S.upload = j;
-    label.textContent = `✓ ${j.name}`;
-    if(S.meta?.locked) apply({ code:S.code, meta:S.meta, variants:S.variants, coverage_m:S.coverage });
-  }catch(e){ label.textContent = "＋ 事故影片（上傳失敗）"; msg(e.message); }
+// 選檔不強制先填代號——先記住檔案，等代號有了（擷取時）再送上去
+const setFileLabel = t => $("fileLabel").querySelector("span").textContent =
+  t ? `✓ ${t}` : "＋ 事故影片（標註對點用，抽首幀）";
+
+$("video").onchange = () => {
+  const f = $("video").files[0];
+  S.file = f || null; S.upload = null;
+  setFileLabel(f ? `${f.name}（${(f.size/1048576).toFixed(1)} MB）` : null);
+  if(S.meta) refreshButtons();
+  if(f && /^[A-Za-z0-9_-]+$/.test($("code").value.trim())) upload().catch(() => {});
 };
 
+async function upload(){
+  if(!S.file || S.upload) return S.upload;
+  const code = $("code").value.trim();
+  setFileLabel(`上傳中… ${S.file.name}`);
+  try{
+    const r = await fetch(`/api/upload?code=${encodeURIComponent(code)}&name=${encodeURIComponent(S.file.name)}`,
+                          { method:"POST", body:S.file });
+    const j = await r.json(); if(!r.ok) throw new Error(j.error);
+    S.upload = j; setFileLabel(j.name);
+    return j;
+  }catch(e){ setFileLabel(null); msg("影片上傳失敗：" + e.message); throw e; }
+}
+
 /* ---------- 交付 ---------- */
+function refreshButtons(){
+  // 標註要兩張圖對點，沒有影片畫面就標不了——按鈕直接說原因，不要按下去才報錯
+  $("handoff").textContent = S.file ? "開始標註對應點 →" : "先選一支影片才能標註";
+  $("handoff").disabled = !S.file;
+}
+
 $("handoff").onclick = async () => {
   // 交付是實作細節，不用讓使用者知道「送進 trafficlab」這件事——按下去就進標註頁
-  msg(""); $("handoff").disabled = true;
-  if(!S.upload) return msg("標註需要影片畫面對點——請先在上方選一支事故影片或一張截圖");
-  const body = { code:S.code, [S.upload.kind]: S.upload.name };
-  msg("準備標註畫面…", true);
+  if(!S.file) return msg("標註需要影片畫面對點——請先在上方選一支事故影片或一張截圖");
+  $("handoff").disabled = true; msg("準備標註畫面…", true);
   try{
-    const r = await send(body);
+    await upload();                                    // 還沒送上去的話補送
+    const r = await send({ code:S.code, [S.upload.kind]: S.upload.name });
     if(!r.annotation_ready) throw new Error("缺少影片畫面，無法標註");
     location.href = `/annotate?code=${encodeURIComponent(S.code)}`;
   }catch(e){ msg(e.message === "已取消" ? "已取消" : "失敗：" + e.message); $("handoff").disabled = false; }

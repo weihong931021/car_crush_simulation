@@ -144,6 +144,25 @@ def extract_first_frame(video: Path, dst_png: Path) -> tuple[int, int]:
     return frame.shape[1], frame.shape[0]
 
 
+def resolve_upload(code: str, name):
+    """把用戶端給的檔名解析成上傳目錄內的路徑；跨出目錄就拒絕。
+
+    不能直接 `UPLOAD_DIR / code / name`：
+      - `name` 是絕對路徑時 pathlib 會**整個丟掉前綴**（`Path("/a/b") / "/tmp/x"` → `/tmp/x`）
+      - `"../"` 一樣跳得出去
+    兩者都會讓 `/api/handoff` 把機器上任意檔案複製進 repo（cctv 那條還會轉存成 PNG
+    並經 `/location/...` 對外提供）。所以只收「單一檔名」，再用 resolve 覆核一次。
+    """
+    if not name:
+        return None
+    validate_code(code)
+    base = (UPLOAD_DIR / code).resolve()
+    candidate = (base / str(name)).resolve()
+    if Path(str(name)).name != str(name) or not candidate.is_relative_to(base):
+        raise ValueError(f"檔名不合法：{name!r}（只接受上傳目錄內的單一檔名）")
+    return candidate
+
+
 def _file_stamp(path: Path) -> str:
     """用檔案自己的 mtime 當停用標記，比當下時間更能說明「那份是什麼時候標的」。"""
     from datetime import datetime
@@ -537,8 +556,8 @@ class Handler(BaseHTTPRequestHandler):
                                    "pairs": len(body["pairs"])})
             if self.path == "/api/handoff":
                 code = validate_code(body["code"])
-                video = UPLOAD_DIR / code / body["video"] if body.get("video") else None
-                cctv = UPLOAD_DIR / code / body["cctv_image"] if body.get("cctv_image") else None
+                video = resolve_upload(code, body.get("video"))
+                cctv = resolve_upload(code, body.get("cctv_image"))
                 info = handoff_to_trafficlab(OUTPUT_DIR / code, LOCATION_ROOT, code,
                                              video=video, cctv_image=cctv,
                                              force=bool(body.get("force")))

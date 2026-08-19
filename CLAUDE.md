@@ -150,6 +150,9 @@ python3 satellite_pipeline/webapp.py     # → http://127.0.0.1:8765/
   → 單應性 → `G_projection_<code>.json`（schema 對齊 `trafficlab_config.default_config()`）。
   交付檔案（`/api/handoff` 擺出 `location/<code>/` 的 sat_/sat_meta_/cctv_/footage/）是實作
   細節，介面不提，按下按鈕直接切頁。PyQt5 GUI 仍可用但不是預設路徑
+- **用戶端給的檔名一律走 `resolve_upload()`**：`Path("/a/b") / "/tmp/x"` 在 pathlib 會**整個
+  丟掉前綴**，直接接路徑＝任意檔案讀寫（實測可把 /tmp 的檔複製進 repo、任意圖片經
+  `/location/...` 外洩）。只收單一檔名並用 `resolve()` + `is_relative_to()` 覆核
 - **4 點陷阱**：單應性 8 個自由度，剛好 4 組對應點必然解死、RMS 恆為 0——**標歪也看不出來**。
   `solve_homography()` 回 `overdetermined` 旗標，介面要求標第 5 組才顯示誤差
 - **`px_per_meter` 一路帶到底**：`sat_meta_<code>.json` 由 ② 的 Web Mercator 解析值寫入，

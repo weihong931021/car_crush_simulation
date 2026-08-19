@@ -111,6 +111,20 @@ PyQt5 GUI 仍可用（`/api/launch_gui`），但不是預設路徑。
   下游只看到一張圖會誤以為乾淨。`decar_status`／`vehicles_removed` 併入 `sat_meta`
 - **前端解析度少報一半**：顯示 2x 的 `sat_clean` 卻報 raw 的 px/m，與 `sat_meta` 對不上
 
+#### 安全：`/api/handoff` 的路徑穿越（2026-08-20 修，推送後掃描抓到）
+
+`video` / `cctv_image` 是用戶端給的字串，原本直接 `UPLOAD_DIR / code / name`。兩條路都打通過：
+
+- `"/tmp/x"` —— pathlib 的 `Path("/a/b") / "/tmp/x"` 會**整個丟掉前綴**變成 `/tmp/x`
+- `"../../../..."` —— 一般相對路徑上跳
+
+實測把 `/tmp` 的 canary 檔複製進了 repo。`cctv_image` 那條更嚴重：會被
+`Image.open(...).save(cctv_<code>.png)` 轉存，再經 `/location/...` 對外提供＝任意本機圖片外洩。
+server 預設只綁 127.0.0.1，但 `--host` 可改，而且瀏覽器裡任何網頁都打得到本機。
+
+修法：`resolve_upload()` 只收單一檔名，再用 `resolve()` + `is_relative_to()` 覆核一次
+（回歸測試 5 個，涵蓋絕對路徑、上跳、子目錄、代號本身）。
+
 已知但不修：`build_scene.pick_sat` 用 `png_width / size_m` 重算 px/m 而非沿用鎖定值，
 38 m 場景最大位置誤差 **1 cm（0.027%）**，且 build_scene 自身自洽——遠小於軌跡噪音，
 不值得為此改動另一條線的檔案。
