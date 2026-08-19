@@ -22,10 +22,10 @@ from datetime import datetime
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = SCRIPTS_DIR / "output"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 from common import validate_code  # noqa: E402
+from paths import OUTPUT_DIR      # noqa: E402  路徑集中在 paths.py
 
 
 def load_google_key() -> str:

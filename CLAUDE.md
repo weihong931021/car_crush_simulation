@@ -143,14 +143,30 @@ python3 satellite_pipeline/webapp.py     # → http://127.0.0.1:8765/
 網頁化進場流程的 ①②（輸入經緯度 → 底圖確認鎖定），stdlib http.server 零依賴，
 輸出與 CLI 共用 `output/<code>/`。三條必記的規則：
 
-- **去車在裁切之後**：Gemini 對整張 1280² 只偵測到 7 台車、對裁好的 728² 偵測到 38 台。
-  所以「擷取」只抓原圖，選好大小按「鎖定」時才去車——順序反了偵測率掉一個量級
+- **鎖定＝裁切定案，不做任何影像加工**（2026-08-20 拍板）：去車／銳化／AI 高清都是鎖定後的
+  選配按鈕，預設全程無 LLM 呼叫。要去車的話**一定在裁切之後**——Gemini 對整張 1280² 只偵測到
+  7 台車、對裁好的 728² 偵測到 38 台，順序反了偵測率掉一個量級
+- **③ 標註已網頁化**（`web/annotate.html` + `annotate.py`）：左影片首幀、右衛星圖點對應點
+  → 單應性 → `G_projection_<code>.json`（schema 對齊 `trafficlab_config.default_config()`）。
+  交付檔案（`/api/handoff` 擺出 `location/<code>/` 的 sat_/sat_meta_/cctv_/footage/）是實作
+  細節，介面不提，按下按鈕直接切頁。PyQt5 GUI 仍可用但不是預設路徑
+- **4 點陷阱**：單應性 8 個自由度，剛好 4 組對應點必然解死、RMS 恆為 0——**標歪也看不出來**。
+  `solve_homography()` 回 `overdetermined` 旗標，介面要求標第 5 組才顯示誤差
+- **`px_per_meter` 一路帶到底**：`sat_meta_<code>.json` 由 ② 的 Web Mercator 解析值寫入，
+  ③ 直接採用；`DistStage` 也加了「採用已知比例尺」讀同一份，免去人工量兩點
 - **`locked: true` 之後 `size_m`／`px_per_meter` 就是座標系**，要改只能重新擷取（整組覆蓋）
 - **標註只能對著 `sat_clean`**：`sat_genai` 是生圖重畫，實測位移中位數 0.20 m（gemini）／
   0.30 m（gpt-image-2），`sat_clean` 是 0.00 m。標在 genai 上＝把 0.2m 誤差烙進 G-projection。
   量法：`satellite_pipeline/measure_genai_drift.py`（分塊相位相關）
 - `meta.decar_status`（ok／no_vehicles／no_key／failed）讓去車降級不再靜默；Gemini 偵測有
   隨機性（同圖三次 5／13／4 台），前端有「再跑一次去車」
+- **zoom 只降不升會白白損失一半解析度**：使用者為了看大範圍按「降 zoom 重抓」後，最終選的
+  尺寸常常在高 zoom 也放得下（38 m < zoom 21 的 43.97 m 涵蓋）。`run_lock` 會用
+  `best_zoom_for_size()` 自動升回裝得下的最高 zoom（並在高 zoom 無真實影像時退回）
+- **座標打錯不會報錯，只會給你一張糊圖**：Google 該 zoom 沒影像時不回空白磚，而是把低 zoom
+  的圖放大充數（尺寸／px_per_meter／灰階 std 全部正常）。`meta.detail_score`
+  （Laplacian 變異數，正常路口約 120、放大充數 15–35）與 `detail_ok` 就是為此，
+  前端會出紅色警示。**不自動降 zoom**——平坦路口會被誤判成一路降到底
 
 **地面圖增強的安全邊界**：`image_enhance.py --input/--output` 走的是
 「Gemini 偵測車框 → cv2 inpaint 去車 → UnsharpMask 銳化 → LANCZOS 整數倍放大」，

@@ -1,7 +1,7 @@
 # 網頁化進場流程（經緯度＋影片 → 底圖確認 → 標註 → Three.js）— 設計文件
 
 日期：2026-08-16（2026-08-17 更新實作狀態）
-狀態：**① ② 已實作並實機驗證**（`satellite_pipeline/webapp.py`）；③ ④ 待做
+狀態：**① ② ③ 已實作並實機驗證**（`satellite_pipeline/webapp.py`，全網頁）；④ 待做
 
 ## 背景
 
@@ -13,11 +13,15 @@
 ## 頁面流程
 
 ```text
-① 輸入      lat / lon / 影片 / 底圖大小(m)
-② 底圖確認  自動截圖＋去車銳化 → 預覽 → 使用者可調大小或重截 → 確認鎖定
-③ 標註      對著 ② 鎖定的底圖標影片對應點（G-projection）；挑 collider、標碰撞幀
+① 輸入      lat / lon / 代號 / 影片
+② 框範圍    自動截圖 → 滑桿框大小 → 鎖定（＝裁切定案，不做任何影像加工）
+③ 標註      網頁內完成：影片首幀 ↔ 衛星圖點對應點 → 單應性 → G_projection.json
 ④ 呈現      車辨識 + 軌跡淨化 + build_scene → Three.js 播放頁
 ```
+
+**② 不做任何影像加工**（2026-08-20 使用者拍板）：去車與銳化都改成鎖定後的**選配**按鈕。
+標對應點不需要乾淨路面，每多一道加工就多一層 Gemini 隨機性與等待；預設路徑因此是
+「擷取 → 框 → 鎖 → 交付」，全程沒有 LLM 呼叫。
 
 ## 關鍵決策
 
@@ -66,6 +70,56 @@
 1. **去車必須在裁切之後**：Gemini 對整張 1280² 只偵測到 7 台車，對裁好的 728² 偵測到 38 台。
    小圖準得多，所以擷取只抓原圖、鎖定時才去車。
 2. **縮小純前端裁切**是對的：滑桿即時反應，只有要超過當前 zoom 的涵蓋範圍才需重抓。
+
+### 2026-08-19 修：抓到「Google 拿低 zoom 放大充數」
+
+使用者把緯度 23.026901 打成 23.062901（4 km 外的農田），②頁面**靜默給出一張糊底圖**。
+原因是 Google 在該處沒有 zoom 21 的影像時，不回空白磚（`is_blank` 抓得到），而是把低 zoom
+的圖放大——尺寸、`px_per_meter`、灰階 std 全部正常，只是沒有資訊量。
+
+實測同一點：z21 銳利度 35／z20 105／z19 128／z18 317，正常永康路口 z21 是 122。
+現在 `capture_best_zoom` 會算 `detail_score`（Laplacian 變異數）寫進 meta，
+`detail_ok=false` 時 ② 頁面出紅色警示。**不自動降 zoom**——真的平坦的路口會被誤判成
+一路降到底，判斷交給使用者按既有的「降 zoom 重抓」。
+
+### ③ 網頁標註（2026-08-20 完成，`web/annotate.html` + `annotate.py`）
+
+**標註不再跳出桌面程式。** 整條鏈其他段都已經是網頁，只為了點幾組對應點就開 PyQt5
+是流程裡唯一的斷點。按「開始標註對應點」→ 交付檔案（實作細節，介面不提）→ 直接切到
+`/annotate?code=<code>`：左影片首幀、右衛星底圖，交替點擊配對，≥4 組即時求單應性。
+
+- **輸出 schema 對齊 `trafficlab_config.default_config()`**：頂層與各子區段的鍵全部齊全
+  （實測相容），下游只讀 `homography.H` 與 `parallax.px_per_meter`
+- **`px_per_meter` 直接帶入**（Web Mercator 解析值），不必人工量兩點
+- **4 點陷阱**：單應性 8 個自由度，剛好 4 組點會被解死，**再怎麼標歪 RMS 都是 0**。
+  `solve_homography()` 回傳 `overdetermined` 旗標，介面據此顯示「標第 5 組才看得出準不準」，
+  不會拿假的 0.00 px 給人「標得很準」的錯覺
+- **逐點偏差**：>8px 的點在表格與畫布上都標紅，直接指出哪一組要重標
+- 既有 `G_projection` 會載回錨點接著改；`parallax` 的相機位置／高度網頁標不了，留 0
+  （要視差補償仍須回 GUI 補，故 `proj_method` 用無視差的 `down_h_2`）
+
+PyQt5 GUI 仍可用（`/api/launch_gui`），但不是預設路徑。
+
+交付本身（`POST /api/handoff`）擺出的檔案：
+
+```text
+trafficlab-project/location/<code>/
+├── sat_<code>.png          ← sat_clean 優先，沒有就 sat_raw；**永遠不用 sat_genai**
+├── sat_meta_<code>.json    ← 已知 px/m（含變體放大倍率）、size_m、lat/lon/zoom
+├── cctv_<code>.png         ← 影片首幀（或使用者給的截圖）
+└── footage/<影片>          ← 給 Inference 分頁
+```
+
+- **比例尺一併帶過去**：`DistStage` 新增 `load_known_scale()` 與「採用已知比例尺」按鈕，
+  讀 `sat_meta_<code>.json`。原本要人手在衛星圖上點兩個錨點量距離，現在直接採用
+  Web Mercator 解析值，少一個人為誤差來源。**沒有 sat_meta 的舊地點照舊人工量測**，
+  不影響既有流程（回歸測試：`trafficlab-project/tests/test_dist_stage_known_scale.py`）
+- **已標註過的地點拒絕覆蓋**：`G_projection_<code>.json` 存在就擋下（覆蓋底圖會讓既有座標
+  全部失效），要重來得明示 force
+- **GUI 啟動挑得動 Qt 的直譯器**：`.venv-pifpaf` 有 PyQt5 但缺 cocoa platform plugin，
+  拿它開會靜默失敗；`launch_trafficlab_gui()` 會先探測再啟動
+- 順手修掉 `main.py` 的 `apply_dark_theme` **無限遞迴**（2.x 分支呼叫自己而不是
+  `qdarktheme.setup_theme()`）——這台裝的正是 2.x，標註 GUI 本來就開不起來
 
 ### ⚠ 交給 ③ 標註的硬約束：只能對著 `sat_clean` 標
 

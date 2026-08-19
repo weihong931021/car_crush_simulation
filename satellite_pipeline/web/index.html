@@ -6,235 +6,360 @@
 <title>底圖工作台</title>
 <style>
   :root{
-    --paper:#E9ECF0; --panel:#FFFFFF; --ink:#16202A; --muted:#5B6672; --line:#CBD2DA;
-    --teal:#0E7C86; --teal-ink:#0A5B62; --tape:#F2B705; --warn:#B45309; --warn-bg:#FEF3C7;
-    --bad:#B42318; --bad-bg:#FEE4E2; --ok:#067647; --ok-bg:#DCFAE6;
-    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --bg:#F4F6F8; --panel:#FFFFFF; --panel2:#FFFFFF; --line:#DDE3E9;
+    --ink:#1A2430; --dim:#69798A; --teal:#0E8C7E; --teal-ink:#0B7A6D;
+    --tape:#C88A00; --bad:#C3402A; --ok:#0E7A52;
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
     --sans:-apple-system,"PingFang TC","Noto Sans TC",system-ui,sans-serif;
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 var(--sans)}
-  header{display:flex;align-items:baseline;gap:18px;padding:18px 28px 12px;border-bottom:1px solid var(--line)}
-  header h1{margin:0;font-size:20px;font-weight:600;letter-spacing:.02em}
-  .steps{display:flex;gap:6px;font-size:13px;color:var(--muted)}
-  .steps span{padding:2px 10px;border-radius:999px;border:1px solid var(--line)}
-  .steps span.on{background:var(--ink);color:#fff;border-color:var(--ink)}
-  main{display:grid;grid-template-columns:320px 1fr;gap:20px;padding:20px 28px;max-width:1400px}
-  @media (max-width:900px){main{grid-template-columns:1fr}}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px}
-  h2{margin:0 0 12px;font-size:13px;font-weight:600;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
-  label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
-  input[type=text],input[type=number]{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;font:14px var(--mono);color:var(--ink);background:#FAFBFC}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans)}
+  button{font:600 14px var(--sans);cursor:pointer;border:1px solid transparent;border-radius:8px}
+  button:disabled{opacity:.35;cursor:not-allowed}
   input:focus-visible,button:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
-  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  .check{display:flex;align-items:center;gap:8px;margin-top:14px;font-size:14px}
-  button{font:600 14px var(--sans);padding:10px 16px;border-radius:8px;border:1px solid transparent;cursor:pointer}
-  button.primary{background:var(--teal);color:#fff}
-  button.primary:hover{background:var(--teal-ink)}
-  button.ghost{background:transparent;color:var(--teal-ink);border-color:var(--line)}
-  button:disabled{opacity:.45;cursor:not-allowed}
-  .full{width:100%;margin-top:16px}
-  .hint{font-size:12.5px;color:var(--muted);margin-top:8px}
-  .status{margin-top:12px;font-size:13px;min-height:20px}
-  .status.busy::before{content:"";display:inline-block;width:10px;height:10px;border:2px solid var(--teal);border-right-color:transparent;border-radius:50%;margin-right:8px;vertical-align:-1px;animation:spin .8s linear infinite}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  @media (prefers-reduced-motion:reduce){.status.busy::before{animation:none}}
-  .banner{padding:8px 12px;border-radius:6px;font-size:13px;margin-top:10px}
-  .banner.warn{background:var(--warn-bg);color:var(--warn)}
-  .banner.bad{background:var(--bad-bg);color:var(--bad)}
-  .banner.ok{background:var(--ok-bg);color:var(--ok)}
 
-  /* 取景器 */
-  .tabs{display:flex;gap:4px;margin-bottom:10px;flex-wrap:wrap;align-items:center}
-  .tabs button{padding:6px 12px;font-weight:500;background:transparent;border-color:var(--line);color:var(--muted)}
-  .tabs button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
-  .tabs .meta{margin-left:auto;font:12.5px var(--mono);color:var(--muted)}
-  .stage{position:relative;background:#0F1417;border-radius:8px;overflow:hidden;aspect-ratio:1/1;max-height:70vh;margin:auto}
-  .stage canvas{display:block;width:100%;height:100%}
-  .empty{position:absolute;inset:0;display:grid;place-items:center;color:#8B95A0;font-size:14px;text-align:center;padding:20px}
-  .readouts{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-top:14px}
-  .ro{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
-  .ro b{display:block;font:600 20px/1.2 var(--mono);color:var(--ink)}
-  .ro span{font-size:12px;color:var(--muted)}
-  .sizer{margin-top:16px;display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center}
-  .sizer input[type=range]{width:100%;accent-color:var(--tape)}
-  .sizer output{font:600 18px var(--mono);min-width:5ch;text-align:right}
-  .actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+  header{display:flex;align-items:center;gap:22px;padding:16px 26px;border-bottom:1px solid var(--line)}
+  header h1{margin:0;font-size:16px;font-weight:600;letter-spacing:.06em}
+  .steps{display:flex;gap:20px;font-size:13px;color:var(--dim)}
+  .steps span{position:relative;padding-left:19px}
+  .steps span::before{content:"";position:absolute;left:0;top:6px;width:9px;height:9px;
+    border-radius:50%;border:1.5px solid var(--line)}
+  .steps span.on{color:var(--ink)}
+  .steps span.on::before{background:var(--teal);border-color:var(--teal)}
+  .steps span.done::before{background:var(--teal-ink);border-color:var(--teal-ink)}
+  header{background:var(--panel)}
+
+  main{display:grid;grid-template-columns:300px 1fr;min-height:calc(100vh - 58px)}
+  @media (max-width:880px){main{grid-template-columns:1fr}}
+  aside{padding:22px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:22px}
+  section h2{margin:0 0 10px;font:600 11px var(--sans);letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+
+  label{display:block;font-size:12px;color:var(--dim);margin:0 0 4px}
+  input[type=text]{width:100%;padding:8px 10px;border-radius:7px;border:1px solid var(--line);
+    background:var(--panel);color:var(--ink);font:13px var(--mono)}
+  input[type=text]::placeholder{color:#A6B2BE}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:8px;position:relative}
+  .fld{position:relative;margin-top:10px}
+  .file{display:block;margin-top:12px;padding:9px 10px;border:1px dashed var(--line);border-radius:7px;
+    color:var(--dim);font-size:12.5px;text-align:center;cursor:pointer}
+  .file:hover{border-color:var(--teal);color:var(--ink)}
+  .file input{display:none}
+
+  .go{width:100%;margin-top:14px;padding:11px;background:var(--teal);color:#fff}
+  .go:hover:not(:disabled){background:var(--teal-ink)}
+  .ghost{padding:9px 13px;background:transparent;border-color:var(--line);color:var(--ink)}
+  .ghost:hover:not(:disabled){border-color:var(--teal);color:var(--teal)}
+  .cta{width:100%;padding:12px;background:var(--tape);color:#fff}
+  .cta:hover:not(:disabled){background:#B07800}
+
+  .msg{margin-top:12px;font-size:12.5px;line-height:1.5;color:var(--dim);min-height:18px}
+  .msg.busy::before{content:"";display:inline-block;width:9px;height:9px;margin-right:7px;
+    border:2px solid var(--teal);border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion:reduce){.msg.busy::before{animation:none}}
+  .alert{margin-top:10px;padding:9px 11px;border-radius:7px;font-size:12.5px;line-height:1.5}
+  .alert.bad{background:#FDECE8;color:var(--bad);border:1px solid rgba(195,64,42,.28)}
+  .alert.ok{background:#E6F6EF;color:var(--ok);border:1px solid rgba(14,122,82,.28)}
+  .alert code{font:11.5px var(--mono);background:rgba(26,36,48,.07);padding:1px 4px;border-radius:3px}
+
+  .sugg{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:40;background:var(--panel2);
+    border:1px solid var(--line);border-radius:8px;box-shadow:0 10px 26px rgba(26,36,48,.14);
+    max-height:220px;overflow-y:auto}
+  .sugg[hidden]{display:none}
+  .sugg button{display:flex;gap:9px;align-items:baseline;width:100%;text-align:left;padding:8px 10px;
+    background:transparent;border:0;border-radius:0;color:var(--ink);font:400 12px var(--mono);white-space:nowrap}
+  .sugg button + button{border-top:1px solid var(--line)}
+  .sugg button:hover,.sugg button.active{background:#E4F5F2}
+  .sugg b{font:600 12.5px var(--sans);min-width:11ch;overflow:hidden;text-overflow:ellipsis}
+  .sugg i{font-style:normal;color:var(--dim)}
+  .sugg i.hit{color:var(--teal)}
+
+  .stage{position:relative;display:flex;align-items:center;justify-content:center;padding:26px 26px 88px;
+    background:var(--bg)}
+  canvas{max-width:100%;max-height:calc(100vh - 200px);border-radius:10px;display:block;
+    box-shadow:0 6px 24px rgba(26,36,48,.14)}
+  .blank{color:var(--dim);font-size:14px}
+  .bar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:16px;
+    padding:14px 26px;border-top:1px solid var(--line);background:var(--panel)}
+  .bar[hidden]{display:none}
+  .bar input[type=range]{flex:1;accent-color:var(--tape);min-width:110px}
+  .num{font:600 15px var(--mono);min-width:5ch;text-align:right}
+  .facts{font:12px var(--mono);color:var(--dim);min-width:20ch}
+  .extras{display:flex;gap:8px}
+  .extras button{padding:7px 11px;font-size:12.5px;background:transparent;border-color:var(--line);color:var(--dim)}
+  .extras button:hover:not(:disabled){color:var(--ink);border-color:var(--teal)}
+  .extras button.on{color:var(--teal);border-color:var(--teal)}
 </style>
 </head>
 <body>
 <header>
   <h1>底圖工作台</h1>
-  <div class="steps"><span id="s1" class="on">① 輸入</span><span id="s2">② 確認鎖定</span><span>③ 標註</span><span>④ 呈現</span></div>
+  <div class="steps">
+    <span id="st1" class="on">選地點</span><span id="st2">框範圍</span><span id="st3">標註</span>
+  </div>
 </header>
 
 <main>
-  <section class="card">
-    <h2>地點</h2>
-    <div class="row">
-      <div><label for="lat">緯度</label><input id="lat" type="text" inputmode="decimal" placeholder="23.026901"></div>
-      <div><label for="lon">經度</label><input id="lon" type="text" inputmode="decimal" placeholder="120.249615"></div>
-    </div>
-    <label for="code">地點代號（英數、-、_）</label>
-    <input id="code" type="text" placeholder="tainan_yongkang">
-    <button id="go" class="primary full">擷取底圖</button>
-    <p class="hint">以經緯度為中心抓該地點可用的最高 zoom（≈29 px/m、單張約 44 m）的原圖。大小在右側用滑桿決定，縮小不必重抓；鎖定時才對裁好的範圍去車銳化（小圖偵測準得多）。</p>
-    <div id="status" class="status"></div>
-    <div id="notes"></div>
-  </section>
+  <aside>
+    <section>
+      <h2>地點</h2>
+      <div class="pair">
+        <div><label for="lat">緯度</label>
+          <input id="lat" type="text" inputmode="decimal" placeholder="23.026901" autocomplete="off"
+                 role="combobox" aria-expanded="false" aria-controls="sg-ll"></div>
+        <div><label for="lon">經度</label>
+          <input id="lon" type="text" inputmode="decimal" placeholder="120.249615" autocomplete="off"
+                 role="combobox" aria-expanded="false" aria-controls="sg-ll"></div>
+        <div class="sugg" id="sg-ll" role="listbox" hidden></div>
+      </div>
+      <div class="fld"><label for="code">代號</label>
+        <input id="code" type="text" placeholder="tainan_yongkang" autocomplete="off"
+               role="combobox" aria-expanded="false" aria-controls="sg-code">
+        <div class="sugg" id="sg-code" role="listbox" hidden></div></div>
+      <label class="file" id="fileLabel" for="video"><span>＋ 事故影片（選配，抽首幀當 CCTV）</span>
+        <input id="video" type="file" accept=".mp4,.mov,.png,.jpg,.jpeg"></label>
+      <button id="go" class="go">擷取底圖</button>
+      <div id="msg" class="msg"></div>
+      <div id="alerts"></div>
+    </section>
 
-  <section class="card">
-    <div class="tabs" id="tabs">
-      <span class="meta" id="zoomMeta"></span>
+    <section id="handoffSec" hidden>
+      <h2>下一步</h2>
+      <button id="handoff" class="cta">開始標註對應點 →</button>
+      <div id="handoffNote"></div>
+    </section>
+  </aside>
+
+  <div class="stage">
+    <div class="blank" id="blank">填經緯度後按「擷取底圖」</div>
+    <canvas id="cv" width="900" height="900" hidden></canvas>
+    <div class="bar" id="bar" hidden>
+      <label for="size" style="margin:0">範圍</label>
+      <input id="size" type="range" min="10" max="44" step="1" value="35">
+      <span class="num" id="num">35 m</span>
+      <span class="facts" id="facts"></span>
+      <button id="lock" class="ghost">鎖定範圍</button>
+      <div class="extras" id="extras" hidden>
+        <button id="decarBtn" title="Gemini 偵測 + inpaint 去除路上車輛（選配）">去車</button>
+        <button id="genaiBtn" title="生圖模型重畫路面：好看但幾何位移 0.2 m，不可用於標註">AI 高清</button>
+      </div>
     </div>
-    <div class="stage">
-      <canvas id="cv" width="1024" height="1024"></canvas>
-      <div class="empty" id="empty">輸入經緯度後按「擷取底圖」，衛星圖會顯示在這裡</div>
-    </div>
-    <div class="readouts">
-      <div class="ro"><b id="roSize">—</b><span>底圖邊長 (m)</span></div>
-      <div class="ro"><b id="roPpm">—</b><span>解析度 (px/m)</span></div>
-      <div class="ro"><b id="roPx">—</b><span>輸出邊長 (px)</span></div>
-      <div class="ro"><b id="roCover">—</b><span>本次可用上限 (m)</span></div>
-    </div>
-    <div class="sizer">
-      <span>底圖大小</span>
-      <input id="size" type="range" min="10" max="44" step="1" value="40" disabled>
-      <output id="sizeOut">40 m</output>
-    </div>
-    <div id="sizeNote"></div>
-    <label class="check"><input id="genai" type="checkbox"> 鎖定時同時產 Gemini HD 版（較慢、需人眼驗標線）</label>
-    <div class="actions">
-      <button id="lock" class="primary" disabled>鎖定這個大小並去車銳化</button>
-      <button id="bigger" class="ghost" disabled>需要更大範圍：降 zoom 重抓</button>
-      <button id="redo" class="ghost" disabled>再跑一次去車</button>
-    </div>
-    <div id="lockedNote"></div>
-  </section>
+  </div>
 </main>
 
 <script>
 const $ = id => document.getElementById(id);
-const state = { code:null, meta:null, variants:{}, coverage:0, tab:null, img:null };
-const TAB_LABEL = { "sat_raw.png":"原圖", "sat_clean.png":"去車銳化", "sat_genai.png":"Gemini HD" };
+const S = { code:null, meta:null, variants:{}, coverage:0, tab:null, img:null, upload:null };
 
-function setStatus(msg, busy=false){ $("status").textContent = msg; $("status").className = "status" + (busy?" busy":""); }
-function banner(el, kind, html){ el.innerHTML = html ? `<div class="banner ${kind}">${html}</div>` : ""; }
+const msg = (t, busy) => { $("msg").textContent = t; $("msg").className = "msg" + (busy ? " busy" : ""); };
+const alert_ = (kind, html) => $("alerts").innerHTML = html ? `<div class="alert ${kind}">${html}</div>` : "";
 
 async function api(path, body){
-  const r = await fetch(path, { method: body ? "POST" : "GET", headers:{"Content-Type":"application/json"}, body: body && JSON.stringify(body) });
+  const r = await fetch(path, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
   const j = await r.json();
   if(!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
 
+/* ---------- 歷史（localStorage，最多 8 筆）---------- */
+const HK = "satpipe.history";
+const hLoad = () => { try { return JSON.parse(localStorage.getItem(HK)) || []; } catch { return []; } };
+function hAdd(lat, lon, code){
+  const h = hLoad().filter(e => e.code !== code);
+  h.unshift({ lat, lon, code });
+  localStorage.setItem(HK, JSON.stringify(h.slice(0, 8)));
+}
+
+function suggest(inputId, boxId){
+  const input = $(inputId), box = $(boxId);
+  let items = [], act = -1;
+  const close = () => { box.hidden = true; input.setAttribute("aria-expanded","false"); act = -1; };
+  const pick = e => { $("lat").value = e.lat; $("lon").value = e.lon; $("code").value = e.code;
+                      close(); msg(`已帶入 ${e.code}`); };
+  const paint = () => box.querySelectorAll("button").forEach((b,i) => b.classList.toggle("active", i === act));
+  function open(){
+    const q = input.value.trim().toLowerCase();
+    items = hLoad().filter(e => !q || String(e[inputId]).toLowerCase().startsWith(q)
+                                  || e.code.toLowerCase().includes(q));
+    if(!items.length) return close();
+    box.innerHTML = items.map((e,i) => {
+      const f = k => `<i class="${k === inputId && q ? "hit" : ""}">${e[k]}</i>`;
+      return `<button type="button" role="option" data-i="${i}"><b>${e.code}</b>${f("lat")}${f("lon")}</button>`;
+    }).join("");
+    box.querySelectorAll("button").forEach(b =>
+      b.onmousedown = ev => { ev.preventDefault(); pick(items[+b.dataset.i]); });
+    box.hidden = false; input.setAttribute("aria-expanded","true"); act = -1;
+  }
+  input.addEventListener("focus", open);
+  input.addEventListener("input", open);
+  input.addEventListener("blur", () => setTimeout(close, 130));
+  input.addEventListener("keydown", ev => {
+    if(box.hidden) return;
+    if(ev.key === "ArrowDown"){ ev.preventDefault(); act = (act+1) % items.length; paint(); }
+    else if(ev.key === "ArrowUp"){ ev.preventDefault(); act = (act-1+items.length) % items.length; paint(); }
+    else if(ev.key === "Enter" && act >= 0){ ev.preventDefault(); pick(items[act]); }
+    else if(ev.key === "Escape") close();
+  });
+}
+
+/* ---------- 幾何：與後端 px_per_meter / best_zoom_for_size 同一條式子 ---------- */
+const ppmAt = (lat, z) => 2 * Math.pow(2, z) / (156543.03392 * Math.cos(lat * Math.PI/180));
+const bestZoom = (lat, m) => [21,20,19].find(z => 1280 / ppmAt(lat, z) >= m) ?? 19;
+
+/* ---------- 擷取 ---------- */
 $("go").onclick = () => capture();
-$("bigger").onclick = () => capture((state.meta?.zoom || 21) - 1);
 
 async function capture(zoom){
   const lat = parseFloat($("lat").value), lon = parseFloat($("lon").value), code = $("code").value.trim();
-  if(!isFinite(lat) || !isFinite(lon)) return setStatus("緯度／經度要是數字");
-  if(!/^[A-Za-z0-9_-]+$/.test(code)) return setStatus("地點代號只能用英數、-、_");
-  $("go").disabled = true; $("bigger").disabled = true; $("lock").disabled = true;
-  setStatus(zoom ? `以 zoom ${zoom} 重抓原圖中…` : "擷取衛星圖原圖中…", true);
-  banner($("notes"), "", ""); banner($("lockedNote"), "", "");
+  if(!isFinite(lat) || !isFinite(lon)) return msg("緯度／經度要是數字");
+  if(!/^[A-Za-z0-9_-]+$/.test(code)) return msg("代號只能用英數、-、_");
+  $("go").disabled = true; alert_("", "");
+  msg(zoom ? `以 zoom ${zoom} 重抓…` : "擷取衛星圖…", true);
   try{
     const st = await api("/api/capture", { lat, lon, code, zoom });
-    applyState(st);
-    setStatus("原圖擷取完成。拖滑桿決定大小，再按鎖定去車。");
-  }catch(e){ setStatus("失敗：" + e.message); }
+    hAdd(lat, lon, code);
+    apply(st);
+    msg("拖滑桿框出範圍，再按鎖定");
+  }catch(e){ msg("失敗：" + e.message); }
   finally{ $("go").disabled = false; }
 }
 
-function applyState(st){
-  state.code = st.code; state.meta = st.meta; state.variants = st.variants; state.coverage = st.coverage_m;
-  $("s1").classList.remove("on"); $("s2").classList.add("on");
-  $("zoomMeta").textContent = `${st.meta.zoom_probe || "zoom "+st.meta.zoom} · ${st.meta.px_per_meter} px/m`;
-  // 去車狀態警示（降級不能靜默）；鎖定前還沒去車，不顯示
-  const ds = st.meta.decar_status;
-  const msg = { no_key:"沒有 GEMINI_API_KEY，這張圖<strong>沒有去車</strong>", failed:"Gemini 去車失敗，這張圖<strong>沒有去車</strong>（只銳化）",
-                no_vehicles:"Gemini 沒偵測到車輛（可能真的沒車，也可能漏偵測）", ok:`已去除 ${st.meta.vehicles_removed} 台車，請切「去車銳化」分頁檢視品質` }[ds];
-  banner($("notes"), ds==="ok" ? "ok" : (ds==="no_vehicles" ? "warn" : "bad"), ds ? msg : "");
-  // tabs
-  const tabs = $("tabs"); tabs.querySelectorAll("button").forEach(b=>b.remove());
+function apply(st){
+  Object.assign(S, { code:st.code, meta:st.meta, variants:st.variants, coverage:st.coverage_m });
+  const locked = !!st.meta.locked;
+  $("st1").className = "done";
+  $("st2").className = locked ? "done" : "on";
+  $("st3").className = locked ? "on" : "";
+  $("blank").hidden = true; $("cv").hidden = false; $("bar").hidden = false;
+
+  const s = $("size");
+  s.max = Math.max(Math.floor(st.coverage_m), Math.ceil(st.meta.size_m || 0));
+  s.disabled = locked;
+  if(locked) s.value = st.meta.size_m; else if(+s.value > +s.max) s.value = s.max;
+  $("lock").disabled = locked;
+  $("lock").textContent = locked ? "已鎖定" : "鎖定範圍";
+  $("extras").hidden = !locked;
+  $("handoffSec").hidden = !locked;
+
+  // 只在真的有問題時說話：該 zoom 沒有實際影像（Google 拿低 zoom 放大充數）
+  alert_("bad", st.meta.detail_ok === false
+    ? `此處沒有 zoom ${st.meta.zoom} 的實際影像（細節 ${st.meta.detail_score}，正常約 120）——`
+      + `這是低 zoom 放大的糊圖，請確認經緯度。`
+    : "");
+
   const names = Object.keys(st.variants);
-  const preferred = names.includes("sat_genai.png") ? "sat_genai.png" : names.includes("sat_clean.png") ? "sat_clean.png" : names[0];
-  names.forEach(n => {
-    const b = document.createElement("button"); b.textContent = TAB_LABEL[n] || n;
-    b.onclick = () => showTab(n); b.dataset.name = n; tabs.insertBefore(b, $("zoomMeta"));
-  });
-  // slider
-  const s = $("size"), maxM = Math.floor(st.coverage_m);
-  s.max = maxM; s.disabled = !!st.meta.locked;
-  if(st.meta.locked) s.value = st.meta.size_m; else if(+s.value > maxM) s.value = maxM;
-  $("roCover").textContent = st.coverage_m.toFixed(1);
-  $("bigger").disabled = !!st.meta.locked || st.meta.zoom <= 19;
-  $("lock").disabled = !!st.meta.locked;
-  $("redo").disabled = !st.meta.locked;
-  if(st.meta.locked) banner($("lockedNote"), "ok",
-    `已鎖定 <b>${st.meta.size_m} m</b> @ ${st.meta.px_per_meter} px/m（${st.meta.img_w}×${st.meta.img_h} px raw）。` +
-    `這組數字就是後續標註的座標系。品質不行就改參數重新「擷取底圖」。<br>下一步：<code>tools/build_scene.py --sat-dir satellite_pipeline/output/${st.code} …</code>`);
-  showTab(preferred);
+  $("decarBtn").classList.toggle("on", st.meta.decar_status === "ok");
+  $("genaiBtn").classList.toggle("on", names.includes("sat_genai.png"));
+  show(names.includes("sat_clean.png") ? "sat_clean.png" : names[0]);
 }
 
-function showTab(name){
-  state.tab = name;
-  $("tabs").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.name === name));
+function show(name){
+  S.tab = name;
   const im = new Image();
-  im.onload = () => { state.img = im; $("empty").style.display = "none"; draw(); };
-  im.src = state.variants[name].url;
+  im.onload = () => { S.img = im; draw(); };
+  im.src = S.variants[name].url;
 }
 
+/* ---------- 畫面 ---------- */
 $("size").oninput = draw;
 
 function draw(){
-  const cv = $("cv"), ctx = cv.getContext("2d");
-  const size = +$("size").value; $("sizeOut").textContent = size + " m";
-  if(!state.img || !state.meta) return;
-  const m = state.meta, locked = !!m.locked;
-  const W = cv.width;
-  ctx.fillStyle = "#0F1417"; ctx.fillRect(0,0,W,W);
-  ctx.drawImage(state.img, 0, 0, W, W);
-  // 裁切框：以 raw 像素為準換算成 canvas 比例（鎖定後圖已裁好，框就是整張）
-  const frac = locked ? 1 : Math.min(1, size / state.coverage);
-  const side = W * frac, off = (W - side) / 2;
+  const cv = $("cv"), ctx = cv.getContext("2d"), W = cv.width;
+  const size = +$("size").value, m = S.meta, locked = !!m.locked;
+  $("num").textContent = size + " m";
+  if(!S.img) return;
+
+  ctx.clearRect(0, 0, W, W);
+  ctx.drawImage(S.img, 0, 0, W, W);
+
+  const frac = locked ? 1 : Math.min(1, size / S.coverage), side = W * frac, off = (W - side) / 2;
   if(!locked){
-    ctx.fillStyle = "rgba(15,20,23,.55)";
-    ctx.fillRect(0,0,W,off); ctx.fillRect(0,off+side,W,off); ctx.fillRect(0,off,off,side); ctx.fillRect(off+side,off,off,side);
+    ctx.fillStyle = "rgba(244,246,248,.72)";
+    ctx.fillRect(0,0,W,off); ctx.fillRect(0,off+side,W,off);
+    ctx.fillRect(0,off,off,side); ctx.fillRect(off+side,off,off,side);
   }
-  ctx.strokeStyle = "#F2B705"; ctx.lineWidth = 3; ctx.strokeRect(off+1.5, off+1.5, side-3, side-3);
-  // 角標
-  ctx.lineWidth = 6; const L = 28;
-  [[off,off,1,1],[off+side,off,-1,1],[off,off+side,1,-1],[off+side,off+side,-1,-1]].forEach(([x,y,dx,dy])=>{
-    ctx.beginPath(); ctx.moveTo(x, y+dy*L); ctx.lineTo(x,y); ctx.lineTo(x+dx*L, y); ctx.stroke();
+  ctx.strokeStyle = locked ? "#0E8C7E" : "#C88A00";
+  ctx.lineWidth = 2; ctx.strokeRect(off+1, off+1, side-2, side-2);
+  ctx.lineWidth = 5;
+  [[off,off,1,1],[off+side,off,-1,1],[off,off+side,1,-1],[off+side,off+side,-1,-1]].forEach(([x,y,dx,dy]) => {
+    ctx.beginPath(); ctx.moveTo(x, y+dy*24); ctx.lineTo(x, y); ctx.lineTo(x+dx*24, y); ctx.stroke();
   });
-  // 比例尺 10 m
-  const ppmCanvas = W / state.coverage, bar = 10 * ppmCanvas;
-  ctx.fillStyle = "#fff"; ctx.fillRect(24, W-40, bar, 4);
-  ctx.font = "600 18px ui-monospace, Menlo, monospace"; ctx.fillText("10 m", 24, W-50);
-  // 讀數
-  const ppm = m.px_per_meter;
-  $("roSize").textContent = locked ? m.size_m : size;
-  $("roPpm").textContent = ppm.toFixed(2);
-  $("roPx").textContent = Math.round((locked ? m.size_m : size) * ppm);
-  const note = $("sizeNote");
-  if(!locked && size >= state.coverage - 0.5) banner(note, "warn", `已到本次擷取上限 ${state.coverage.toFixed(1)} m。要更大請「降 zoom 重抓」，解析度會減半（約 ${(ppm/2).toFixed(1)} px/m）。`);
-  else banner(note, "", "");
+
+  // 一行事實：鎖定後實際會拿到什麼（後端會自動升到裝得下的最高 zoom）
+  const z = locked ? m.zoom : bestZoom(m.lat, size);
+  const pm = locked ? m.px_per_meter : ppmAt(m.lat, z);
+  $("facts").textContent = `zoom ${z} · ${pm.toFixed(1)} px/m · ${Math.round(size * pm)} px`;
 }
 
-$("redo").onclick = async () => {
-  $("redo").disabled = true; setStatus("重新偵測車輛 → 去車銳化中…（Gemini 每次結果不同）", true);
-  try{ applyState(await api("/api/enhance", { code: state.code, genai: $("genai").checked })); setStatus("去車完成。請檢視品質。"); }
-  catch(e){ setStatus("失敗：" + e.message); $("redo").disabled = false; }
-};
-
+/* ---------- 動作 ---------- */
 $("lock").onclick = async () => {
   const size = +$("size").value;
-  if(!confirm(`鎖定 ${size} m？鎖定後大小與座標尺度不可再改（要改就重新擷取）。`)) return;
-  $("lock").disabled = true; setStatus("裁切 → 偵測車輛 → 去車銳化中…" + ($("genai").checked ? "（含 Gemini HD，會久一點）" : ""), true);
-  try{ applyState(await api("/api/lock", { code: state.code, size_m: size, genai: $("genai").checked })); setStatus("已鎖定並去車。請檢視品質。"); }
-  catch(e){ setStatus("鎖定失敗：" + e.message); $("lock").disabled = false; }
+  $("lock").disabled = true; msg("裁切並鎖定…", true);
+  try{
+    const st = await api("/api/lock", { code:S.code, size_m:size });
+    apply(st);
+    msg(st.zoom_upgraded ? `已鎖定（自動升到 zoom ${st.zoom_upgraded.to}，解析度加倍）`
+                         : "已鎖定，可以交付標註");
+  }catch(e){ msg("鎖定失敗：" + e.message); $("lock").disabled = false; }
 };
+
+$("decarBtn").onclick = async () => {
+  $("decarBtn").disabled = true; msg("Gemini 偵測車輛並去除…", true);
+  try{ apply(await api("/api/enhance", { code:S.code, decar:true })); msg("去車完成"); }
+  catch(e){ msg("去車失敗：" + e.message); }
+  finally{ $("decarBtn").disabled = false; }
+};
+
+$("genaiBtn").onclick = async () => {
+  $("genaiBtn").disabled = true; msg("生圖高清化…（約 25 秒）", true);
+  try{
+    apply(await api("/api/genai", { code:S.code }));
+    show("sat_genai.png");
+    alert_("bad", "AI 高清版是<strong>重畫</strong>的，幾何位移約 0.2 m——只能當展示底圖，"
+      + "交付標註仍會用忠實版。");
+  }catch(e){ msg("生圖失敗：" + e.message); }
+  finally{ $("genaiBtn").disabled = false; }
+};
+
+/* ---------- 影片 ---------- */
+$("video").onchange = async () => {
+  const f = $("video").files[0]; S.upload = null;
+  const label = $("fileLabel").querySelector("span");
+  if(!f) return;
+  const code = $("code").value.trim();
+  if(!/^[A-Za-z0-9_-]+$/.test(code)){ msg("先填代號再選影片"); $("video").value = ""; return; }
+  label.textContent = `上傳 ${f.name}…`;
+  try{
+    const r = await fetch(`/api/upload?code=${encodeURIComponent(code)}&name=${encodeURIComponent(f.name)}`,
+                          { method:"POST", body:f });
+    const j = await r.json(); if(!r.ok) throw new Error(j.error);
+    S.upload = j;
+    label.textContent = `✓ ${j.name}`;
+  }catch(e){ label.textContent = "＋ 事故影片（上傳失敗）"; msg(e.message); }
+};
+
+/* ---------- 交付 ---------- */
+$("handoff").onclick = async () => {
+  // 交付是實作細節，不用讓使用者知道「送進 trafficlab」這件事——按下去就進標註頁
+  $("handoff").disabled = true; msg("準備標註畫面…", true);
+  const body = { code:S.code };
+  if(S.upload) body[S.upload.kind] = S.upload.name;
+  try{
+    await send(body);
+    location.href = `/annotate?code=${encodeURIComponent(S.code)}`;
+  }catch(e){ msg(e.message === "已取消" ? "已取消" : "失敗：" + e.message); $("handoff").disabled = false; }
+};
+
+async function send(body){
+  try{ return await api("/api/handoff", body); }
+  catch(e){
+    if(!/G_projection/.test(e.message)) throw e;
+    if(!confirm("這個地點已經標註過，重新開始會讓既有座標失效。要繼續嗎？")) throw new Error("已取消");
+    return api("/api/handoff", { ...body, force:true });
+  }
+}
+
+suggest("lat", "sg-ll"); suggest("lon", "sg-ll"); suggest("code", "sg-code");
 </script>
 </body>
 </html>

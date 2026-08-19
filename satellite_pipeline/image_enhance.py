@@ -26,10 +26,10 @@ import sys
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = SCRIPTS_DIR / "output"
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 from common import validate_code  # noqa: E402
+from paths import OUTPUT_DIR      # noqa: E402  路徑集中在 paths.py
 
 GEMINI_MODEL = "gemini-2.5-flash"   # 視覺偵測用；2.0 已停用
 DETECT_PROMPT = (
@@ -371,7 +371,8 @@ def genai_enhance(code: str, key: str | None = None,
     return out_path
 
 
-def enhance_file(src, dst, key: str | None = None, upscale: int = 2) -> dict:
+def enhance_file(src, dst, key: str | None = None, upscale: int = 2,
+                 decar: bool = True) -> dict:
     """對**任意一張圖**去車 + 銳化 + 等比放大，回傳增強資訊 dict。
 
     **座標安全保證（這是本函式存在的理由）**：輸出必然是輸入的精確整數倍等比放大——
@@ -409,6 +410,9 @@ def enhance_file(src, dst, key: str | None = None, upscale: int = 2) -> dict:
     # 「真的沒車」（no_vehicles）同值，否則批次跑完看起來全成功、實際地面圖烙著車。
     n_removed = 0
     decar_status = "no_key"
+    if not decar:
+        decar_status = "skipped"        # 使用者主動不要去車：不是降級，前端不警示
+        key = ""
     if key:
         try:
             boxes = detect_vehicles(src.read_bytes(), w, h, key)
@@ -431,6 +435,8 @@ def enhance_file(src, dst, key: str | None = None, upscale: int = 2) -> dict:
         except Exception as e:
             decar_status = "failed"
             print(f"  Gemini 去車失敗（{type(e).__name__}），fallback 只銳化：{e}")
+    elif decar_status == "skipped":
+        print("  略過去車（使用者設定），只銳化")
     else:
         print("  未提供 GEMINI_API_KEY，只銳化不去車")
 
@@ -454,7 +460,7 @@ def enhance_file(src, dst, key: str | None = None, upscale: int = 2) -> dict:
 
 
 def enhance(code: str, key: str | None = None, upscale: int = 2,
-            out_dir: Path | None = None) -> Path:
+            out_dir: Path | None = None, decar: bool = True) -> Path:
     """satellite_pipeline 的標準路徑：output/<code>/sat_raw.png → sat_clean.png。
 
     out_dir 預設 output/<code>；可注入（webapp／測試用）。
@@ -466,7 +472,7 @@ def enhance(code: str, key: str | None = None, upscale: int = 2,
         sys.exit(f"ERROR: 找不到 {raw_path}（先跑 map_capture.py）")
 
     clean_path = out_dir / "sat_clean.png"
-    info = enhance_file(raw_path, clean_path, key=key, upscale=upscale)
+    info = enhance_file(raw_path, clean_path, key=key, upscale=upscale, decar=decar)
 
     # 更新 meta：記錄去車數 + 增強後尺寸
     meta_path = out_dir / "meta.json"

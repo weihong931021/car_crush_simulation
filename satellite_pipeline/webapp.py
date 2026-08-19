@@ -25,15 +25,22 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = SCRIPTS_DIR / "output"
-WEB_DIR = SCRIPTS_DIR / "web"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from common import validate_code  # noqa: E402
+from paths import (               # noqa: E402  所有路徑的唯一事實來源
+    LOCATION_ROOT, OUTPUT_DIR, TRAFFICLAB_DIR, UPLOAD_DIR, WEB_DIR,
+)
 
 VARIANTS = ("sat_raw.png", "sat_clean.png", "sat_genai.png")
 BLANK_STD_THRESHOLD = 6.0     # 灰階標準差低於此值視為「無影像的空白圖磚」
 ZOOM_CANDIDATES = (21, 20, 19)
+
+# Laplacian 變異數低於此值＝該 zoom 沒有真實影像（Google 拿低 zoom 的圖放大充數）。
+# 實測（2026-08-19）：正常永康路口 z21 = 119；無影像的農田 z21 = 15.6（同點 z20 = 105、
+# z18 = 317，證明資訊量其實只到 z18）。合成對照：銳利雜訊 48510、降 1/4 再放大 16.5、純色 0。
+# 60 落在 119 與 16 中間，兩邊都有 2× 以上餘裕。
+DETAIL_MIN = 60.0
 
 
 # ---------- 純函式（可離線測） ----------
@@ -43,6 +50,25 @@ def is_blank(img) -> bool:
     import numpy as np
     g = np.asarray(img.convert("L"), dtype=np.float32)
     return float(g.std()) < BLANK_STD_THRESHOLD
+
+
+def detail_score(img) -> float:
+    """影像的高頻資訊量（Laplacian 變異數）。放大充數的圖沒有高頻，分數會塌掉。"""
+    import cv2
+    import numpy as np
+    g = np.asarray(img.convert("L"), dtype=np.float32)
+    return float(cv2.Laplacian(g, cv2.CV_32F).var())
+
+
+def looks_upsampled(img) -> bool:
+    """該 zoom 沒有真實影像嗎？
+
+    這是 `is_blank` 抓不到的失敗模式：Google 不是回空白磚，而是把低 zoom 的圖放大，
+    尺寸與 px_per_meter 看起來完全正常、灰階 std 也過關，只是**糊的**。
+    實例：使用者把緯度 23.026901 打成 23.062901，落在 4km 外的農田，
+    z21 銳利度 15.6（同點 z20 是 105）——舊版靜默給出這張圖當底圖。
+    """
+    return detail_score(img) < DETAIL_MIN
 
 
 def lock_size(out_dir, size_m: float) -> dict:
@@ -90,6 +116,128 @@ def lock_size(out_dir, size_m: float) -> dict:
     return meta
 
 
+def best_zoom_for_size(lat: float, size_m: float,
+                       candidates=ZOOM_CANDIDATES) -> int:
+    """能裝下 size_m 的**最高** zoom（＝解析度最好的那個）。
+
+    Static API 單張是 1280px，所以 zoom z 的涵蓋範圍＝1280 / px_per_meter(lat, z)。
+    全部都裝不下就回最低的（使用者要的範圍超過單張極限，只能給最大的那張）。
+    """
+    import map_capture
+    for z in sorted(candidates, reverse=True):
+        if 1280 / map_capture.px_per_meter(lat, z, 2) >= size_m:
+            return z
+    return min(candidates)
+
+
+# ---------- 交付 trafficlab 標註 GUI（③）----------
+
+def extract_first_frame(video: Path, dst_png: Path) -> tuple[int, int]:
+    """影片首幀 → PNG（trafficlab 的 cctv_<code>.png）。回傳 (w, h)。"""
+    import cv2
+    cap = cv2.VideoCapture(str(video))
+    ok, frame = cap.read()
+    cap.release()
+    if not ok or frame is None:
+        raise ValueError(f"讀不到影片首幀：{video.name}")
+    cv2.imwrite(str(dst_png), frame)
+    return frame.shape[1], frame.shape[0]
+
+
+def handoff_to_trafficlab(out_dir, loc_root, code: str, video=None, cctv_image=None,
+                          force: bool = False) -> dict:
+    """把 ② 鎖定的底圖擺成 trafficlab 標註 GUI 認得的樣子：
+
+        location/<code>/sat_<code>.png        ← sat_clean（忠實版，位移 0.00m；絕不拿 genai）
+        location/<code>/sat_meta_<code>.json  ← 已知 px/m、lat/lon、size_m（DistStage 可直接採用）
+        location/<code>/cctv_<code>.png       ← 影片首幀或使用者給的截圖（選配）
+        location/<code>/footage/<video>       ← 影片本體（選配，給 Inference 分頁）
+
+    px/m 要乘上 sat_clean 相對 raw 的放大倍率（它是 2x），否則標在它上面的座標會差一倍。
+    已有 G_projection_<code>.json 就拒絕（覆蓋 sat 會讓既有標註的座標全失效），force 才放行。
+    """
+    import shutil
+    from PIL import Image
+
+    out_dir, loc_root = Path(out_dir), Path(loc_root)
+    validate_code(code)
+    meta = json.loads((out_dir / "meta.json").read_text())
+    if not meta.get("locked"):
+        raise ValueError("底圖尚未鎖定——先按「鎖定」讓 size_m / px_per_meter 定案再交付")
+    # 交付順序：有增強版就用（幾何仍忠實），否則用原圖。**永遠不用 sat_genai**——
+    # 它是生圖重畫，位移中位數 0.20m，標在上面等於把誤差烙進 G-projection。
+    src = next((out_dir / n for n in ("sat_clean.png", "sat_raw.png") if (out_dir / n).exists()), None)
+    if src is None:
+        raise ValueError("找不到底圖（sat_clean.png / sat_raw.png 都不在）")
+
+    dst_dir = loc_root / code
+    gproj = dst_dir / f"G_projection_{code}.json"
+    if gproj.exists() and not force:
+        raise ValueError(f"{gproj.name} 已存在——這個地點已經標註過，覆蓋底圖會讓既有座標失效。"
+                         f"要重來請明示 force")
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+
+    shutil.copy2(src, dst_dir / f"sat_{code}.png")
+    written.append(f"sat_{code}.png")
+
+    factor = Image.open(src).size[0] / meta["img_w"]
+    sat_meta = {
+        "location_code": code,
+        "sat_variant": src.name,
+        "px_per_meter": meta["px_per_meter"] * factor,
+        "px_per_meter_raw": meta["px_per_meter"],
+        "upscale_factor": factor,
+        "size_m": meta["size_m"],
+        "lat": meta["lat"], "lon": meta["lon"], "zoom": meta["zoom"],
+        "source": "satellite_pipeline/webapp handoff",
+        "note": "px_per_meter 已含 sat_clean 的放大倍率；DistStage 可直接採用，不必再量兩點",
+    }
+    (dst_dir / f"sat_meta_{code}.json").write_text(json.dumps(sat_meta, indent=2, ensure_ascii=False))
+    written.append(f"sat_meta_{code}.json")
+
+    if video:
+        video = Path(video)
+        (dst_dir / "footage").mkdir(exist_ok=True)
+        shutil.copy2(video, dst_dir / "footage" / video.name)
+        written.append(f"footage/{video.name}")
+        extract_first_frame(video, dst_dir / f"cctv_{code}.png")
+        written.append(f"cctv_{code}.png")
+    elif cctv_image:
+        Image.open(cctv_image).convert("RGB").save(dst_dir / f"cctv_{code}.png")
+        written.append(f"cctv_{code}.png")
+
+    return {"location_dir": str(dst_dir), "written": written, "sat_meta": sat_meta,
+            "has_cctv": (dst_dir / f"cctv_{code}.png").exists()}
+
+
+def _qt_works(py: Path) -> bool:
+    """這個直譯器能不能真的開視窗。.venv-pifpaf 有 PyQt5 但缺 cocoa platform plugin，
+    直接拿它開 GUI 只會靜默失敗（Popen 不會回報）。"""
+    import subprocess
+    try:
+        r = subprocess.run([str(py), "-c",
+                            "from PyQt5.QtWidgets import QApplication; QApplication([])"],
+                           capture_output=True, timeout=30)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def launch_trafficlab_gui() -> dict:
+    """開 trafficlab 的 PyQt5 標註 GUI（main.py），挑第一個 Qt 真的能用的直譯器。"""
+    import subprocess
+    candidates = [Path(sys.executable), TRAFFICLAB_DIR / ".venv-pifpaf" / "bin" / "python"]
+    py = next((c for c in candidates if c.exists() and _qt_works(c)), None)
+    if py is None:
+        raise RuntimeError("找不到能開 Qt 視窗的 python（PyQt5 未裝或缺 platform plugin），"
+                           "請在 trafficlab-project 手動跑 python3 main.py")
+    proc = subprocess.Popen([str(py), "main.py"], cwd=str(TRAFFICLAB_DIR),
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
+    return {"pid": proc.pid, "python": str(py), "cwd": str(TRAFFICLAB_DIR)}
+
+
 # ---------- 抓圖編排 ----------
 
 def capture_best_zoom(lat: float, lon: float, code: str, want_zoom: int | None = None) -> dict:
@@ -120,8 +268,23 @@ def capture_best_zoom(lat: float, lon: float, code: str, want_zoom: int | None =
         meta = map_capture.finish_capture(img, lat, lon, code, z, 2, size_m=None)
         skipped = [zz for zz in zooms if zz > z]
         meta["zoom_probe"] = (f"zoom {skipped} 無影像，採用 {z}" if skipped else f"zoom {z}")
+
+        # 細節不足＝該 zoom 是放大充數。不自動降級（真的平坦的路口會被誤判成一路降到底），
+        # 改成寫進 meta 讓 ② 頁面警示，使用者按「降 zoom 重抓」自己決定。
+        score = detail_score(img)
+        meta["detail_score"] = round(score, 1)
+        meta["detail_ok"] = score >= DETAIL_MIN
+        if score < DETAIL_MIN:
+            print(f"  警告：zoom {z} 細節不足（{score:.1f} < {DETAIL_MIN}），"
+                  f"該處可能沒有此 zoom 的影像，是低 zoom 放大充數")
+        _write_meta(code, meta)
         return meta
     raise RuntimeError(last_err or "所有 zoom 都失敗")
+
+
+def _write_meta(code: str, meta: dict) -> None:
+    (OUTPUT_DIR / code / "meta.json").write_text(
+        json.dumps(meta, indent=2, ensure_ascii=False))
 
 
 def run_capture(lat, lon, code, want_zoom=None) -> dict:
@@ -130,11 +293,15 @@ def run_capture(lat, lon, code, want_zoom=None) -> dict:
     return read_state(code)
 
 
-def run_enhance(code, genai=False, upscale=2) -> dict:
-    """對目前的 raw 去車銳化（＋選配 genai）。Gemini 偵測有隨機性，可重跑到滿意為止。"""
+def run_enhance(code, genai=False, upscale=2, decar=False) -> dict:
+    """對目前的 raw 銳化 2x（選配去車、選配 genai）。
+
+    decar 預設 False（使用者決定：標註對應點不需要乾淨路面，去車反而多一層 Gemini 隨機性）。
+    開了去車時 Gemini 偵測有隨機性，可重跑到滿意為止。
+    """
     import image_enhance
     validate_code(code)
-    image_enhance.enhance(code, upscale=upscale)      # 會把 decar_status 寫進 meta、保留 locked
+    image_enhance.enhance(code, upscale=upscale, decar=decar)   # 寫 decar_status、保留 locked
     if genai:
         try:
             image_enhance.genai_enhance(code, style_ref="refs/road_style_ref.png")
@@ -143,11 +310,54 @@ def run_enhance(code, genai=False, upscale=2) -> dict:
     return read_state(code)
 
 
-def run_lock(code, size_m, genai=False, upscale=2) -> dict:
-    """鎖定大小 → 對裁好的 raw 去車銳化 → 選配 genai HD。"""
+def run_genai(code, provider=None) -> dict:
+    """只跑 LLM 生圖高清化，不重跑去車。
+
+    分開的理由：去車每次結果都不同（Gemini 偵測有隨機性），使用者只想要 AI 高清版時
+    不該連帶把已經滿意的 sat_clean 重抽一次。
+    """
+    import image_enhance
     validate_code(code)
-    lock_size(OUTPUT_DIR / code, size_m)
-    return run_enhance(code, genai=genai, upscale=upscale)
+    kwargs = {"style_ref": "refs/road_style_ref.png"}
+    if provider:
+        kwargs["provider"] = provider
+    try:
+        image_enhance.genai_enhance(code, **kwargs)
+    except SystemExit as e:      # genai_enhance 用 sys.exit 報錯，不能讓它殺掉 server
+        raise RuntimeError(f"生圖失敗：{e}") from e
+    return read_state(code)
+
+
+def run_lock(code, size_m, genai=False, upscale=2, decar=False) -> dict:
+    """鎖定大小 → 對裁好的 raw 去車銳化 → 選配 genai HD。
+
+    鎖定前先確認目前這張是**能裝下 size_m 的最高 zoom**。使用者為了看更大範圍按過
+    「降 zoom 重抓」之後，常常最終選的尺寸其實在高 zoom 也放得下——不重抓的話就白白
+    損失一半解析度（實例：38m 鎖在 zoom 20 得 553px，zoom 21 是 1106px）。
+    """
+    validate_code(code)
+    out_dir = OUTPUT_DIR / code
+    meta = json.loads((out_dir / "meta.json").read_text())
+    best = best_zoom_for_size(meta["lat"], size_m)
+    upgraded = None
+    if best > meta["zoom"]:
+        print(f"  {size_m}m 在 zoom {best} 放得下，自動升級（原 zoom {meta['zoom']}）")
+        new_meta = capture_best_zoom(meta["lat"], meta["lon"], code, want_zoom=best)
+        if new_meta.get("detail_ok", True):
+            upgraded = {"from": meta["zoom"], "to": best}
+        else:
+            # 高 zoom 沒有真實影像（放大充數），退回原本那張
+            print(f"  zoom {best} 細節不足，退回 zoom {meta['zoom']}")
+            capture_best_zoom(meta["lat"], meta["lon"], code, want_zoom=meta["zoom"])
+
+    lock_size(out_dir, size_m)
+    # 鎖定＝裁切定案，不做任何影像加工。去車／銳化／AI 高清都是鎖定後的**選配**動作
+    # （使用者決定：標對應點不需要乾淨路面，每多一道加工就多一層隨機性與等待）。
+    st = run_enhance(code, genai=genai, upscale=upscale, decar=decar) if (decar or genai) \
+        else read_state(code)
+    if upgraded:
+        st["zoom_upgraded"] = upgraded
+    return st
 
 
 def read_state(code: str) -> dict:
@@ -191,6 +401,30 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _upload(self, n: int):
+        """影片／截圖以 raw body 上傳（不走 multipart：stdlib 3.13 起沒有 cgi）。"""
+        from urllib.parse import parse_qs, urlsplit
+        q = parse_qs(urlsplit(self.path).query)
+        try:
+            code = validate_code(q.get("code", [""])[0])
+        except ValueError as e:
+            return self._json({"error": str(e)}, 400)
+        name = Path(q.get("name", [""])[0]).name      # 去路徑，只留檔名
+        if not name or not name.lower().endswith((".mp4", ".mov", ".png", ".jpg", ".jpeg")):
+            return self._json({"error": "只接受 mp4/mov 影片或 png/jpg 截圖"}, 400)
+        dst = UPLOAD_DIR / code / name
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        remaining = n
+        with open(dst, "wb") as f:
+            while remaining > 0:
+                chunk = self.rfile.read(min(1 << 20, remaining))
+                if not chunk:
+                    break
+                f.write(chunk)
+                remaining -= len(chunk)
+        kind = "video" if name.lower().endswith((".mp4", ".mov")) else "cctv_image"
+        return self._json({"name": name, "bytes": n - remaining, "kind": kind})
+
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path in ("/", "/index.html"):
@@ -205,6 +439,37 @@ class Handler(BaseHTTPRequestHandler):
                 if parts[1] in VARIANTS:
                     return self._file(OUTPUT_DIR / parts[0] / parts[1], "image/png")
             return self.send_error(404)
+        if path.startswith("/location/"):
+            parts = path[len("/location/"):].split("/")
+            if len(parts) == 2:
+                try:
+                    validate_code(parts[0])
+                except ValueError:
+                    return self.send_error(400)
+                if parts[1] in (f"sat_{parts[0]}.png", f"cctv_{parts[0]}.png"):
+                    return self._file(LOCATION_ROOT / parts[0] / parts[1], "image/png")
+            return self.send_error(404)
+        if path == "/annotate" or path == "/annotate.html":
+            return self._file(WEB_DIR / "annotate.html", "text/html; charset=utf-8")
+        if path.startswith("/api/annotation/"):
+            code = path[len("/api/annotation/"):]
+            try:
+                validate_code(code)
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
+            loc = LOCATION_ROOT / code
+            sm = loc / f"sat_meta_{code}.json"
+            gp = loc / f"G_projection_{code}.json"
+            if not sm.exists():
+                return self._json({"error": f"{code} 尚未交付底圖"}, 404)
+            return self._json({
+                "code": code,
+                "sat_meta": json.loads(sm.read_text()),
+                "sat_url": f"/location/{code}/sat_{code}.png",
+                "cctv_url": (f"/location/{code}/cctv_{code}.png"
+                             if (loc / f"cctv_{code}.png").exists() else None),
+                "existing": json.loads(gp.read_text()) if gp.exists() else None,
+            })
         if path.startswith("/api/state/"):
             code = path[len("/api/state/"):]
             try:
@@ -216,6 +481,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
+        if self.path.startswith("/api/upload"):
+            return self._upload(n)
         try:
             body = json.loads(self.rfile.read(n) or b"{}")
         except json.JSONDecodeError:
@@ -225,11 +492,47 @@ class Handler(BaseHTTPRequestHandler):
                 st = run_capture(float(body["lat"]), float(body["lon"]), body["code"],
                                  want_zoom=body.get("zoom"))
                 return self._json(st)
+            if self.path == "/api/solve":
+                import annotate
+                H, err = annotate.solve_homography(body["pairs"])
+                return self._json({"H": H, "error": err})
+            if self.path == "/api/save_annotation":
+                import annotate
+                code = validate_code(body["code"])
+                loc = LOCATION_ROOT / code
+                if not loc.is_dir():
+                    raise ValueError(f"{code} 還沒交付底圖到 location/，先完成鎖定")
+                meta = json.loads((OUTPUT_DIR / code / "meta.json").read_text())
+                sat_meta_path = loc / f"sat_meta_{code}.json"
+                ppm = json.loads(sat_meta_path.read_text())["px_per_meter"] \
+                    if sat_meta_path.exists() else meta["px_per_meter"]
+                path = annotate.save_g_projection(
+                    loc, code, body["pairs"], px_per_meter=ppm,
+                    cctv_path=f"cctv_{code}.png", sat_path=f"sat_{code}.png",
+                    cctv_size=body.get("cctv_size"), sat_size=body.get("sat_size"))
+                return self._json({"path": str(path), "px_per_meter": ppm,
+                                   "pairs": len(body["pairs"])})
+            if self.path == "/api/handoff":
+                code = validate_code(body["code"])
+                video = UPLOAD_DIR / code / body["video"] if body.get("video") else None
+                cctv = UPLOAD_DIR / code / body["cctv_image"] if body.get("cctv_image") else None
+                info = handoff_to_trafficlab(OUTPUT_DIR / code, LOCATION_ROOT, code,
+                                             video=video, cctv_image=cctv,
+                                             force=bool(body.get("force")))
+                if body.get("launch"):
+                    info["launched"] = launch_trafficlab_gui()
+                return self._json(info)
+            if self.path == "/api/launch_gui":
+                return self._json(launch_trafficlab_gui())
+            if self.path == "/api/genai":
+                return self._json(run_genai(body["code"], body.get("provider")))
             if self.path == "/api/enhance":
-                return self._json(run_enhance(body["code"], genai=bool(body.get("genai"))))
+                return self._json(run_enhance(body["code"], genai=bool(body.get("genai")),
+                                              decar=bool(body.get("decar"))))
             if self.path == "/api/lock":
                 return self._json(run_lock(body["code"], float(body["size_m"]),
-                                           genai=bool(body.get("genai"))))
+                                           genai=bool(body.get("genai")),
+                                           decar=bool(body.get("decar"))))
             return self._json({"error": "unknown endpoint"}, 404)
         except (ValueError, KeyError) as e:
             return self._json({"error": str(e)}, 400)
