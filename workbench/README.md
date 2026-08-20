@@ -1,4 +1,4 @@
-# satellite_pipeline — 衛星底圖自動化
+# workbench — 進場流程 ①②③④ 端到端工作台
 
 事故地點經緯度 → 衛星圖 → 去車 + 銳化高清化。輸出的 `sat_*.png` + `meta.json`
 供 `tools/build_scene.py --sat-dir` 取用，產生場景包的 `ground.png`。
@@ -18,7 +18,7 @@ lat/lon
 ## 網頁版（2026-08-16，spec `docs/specs/2026-08-16-web-onboarding-flow-design.md`）
 
 ```bash
-python3 satellite_pipeline/webapp.py        # → http://127.0.0.1:8765/
+python3 workbench/webapp.py        # → http://127.0.0.1:8765/
 ```
 
 零依賴（stdlib http.server），輸出與 CLI 同一個 `output/<code>/`。流程：

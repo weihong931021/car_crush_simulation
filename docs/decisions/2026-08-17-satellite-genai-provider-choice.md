@@ -70,7 +70,7 @@ OPENAI_API_KEY → genai_enhance()    重畫整張做 HD 化                    
 `satellite_pipeline/measure_genai_drift.py`：把兩張圖切成 128px 方塊，逐塊相位相關求位移。
 
 ```bash
-python3 satellite_pipeline/measure_genai_drift.py --code tainan_yongkang
+python3 workbench/measure_genai_drift.py --code tainan_yongkang
 ```
 
 | 指標 | 意義 |

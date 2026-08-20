@@ -208,9 +208,9 @@ trafficlab-project/location/<code>/
 
 不重寫任何軌跡邏輯，只串既有腳本。三個踩過才知道的環境事實：
 
-- **三支腳本要三個不同的直譯器**：推論要 ultralytics + supervision（只有
-  `littering_prediction/venv` 有）、enrich 要 numpy + trafficlab（`.venv-pifpaf`）、
-  build_scene 純標準庫。`pick_python()` 逐一探測。
+- **四支腳本要三個不同的直譯器**：推論要 ultralytics + supervision（只有
+  `littering_prediction/venv` 有）、eval_haware 與 enrich 要 openpifpaf／numpy +
+  trafficlab（`.venv-pifpaf`）、build_scene 純標準庫。`pick_python()` 逐一探測。
 - **repo 內 7 組 inference config 的權重全部指向不存在的檔案**，而 `run_inference.py`
   沒有 `--weights` 覆寫。改用 `--config-path` 自帶一份（`make_inference_config()`
   複製第一組、只換權重），不去動隊友凍結中的 `inference_config.yaml`。

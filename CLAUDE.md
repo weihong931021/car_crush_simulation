@@ -35,15 +35,15 @@ spec：`docs/specs/2026-07-20-collision-simulation-design.md`。前向模擬 + O
 - `path.js` 弧長參數化／速度剖面／軌跡淨化、`obb.js` SAT、`simulate.js` 迭代接觸解算、
   `solve.js` 安全速度區間（交會事故無單一門檻，回傳 slowerK/fasterK 區間）
 - 座標約定：`heading = atan2(dx, dz)`、前向 `(sin h, cos h)`、rotation.y 右手系
-- 測試：`node --test threejs/lib/tests/*.test.js`（目錄形式會失敗，必用 glob）
+- 測試：`node --test player/lib/tests/*.test.js`（目錄形式會失敗，必用 glob）
 
 ### 驗證五件套（改完務必全跑）
 
 ```bash
-node --test threejs/lib/tests/*.test.js                     # 期望 fail 0（todo 3 是已知缺口）
+node --test player/lib/tests/*.test.js                      # 期望 fail 0（todo 3 是已知缺口）
 python3 -m unittest discover -s tools/tests                  # 期望 OK（46 測，已無 expected failure）
-python3 -m unittest discover -s satellite_pipeline/tests     # 網頁流程/標註/整合/底圖（105 測）
-(cd trafficlab-project && .venv-pifpaf/bin/python -m unittest discover -s tests)  # haware 手性回歸
+python3 -m unittest discover -s workbench/tests              # 網頁流程/標註/整合/底圖（111 測）
+(cd trafficlab-project && .venv-pifpaf/bin/python -m unittest discover -s tests)  # haware 手性回歸（271 測）
 node tools/verify_scenes.mjs                                 # 全場景 headless 冒煙，期望全過
 ```
 
@@ -129,7 +129,7 @@ python3 tools/build_scene.py --code <code> --trajectory T.json \
   --px-per-meter <trajectory.meta.px_per_meter> --size-m <sat_w/ppm> <sat_h/ppm> \
   --collider <id>:Car --collider <id>:Two_Wheeler --source-collision <frame>
 
-# 3. 播放器零改碼：threejs/index.html?scene=<code>；跑 node tools/verify_scenes.mjs 驗收
+# 3. 播放器零改碼：player/index.html?scene=<code>；跑 node tools/verify_scenes.mjs 驗收
 ```
 
 只剩兩個必要人工判斷：**挑兩台 collider 的 track ID**、**標碰撞幀**（追蹤器碰前凍結，
