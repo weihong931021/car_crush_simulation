@@ -89,6 +89,15 @@
   .extras button{padding:7px 11px;font-size:12.5px;background:transparent;border-color:var(--line);color:var(--dim)}
   .extras button:hover:not(:disabled){color:var(--ink);border-color:var(--teal)}
   .extras button.on{color:var(--teal);border-color:var(--teal)}
+
+  /* 常駐標示「現在看的是哪一張、那一張會不會被交付」。原本只有按完 AI 高清時
+     跳一次 alert，之後任何動作觸發 apply() 就被清掉，畫面卻還停在 genai 上——
+     於是切到標註頁看到忠實版會以為「退回原圖」，其實 genai 從來就不交付。 */
+  .tag{font:600 11.5px var(--sans);padding:5px 9px;border-radius:6px;white-space:nowrap;
+    background:#EDF1F4;color:var(--dim)}
+  .tag.warn{background:#FDECE8;color:var(--bad)}
+  .tag[hidden]{display:none}
+  #handoffNote{margin-top:9px;font-size:12px;line-height:1.5;color:var(--dim)}
 </style>
 </head>
 <body>
@@ -140,8 +149,9 @@
       <span class="facts" id="facts"></span>
       <button id="lock" class="ghost">鎖定範圍</button>
       <div class="extras" id="extras" hidden>
-        <button id="genaiBtn" title="生圖模型重畫路面：好看但幾何位移 0.2 m，不可用於標註">AI 高清</button>
+        <button id="genaiBtn" title="生圖模型重畫路面：好看但幾何被改寫，不可用於標註">AI 高清</button>
       </div>
+      <span class="tag" id="variantTag" hidden></span>
     </div>
   </div>
 </main>
@@ -248,9 +258,11 @@ function apply(st){
       + `這是低 zoom 放大的糊圖，請確認經緯度。`
     : "");
 
+  // 保留使用者當下在看的那張。以前每次 apply() 都搶回忠實版，剛按完「AI 高清」
+  // 就有兩個 show() 在賽跑（誰後載完誰贏），畫面停在哪張其實是碰運氣。
   const names = Object.keys(st.variants);
-  $("genaiBtn").classList.toggle("on", names.includes("sat_genai.png"));
-  show(names.includes("sat_clean.png") ? "sat_clean.png" : names[0]);
+  show(names.includes(S.tab) ? S.tab
+       : names.includes("sat_clean.png") ? "sat_clean.png" : names[0]);
 }
 
 function show(name){
@@ -258,6 +270,20 @@ function show(name){
   const im = new Image();
   im.onload = () => { S.img = im; draw(); };
   im.src = S.variants[name].url;
+  labelVariant();
+}
+
+// 交付端（webapp.handoff_to_trafficlab）寫死只收 sat_clean / sat_raw，
+// sat_genai 再好看也只是預覽——所以畫面上一定要看得出現在是哪一張。
+function labelVariant(){
+  const genai = S.tab === "sat_genai.png", has = !!S.variants["sat_genai.png"];
+  $("genaiBtn").classList.toggle("on", genai);
+  $("genaiBtn").textContent = !has ? "AI 高清" : genai ? "← 看忠實版" : "看 AI 高清";
+  const tag = $("variantTag");
+  tag.hidden = !(S.meta && S.meta.locked);
+  tag.className = "tag" + (genai ? " warn" : "");
+  tag.textContent = genai ? "AI 高清・標註會用這張（重畫過）" : "忠實版・標註會用這張";
+  refreshButtons();
 }
 
 /* ---------- 畫面 ---------- */
@@ -309,13 +335,17 @@ $("lock").onclick = async () => {
 };
 
 $("genaiBtn").onclick = async () => {
+  // 已經有 genai 就只切換檢視，不重跑。生圖不是確定性的：同一張來源、同一組
+  // 參數，實測兩次的幾何位移是 0.04 m 與 0.40 m——重按一次只是換一個亂數。
+  if(S.variants["sat_genai.png"])
+    return show(S.tab === "sat_genai.png" ? "sat_clean.png" : "sat_genai.png");
+
   $("genaiBtn").disabled = true; msg("生圖高清化…（約 25 秒）", true);
   try{
+    S.tab = "sat_genai.png";        // 先定調，apply() 才不會把畫面搶回忠實版
     apply(await api("/api/genai", { code:S.code }));
-    show("sat_genai.png");
-    alert_("bad", "AI 高清版是<strong>重畫</strong>的，幾何位移約 0.2 m——只能當展示底圖，"
-      + "交付標註仍會用忠實版。");
-  }catch(e){ msg("生圖失敗：" + e.message); }
+    msg("AI 高清完成——僅供預覽，標註仍然用忠實版");
+  }catch(e){ S.tab = "sat_clean.png"; msg("生圖失敗：" + e.message); }
   finally{ $("genaiBtn").disabled = false; }
 };
 
@@ -350,6 +380,10 @@ function refreshButtons(){
   // 標註要兩張圖對點，沒有影片畫面就標不了——按鈕直接說原因，不要按下去才報錯
   $("handoff").textContent = S.file ? "開始標註對應點 →" : "先選一支影片才能標註";
   $("handoff").disabled = !S.file;
+  // 交付哪一張＝你現在看的那張。講清楚是哪張、代價是什麼，選擇權在使用者。
+  $("handoffNote").textContent = S.tab === "sat_genai.png"
+    ? "標註底圖：AI 高清版。路面是生圖重畫的，幾何每次跑都不同（實測 0.04～0.40 m），誤差會傳進座標。"
+    : "標註底圖：忠實版（本機銳化，幾何 0 位移）。";
 }
 
 $("handoff").onclick = async () => {
@@ -367,7 +401,8 @@ $("handoff").onclick = async () => {
 // 伺服器上的暫存檔可能已被清掉（換 code、清暫存、重開機）。瀏覽器這邊還握著 File 物件，
 // 所以直接重傳一次再試，不必叫使用者重選。
 async function sendWithRetry(){
-  const body = () => ({ code:S.code, [S.upload.kind]: S.upload.name });
+  const body = () => ({ code:S.code, [S.upload.kind]: S.upload.name,
+                        ...(S.variants[S.tab] ? { variant:S.tab } : {}) });
   try{ return await send(body()); }
   catch(e){
     if(!/找不到先前上傳/.test(e.message)) throw e;

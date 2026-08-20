@@ -38,6 +38,11 @@
     color:var(--dim);text-transform:uppercase;border-bottom:1px solid var(--line2);
     display:flex;align-items:center;gap:9px}
   .pane h2 .n{margin-left:auto;font:600 12px var(--mono);color:var(--teal)}
+  /* 標的是哪一張要看得見：① 的「AI 高清」不交付（handoff_to_trafficlab 寫死
+     只收 sat_clean / sat_raw），沒有這行就會以為標註頁退回了原始衛星圖 */
+  .pane h2 .src{font:600 11px var(--mono);letter-spacing:0;text-transform:none;
+    color:var(--dim);background:var(--line2);padding:2px 7px;border-radius:5px}
+  .pane h2 .src.bad{color:var(--bad);background:var(--bad-soft)}
   .pane .wrap{flex:1;overflow:hidden;position:relative;background:#F8FAFB}
   .pane canvas{position:absolute;left:0;top:0;transform-origin:0 0;cursor:crosshair;
     image-rendering:auto}
@@ -96,7 +101,7 @@
     </div>
   </div>
   <div class="pane" id="paneS">
-    <h2>衛星底圖 <span class="n" id="nS"></span></h2>
+    <h2>衛星底圖 <span class="src" id="basemap"></span><span class="n" id="nS"></span></h2>
     <div class="wrap" id="wrapS"><canvas id="cvS"></canvas>
       <div class="zoom"><button data-z="S" data-d="-1">−</button><span id="zS">100%</span>
         <button data-z="S" data-d="1">＋</button><button data-z="S" data-d="0">符合</button></div>
@@ -140,6 +145,7 @@ $("back").onclick = () => location.href = "/";
   if(!r.ok) return toast(d.error, true);
 
   A.ppm = d.sat_meta?.px_per_meter || null;
+  showBasemap(d.sat_meta);
   A.imgS = await load(d.sat_url);
   fit($("cvS"), A.imgS);
   if(d.cctv_url){ A.imgC = await load(d.cctv_url); fit($("cvC"), A.imgC); }
@@ -153,6 +159,19 @@ $("back").onclick = () => location.href = "/";
   }
   render();
 })();
+
+// 底圖出身：sat_genai 理論上進不來（交付端擋掉），真的出現就是警訊而不是驚喜
+function showBasemap(meta){
+  const v = meta?.sat_variant, el = $("basemap");
+  const name = { "sat_clean.png": "忠實版（本機銳化）",
+                 "sat_raw.png":   "原始擷取圖",
+                 "sat_genai.png": "AI 高清（生圖重畫）" }[v] || v || "來源不明";
+  el.textContent = name + (A.ppm ? ` · ${A.ppm.toFixed(1)} px/m` : "");
+  el.classList.toggle("bad", v === "sat_genai.png");
+  el.title = v === "sat_genai.png"
+    ? "路面是生圖模型重畫的，幾何非原始影像——標在這張上的座標會帶入重畫誤差"
+    : "";
+}
 
 const load = src => new Promise((ok, no) => {
   const im = new Image(); im.onload = () => ok(im); im.onerror = no; im.src = src;

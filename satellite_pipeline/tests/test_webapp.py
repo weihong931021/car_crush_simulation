@@ -546,16 +546,61 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(meta["size_m"], 400 / 29.0)
         self.assertIn("sat_loc.png", info["written"])
 
-    def test_不交付genai版本(self):
-        """sat_genai 是重畫（位移 0.2m），絕不能當標註底圖——即使它存在也只拿 sat_clean。"""
+    def test_預設不會自己挑genai版本(self):
+        """genai 是重畫的，**預設**絕不自動採用——即使它存在也只拿 sat_clean。
+        （要用它必須明示 variant，見 test_明示variant就交付那一張。）"""
         import webapp
         with tempfile.TemporaryDirectory() as d:
             out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
             self._seed(out_dir)
-            webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
+            info = webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
             sat = Image.open(loc_root / "loc" / "sat_loc.png")
             genai = Image.open(out_dir / "sat_genai.png")
         self.assertNotEqual(sat.size, genai.size)
+        self.assertEqual(info["sat_meta"]["sat_variant"], "sat_clean.png")
+
+    def test_明示variant就交付那一張(self):
+        """使用者在 ① 看著 AI 高清版按下交付，標註頁就要拿到那一張。
+
+        代價（重畫的幾何會傳進 G_projection）由 UI 負責講清楚，這裡只驗「說到做到」，
+        並且驗 sat_meta 有留下出處——下游只看得到一張 sat_<code>.png，
+        不寫 geometry 就沒人知道那是生圖畫出來的路面。
+        """
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            (out_dir / "meta.json").write_text(json.dumps({
+                "lat": 23.0, "lon": 120.0, "zoom": 21, "px_per_meter": 29.0,
+                "img_w": 400, "img_h": 400, "size_m": 400 / 29.0, "locked": True,
+                "genai_provider": "gemini", "genai_model": "gemini-3.1-flash-image",
+                "genai_prompt": "sharp"}))
+            info = webapp.handoff_to_trafficlab(out_dir, loc_root, "loc",
+                                                variant="sat_genai.png")
+            sat = Image.open(loc_root / "loc" / "sat_loc.png")
+            genai = Image.open(out_dir / "sat_genai.png")
+        self.assertEqual(sat.size, genai.size)
+        meta = info["sat_meta"]
+        self.assertEqual(meta["sat_variant"], "sat_genai.png")
+        self.assertEqual(meta["geometry"], "rewritten_by_genai")
+        self.assertEqual(meta["genai_provider"], "gemini")
+        self.assertAlmostEqual(meta["px_per_meter"], 29.0)     # genai 與 raw 同尺寸
+        self.assertEqual(meta["upscale_factor"], 1.0)
+
+    def test_明示不存在或未知的variant要報錯(self):
+        """按鈕沒按過就沒有 genai。報「不存在」比默默降級成忠實版好——
+        默默降級正是使用者以為高清沒進標註頁的那個失敗模式。"""
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            self._seed(out_dir)
+            (out_dir / "sat_genai.png").unlink()
+            with self.assertRaisesRegex(ValueError, "不存在"):
+                webapp.handoff_to_trafficlab(out_dir, loc_root, "loc",
+                                             variant="sat_genai.png")
+            with self.assertRaisesRegex(ValueError, "未知的底圖版本"):
+                webapp.handoff_to_trafficlab(out_dir, loc_root, "loc",
+                                             variant="../../etc/passwd")
 
     def test_未鎖定拒絕交付(self):
         import webapp
