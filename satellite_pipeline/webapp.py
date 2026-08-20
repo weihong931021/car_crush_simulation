@@ -611,6 +611,24 @@ def job_status(code: str) -> dict:
     return job
 
 
+def _resolve_raw_output(code: str):
+    """偵測結果路徑：優先問 JOBS，沒有就回磁碟找。
+
+    JOBS 只在記憶體，server 一重啟就沒了——但 haware_replay.json.gz 還在磁碟上。
+    沒有這條回退，重啟後想挑車只能把 15 分鐘的偵測整個重跑一遍（實際發生過）。
+    路徑與 start_inference worker 寫入的位置同一個，不另設慣例。
+    """
+    with JOBS_LOCK:
+        raw_path = (JOBS.get(code) or {}).get("raw_output")
+    if raw_path:
+        return raw_path
+    on_disk = OUTPUT_DIR / code / "haware_replay.json.gz"
+    if on_disk.exists():
+        _job_set(code, phase="picking", returncode=0, raw_output=str(on_disk))
+        return str(on_disk)
+    return None
+
+
 def track_candidates(code: str) -> dict:
     """推論輸出 → 可挑的當事車清單（含品質欄位）。"""
     import gzip
@@ -618,13 +636,15 @@ def track_candidates(code: str) -> dict:
     import integrate
 
     validate_code(code)
-    with JOBS_LOCK:
-        raw_path = (JOBS.get(code) or {}).get("raw_output")
+    raw_path = _resolve_raw_output(code)
     if not raw_path:
         raise ValueError("還沒有偵測結果")
     with gzip.open(raw_path, "rt", encoding="utf-8") as f:
         raw = json.load(f)
-    return {"tracks": integrate.list_track_candidates(raw),
+    meta_path = OUTPUT_DIR / code / "meta.json"
+    ppm = (json.loads(meta_path.read_text()).get("px_per_meter")
+           if meta_path.exists() else None)
+    return {"tracks": integrate.list_track_candidates(raw, ppm_fallback=ppm),
             "frame_count": raw.get("mp4_frame_count") or len(raw.get("frames") or []),
             "fps": (raw.get("meta") or {}).get("fps")}
 
@@ -634,8 +654,7 @@ def build_scene_for(code: str, colliders, collision_frame):
     import integrate
 
     validate_code(code)
-    with JOBS_LOCK:
-        raw_path = (JOBS.get(code) or {}).get("raw_output")
+    raw_path = _resolve_raw_output(code)
     if not raw_path:
         raise ValueError("還沒有偵測結果")
     loc_dir = LOCATION_ROOT / code

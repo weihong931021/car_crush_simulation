@@ -59,7 +59,7 @@ def _median(xs):
     return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
 
 
-def list_track_candidates(raw):
+def list_track_candidates(raw, ppm_fallback=None):
     """推論輸出 → 可當「當事車」的 track 清單（含品質欄位）。
 
     與 `build_scene.scan_tracks` 的差別只有一個：那邊要 `position_m`（enrich 之後才有），
@@ -69,8 +69,10 @@ def list_track_candidates(raw):
     0–1 個時約 98°。但那是相關性不是因果（樣本多半來自近端 track），所以只標記不阻擋。
     """
     frames = raw.get("frames") or []
-    ppm = (raw.get("meta") or {}).get("px_per_meter")
-    stats, quality = {}, {}
+    # haware_replay 的 meta 只有 resolution/fps，沒有 px_per_meter（filter_and_enrich
+    # 之後才補）——挑車發生在 enrich 之前，所以讓呼叫端帶底圖的比例尺進來。
+    ppm = (raw.get("meta") or {}).get("px_per_meter") or ppm_fallback
+    stats, quality, first_last = {}, {}, {}
 
     for frame in frames:
         idx = frame.get("frame_index")
@@ -87,6 +89,8 @@ def list_track_candidates(raw):
                                          "frames_present": 0, "first": idx, "last": idx})
             rec["frames_present"] += 1
             rec["last"] = idx
+            fl = first_last.setdefault(tid, [obj["sat_coords"], obj["sat_coords"]])
+            fl[1] = obj["sat_coords"]
             spread, n_wheel = kp_quality(obj, ppm)
             if spread is not None:
                 q = quality.setdefault(tid, {"spread": [], "wheel": []})
@@ -94,6 +98,14 @@ def list_track_candidates(raw):
                 q["wheel"].append(n_wheel)
 
     for tid, rec in stats.items():
+        # 淨位移：整段軌跡頭尾直線距離。品質欄位（展開度／輪點）量的是**關鍵點品質**，
+        # 停放車反而分數最高（不動、輪子清楚）——實測 tainan_yongkong 的 track 1 是
+        # 路邊停放車，可用率 100%，被當成當事車挑下去直到 build_scene 出界檢查才擋下。
+        # 「有沒有在動」是另一個維度，必須自己給。
+        fl = first_last.get(tid)
+        rec["net_disp_m"] = (
+            ((fl[1][0] - fl[0][0]) ** 2 + (fl[1][1] - fl[0][1]) ** 2) ** 0.5 / ppm
+            if fl and ppm else None)
         q = quality.get(tid)
         rec["spread_med"] = _median(q["spread"]) if q else None
         rec["wheel_med"] = _median(q["wheel"]) if q else None

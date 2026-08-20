@@ -94,7 +94,7 @@
 
   <section class="step" id="s2" data-state="idle">
     <h2><span class="n">2</span>挑兩台當事車</h2>
-    <p>選出事故中的兩台車。品質欄位是自動算的判據：展開度 ≤8 m 且輪關鍵點 ≥2 的比例越高，位置越可信。</p>
+    <p>選出事故中的兩台車。「移動」是整段軌跡的頭尾直線距離——<strong>停放車的品質分數反而最高</strong>（不動、輪子清楚），別被可用率騙了。品質欄位（展開度 ≤8 m 且輪點 ≥2 的比例）只說位置可不可信，不說它有沒有參與事故。</p>
     <div id="tracks"></div>
   </section>
 
@@ -196,7 +196,7 @@ function renderTracks(){
   }
   $("tracks").innerHTML = `<table><thead><tr>
       <th>當事車</th><th>track</th><th>類別</th><th>出現幀</th>
-      <th>展開度</th><th>輪點</th><th>可用率</th></tr></thead><tbody>`
+      <th>移動</th><th>展開度</th><th>輪點</th><th>可用率</th></tr></thead><tbody>`
     + G.tracks.map(t => {
         const picked = G.picked.a?.track_id === t.track_id || G.picked.b?.track_id === t.track_id;
         return `<tr class="${picked ? "picked" : (t.ok ? "" : "weak")}">
@@ -204,6 +204,9 @@ function renderTracks(){
           <td>${t.track_id}</td>
           <td>${t.cls}${t.cls_suggested ? "" : ' <span class="badge weak">非車輛</span>'}</td>
           <td>${t.frames_present}（${t.first}–${t.last}）</td>
+          <td>${t.net_disp_m == null ? "—"
+              : t.net_disp_m < 1 ? '<span class="badge weak">停放車</span>'
+              : t.net_disp_m.toFixed(1) + " m"}</td>
           <td>${t.spread_med == null ? "—" : t.spread_med.toFixed(1) + " m"}</td>
           <td>${t.wheel_med ?? "—"}</td>
           <td><span class="badge ${t.ok ? "ok" : "weak"}">${
