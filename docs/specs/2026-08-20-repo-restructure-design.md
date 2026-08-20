@@ -89,8 +89,9 @@ blender_crash_project/
 
 ### 命名理由
 
-- **`workbench/`**：`webapp.py:516-577` 跑偵測與定位、`:606-639` 補軌跡／產場景包／開播放器。
-  它是端到端工作台，不是「後端」也不只是「onboarding」。
+- **`workbench/`**：`webapp.py` 內 `run_capture`／`run_lock` 做 ①②、`track_candidates` 做 ④ 挑車、
+  `build_scene_for` 補軌跡／產場景包／回傳播放器網址。它是端到端工作台，不是「後端」也不只是
+  「onboarding」。（引函式名不引行號——行號會隨開發漂移，本文件已被實證過一次。）
 - **`player/`**：說它是什麼，不說它用什麼技術。
 - **`trafficlab-project/` 不改名**：頂層若叫 `trafficlab/`，會與其內的 Python 套件 `trafficlab/` 同名。
   repo root 一旦進 `sys.path`（從根目錄跑 `python3` 就會），`import trafficlab` 解析到**空的
@@ -141,13 +142,27 @@ blender_crash_project/
 | 位置 | 改動 |
 | --- | --- |
 | `workbench/webapp.py:39` | `STATIC_ROOTS = ("player", "scenes")` |
-| `workbench/webapp.py:639` | 回傳 `/player/index.html?scene=…` |
+| `workbench/webapp.py:665` | 回傳 `/player/index.html?scene=…` |
 | `workbench/tests/test_webapp.py:438-460` | `safe_static("threejs", …)` → `"player"`，斷言同步 |
 | `workbench/common.py:7`、`workbench/tests/test_common.py:4` | 註解裡的 `threejs/scene-loader.js` 路徑 |
 | `tools/verify_scenes.mjs:11,87,117` | `/threejs/index.html` → `/player/index.html` |
 | `index.html:6,8` | 轉址與連結改 `player/index.html` |
+| `workbench/integrate.py:8` | docstring 的 `→ threejs/index.html?scene=<code>` |
 
 `player/scene-loader.js:10` 的 `../scenes/` **不改** —— 兩者仍同層。
+
+### 4.1b 因為 `satellite_pipeline/` → `workbench/`
+
+| 位置 | 改動 |
+| --- | --- |
+| `workbench/paths.py:12` | docstring 目錄樹裡的 `satellite_pipeline/` |
+| `workbench/tests/test_webapp.py:453` | 穿越測試字串 `"../satellite_pipeline/.env"` → `"../workbench/.env"` |
+| `workbench/tests/test_webapp.py:460` | `safe_static("satellite_pipeline", …)` → `safe_static("workbench", …)` |
+| `workbench/tests/test_webapp.py:362` | docstring 的 `/satellite_pipeline/output/_uploads/` |
+
+第 453、460 兩處是**行為測試不是註解**：前者驗「往上跳出白名單會被擋」、後者驗「非白名單目錄
+不開放」。改的是測試資料字串，斷言語意不變——但字串若不改，測的就是一個不存在的目錄，
+測試會照樣通過卻不再守住真正的邊界。
 
 ### 4.2 因為 `open-player.command` 移進 `tools/`
 
@@ -198,6 +213,8 @@ self.assertTrue((REPOSITORY_ROOT / "location").is_dir())
 | 檔案 | 行 | 內容 |
 | --- | --- | --- |
 | `CLAUDE.md` | 43-47 | 驗證五件套：`threejs/lib/tests` → `player/lib/tests`、`satellite_pipeline/tests` → `workbench/tests` |
+| `CLAUDE.md` | 38 | 碰撞物理段的 `node --test threejs/lib/tests/*.test.js` |
+| `CLAUDE.md` | 132 | 新影片進場流程第 3 步的 `threejs/index.html?scene=<code>` |
 | `README.md` | 7, 148-154 | `satellite_pipeline/webapp.py` → `workbench/webapp.py`；`/threejs/index.html` → `/player/index.html` |
 | `README.md` | 82-120 | **目錄樹整塊重寫**（含 `.kiro/specs/`、`satellite_pipeline/`、`detection_tests/`、`threejs/` 四個條目） |
 | `README.md` | 30, 62, 70, 73 | 敘述中的 `threejs/…` 路徑 |
@@ -249,18 +266,36 @@ self.assertTrue((REPOSITORY_ROOT / "location").is_dir())
 
 ### 第 0 步：保住現況
 
+> **2026-08-20 14:57 更新**：本設計初稿寫的是「8 個 modified + 2 個 untracked 要先 checkpoint」。
+> 那批改動已由另一個 session 在 `fix/web-flow-basemap-variant-and-integrate-chain` 上以 6 個
+> commit 收掉（含本文件本身，commit `0a95356`）。**起點因此改變**，第 0 步簡化如下。
+
+起點檢查 —— 三件事都要成立才動手：
+
+```bash
+git branch --show-current     # 預期 fix/web-flow-basemap-variant-and-integrate-chain
+git status --short            # 只應剩兩個未追蹤項（見下）
+git log --oneline -1          # 預期 d19cb44
+```
+
+工作區僅存的兩個未追蹤項，動手前先決定去留（**不要用 `git add -A` 一把收進來**，
+那會把產物與 `.superseded` 備份永久寫進歷史）：
+
+| 未追蹤項 | 建議 |
+| --- | --- |
+| `scenes/tainan_yongkong/` | **入庫**——它是第一個走完網頁流程 ①②③ 的真實場景包，屬於成果 |
+| `trafficlab-project/location/tainan_yongkong/G_projection_*.json.superseded.*` | **刪除**——被取代的備份檔，不入庫 |
+
+從當前分支切出重整分支並標記回復點：
+
 ```bash
 git switch -c chore/directory-reorg
-git add -A                 # 含 8 個 modified 與 2 個 untracked
-git commit -m "checkpoint: preserve pending reconstruction work"
 git tag reorg-preflight-20260820
 ```
 
-`git add -A` 刻意把未追蹤的 `trafficlab-project/tests/test_filter_and_enrich_position_gate.py`
-與 `trafficlab-project/location/tainan_yongkong/` 一起收進來 —— 回復時最安全，不想要的產物之後
-另開 commit 清。
-
 **接著跑一次完整五件套並存下輸出**，用來分辨「本來就壞的」與「搬家弄壞的」。
+新分支上的 `trafficlab-project/tests/test_filter_and_enrich_position_gate.py` 是本次新增的測試，
+基準線要含它。
 
 ### 第 1 步：純結構移動
 
