@@ -21,7 +21,7 @@ from image_enhance import (  # noqa: E402
     plan_genai_size,
 )
 
-# repo 內真實出現過的校正參考圖尺寸 + satellite_pipeline 常見輸出
+# repo 內真實出現過的校正參考圖尺寸 + workbench 常見輸出
 REAL_SIZES = ((1676, 1148), (1190, 1258), (1812, 1264), (914, 1246),
               (1515, 1038), (1024, 1024), (2560, 2560))
 

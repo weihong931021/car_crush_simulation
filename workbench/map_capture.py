@@ -39,7 +39,7 @@ def load_google_key() -> str:
             line = line.strip()
             if line.startswith("GOOGLE_MAPS_KEY=") and "=" in line:
                 return line.split("=", 1)[1].strip()
-    sys.exit("ERROR: 找不到 GOOGLE_MAPS_KEY（設環境變數或寫進 satellite_pipeline/.env）")
+    sys.exit("ERROR: 找不到 GOOGLE_MAPS_KEY（設環境變數或寫進 workbench/.env）")
 
 
 def px_per_meter(lat: float, zoom: int, scale: int = 2) -> float:

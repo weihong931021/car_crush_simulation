@@ -2,8 +2,8 @@
 """
 webapp.py — 底圖自動化的網頁前端（spec docs/specs/2026-08-16-web-onboarding-flow-design.md ①②）
 
-    python3 satellite_pipeline/webapp.py            # http://127.0.0.1:8765/
-    python3 satellite_pipeline/webapp.py --port 9000
+    python3 workbench/webapp.py            # http://127.0.0.1:8765/
+    python3 workbench/webapp.py --port 9000
 
 流程：
     輸入 lat/lon/code → POST /api/capture：探測可用 zoom、抓整張 1280² 原圖（不去車，1 秒）

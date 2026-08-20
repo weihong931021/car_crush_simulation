@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""satellite_pipeline 共用工具。"""
+"""workbench 共用工具。"""
 import re
 
 # 地點代號只允許英數與 - _：它會變成 output/<code> 目錄名（capture/enhance 都用）。
