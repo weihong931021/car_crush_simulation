@@ -200,12 +200,9 @@ function renderTracks(){
     + G.tracks.map(t => {
         const picked = G.picked.a?.track_id === t.track_id || G.picked.b?.track_id === t.track_id;
         return `<tr class="${picked ? "picked" : (t.ok ? "" : "weak")}">
-          <td><select data-tid="${t.track_id}">
-            <option value="">—</option>
-            <option value="Car"${sel(t,"Car")}>汽車</option>
-            <option value="Two_Wheeler"${sel(t,"Two_Wheeler")}>機車</option>
-          </select></td>
-          <td>${t.track_id}</td><td>${t.cls}</td>
+          <td><select data-tid="${t.track_id}">${classOptions(t)}</select></td>
+          <td>${t.track_id}</td>
+          <td>${t.cls}${t.cls_suggested ? "" : ' <span class="badge weak">非車輛</span>'}</td>
           <td>${t.frames_present}（${t.first}–${t.last}）</td>
           <td>${t.spread_med == null ? "—" : t.spread_med.toFixed(1) + " m"}</td>
           <td>${t.wheel_med ?? "—"}</td>
@@ -214,6 +211,26 @@ function renderTracks(){
         </tr>`;
       }).join("") + `</tbody></table>`;
   $("tracks").querySelectorAll("select").forEach(s => s.onchange = onPick);
+}
+
+// 車種＝物理參數，不只是外觀：CLASS_DEFAULTS 的 mass_kg 從 200（機車）到 11000（公車）、
+// length_m 從 1.85 到 11.0，選錯直接改變碰撞結論。所以選單要列出 build_scene 收得下的
+// 全部車種，不能只有汽車／機車——VisDrone 本來就會分出 van / truck / bus。
+const SCENE_CLASSES = [
+  ["Car", "汽車"], ["SUV", "休旅車"], ["Van", "廂型車"],
+  ["Truck", "卡車"], ["Bus", "公車"], ["Two_Wheeler", "機車"],
+];
+
+// 偵測到的車種排第一並標「偵測」：這格同時負責「選不選這台」與「它是什麼車」，
+// 預選會變成自動勾選，所以改成把正確答案放在第一個——選一次就對，要改仍然可以改。
+function classOptions(t){
+  const order = t.cls_suggested
+    ? [...SCENE_CLASSES.filter(c => c[0] === t.cls_suggested),
+       ...SCENE_CLASSES.filter(c => c[0] !== t.cls_suggested)]
+    : SCENE_CLASSES;
+  return `<option value="">—</option>` + order.map(([v, label]) =>
+    `<option value="${v}"${sel(t, v)}>${label}${v === t.cls_suggested ? "（偵測）" : ""}</option>`
+  ).join("");
 }
 
 const sel = (t, cls) => {

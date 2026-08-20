@@ -29,10 +29,16 @@ from build_scene import (  # noqa: E402  判據唯一來源，不另寫一份
     QUALITY_MAX_SPREAD_M,
     QUALITY_MIN_WHEEL_KP,
     kp_quality,
+    normalize_class,
 )
 
 # 推論結果落在 output/model-<stem>_tracker-<type>/<config>/<loc>/<video>.json.gz
 WEB_CONFIG_NAME = "web_flow"
+
+# yolo11l-visdrone-ft.pt 的 VisDrone 車輛類別；換模型時必須同步核對 model.names。
+HAWARE_YOLO_BOX_CLASSES = (
+    "car", "van", "truck", "bus", "motor", "bicycle", "tricycle", "awning-tricycle",
+)
 
 # 直譯器候選（依序試，取第一個 import 得起來的）
 INFERENCE_PYTHONS = (
@@ -72,7 +78,12 @@ def list_track_candidates(raw):
             tid = obj.get("tracked_id")
             if tid is None or obj.get("sat_coords") is None:
                 continue                       # 沒有位置的 track 不能當當事車
+            # cls_suggested：偵測類別 → build_scene 的車種鍵（VisDrone 的 motor →
+            # Two_Wheeler、van → Van…）。**用 build_scene 自己的別名表**，不另寫一份，
+            # 否則哪天別名改了，畫面上選得到的車種會和 build_scene 收得下的對不起來。
+            # 對不上（people / pedestrian 等非車輛）回 None，前端據此標示不建議。
             rec = stats.setdefault(tid, {"track_id": tid, "cls": obj.get("class", "?"),
+                                         "cls_suggested": normalize_class(obj.get("class")),
                                          "frames_present": 0, "first": idx, "last": idx})
             rec["frames_present"] += 1
             rec["last"] = idx
@@ -187,7 +198,9 @@ def haware_cmd(python, video, g_projection, yolo_boxes, out_path, frames=-1) -> 
     return [str(python), "scripts/eval_haware_replay.py",
             "--video", str(Path(video).resolve()),
             "--g-proj", str(Path(g_projection).resolve()),
+            "--method", "geometric",
             "--yolo-boxes-json", str(Path(yolo_boxes).resolve()),
+            "--yolo-boxes-class", ",".join(HAWARE_YOLO_BOX_CLASSES),
             "--out", str(Path(out_path).resolve()),
             "--frames", str(int(frames))]
 
