@@ -192,8 +192,13 @@ class BaselineDispatchIntegrationTest(unittest.TestCase):
 
 class StaticProductionScopeTest(unittest.TestCase):
     def test_legacy_root_trees_are_import_and_write_protected(self):
-        self.assertTrue((REPOSITORY_ROOT / "pifpaf").is_dir())
-        self.assertTrue((REPOSITORY_ROOT / "location").is_dir())
+        """production 程式碼不得 import 或寫入 pifpaf/ 與 location/ 這兩棵舊樹。
+
+        2026-08-20 目錄重整已刪除這兩棵頂層樹（location/ 的 11 個追蹤檔與 4 支 footage
+        都與 trafficlab-project/location/ 逐位元相同；pifpaf/ 的 3 支是缺 spread 邊界
+        修正的過時副本）。原本這裡先斷言兩棵樹存在，樹刪掉後那兩行必然失敗，已移除。
+        守衛本身保留——它防的是「未來有人重新引入這種相依」，樹存不存在不影響這個目的。
+        """
         forbidden_imports = []
         literal_writes = []
         write_methods = {"write_bytes", "write_text"}

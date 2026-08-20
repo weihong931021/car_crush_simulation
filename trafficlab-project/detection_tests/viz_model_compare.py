@@ -26,11 +26,12 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-# Project layout: this file sits in <root>/detection_tests/, the vendored
-# pipeline (footage + models) lives in <root>/trafficlab-project/.
-HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
-TLAB = ROOT / "trafficlab-project"
+# Project layout: this file sits in <root>/trafficlab-project/detection_tests/,
+# and the pipeline it compares against (footage + models) is its parent.
+# 2026-08-20 目錄重整把本目錄從頂層移進 trafficlab-project/，所以多了一層。
+HERE = Path(__file__).resolve().parent      # trafficlab-project/detection_tests
+TLAB = HERE.parent                          # trafficlab-project
+ROOT = TLAB.parent                          # repo root
 DEF_FOOTAGE = TLAB / "location/test1/footage/test1.mp4"
 DEF_RIGHT = TLAB / "models/yolo11l-visdrone-ft.pt"
 DEF_OUTPUT = HERE / "outputs/test1_model_compare.mp4"
