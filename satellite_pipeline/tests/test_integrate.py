@@ -146,6 +146,9 @@ class CommandTest(unittest.TestCase):
         self.assertIn("3", cmd)
         self.assertIn("7", cmd)
         self.assertIn("--g-projection", cmd)
+        # 網頁流程一律採用 bbox 備援位置：挑車介面允許挑 bbox 定位的機車，
+        # enrich 不帶這旗標的話那些 track 的 position_m 全 null，build 必失敗
+        self.assertIn("--accept-bbox-fallback", cmd)
         self.assertLess(cmd.index("/in.json.gz"), cmd.index("/out.json"))   # 位置參數順序
 
     def test_build_scene指令帶collider與碰撞幀(self):
@@ -191,6 +194,39 @@ class HawareStepTest(unittest.TestCase):
         self.assertIn("--yolo-boxes-json", cmd)
         self.assertIn("/raw.json.gz", cmd)
         self.assertIn("--out", cmd)
+        # argparse required：漏了它整段直接 exit 2（實際發生過，網頁上只看到 returncode 2）
+        self.assertIn("--method", cmd)
+        self.assertEqual(cmd[cmd.index("--method") + 1], "geometric")
+        # 機車在 VisDrone 叫 motor，預設 'car' 會把 7 條機車 track 靜默丟光
+        self.assertIn("--yolo-boxes-class", cmd)
+        classes = cmd[cmd.index("--yolo-boxes-class") + 1]
+        self.assertIn("motor", classes)
+        self.assertNotIn("people", classes)
+        # PifPaf 看不到機車（實測 IoU 全 0.000），備援定位是機車唯一的位置來源
+        self.assertIn("--bbox-fallback", cmd)
+
+    def test_挑車清單吃備援座標並標明定位來源(self):
+        import integrate
+        def obj(tid, cls, sat=None, fb=None):
+            o = {"tracked_id": tid, "class": cls, "sat_coords": sat}
+            if fb: o["bbox_fallback_sat_coords"] = fb
+            return o
+        raw = {"meta": {"px_per_meter": 29.113}, "frames": [
+            {"frame_index": 0, "objects": [
+                obj(1, "car", sat=[100.0, 100.0]),
+                obj(21, "motor", fb=[300.0, 300.0]),
+                obj(99, "car")]},                       # 兩種座標都沒有 → 不列
+            {"frame_index": 1, "objects": [
+                obj(1, "car", sat=[100.0, 130.0]),
+                obj(21, "motor", fb=[300.0, 360.0])]},
+        ]}
+        ts = {t["track_id"]: t for t in integrate.list_track_candidates(raw)}
+        self.assertEqual(set(ts), {1, 21})
+        self.assertEqual(ts[1]["pos_source"], "pifpaf")
+        self.assertEqual(ts[21]["pos_source"], "bbox")
+        self.assertEqual(ts[21]["cls_suggested"], "Two_Wheeler")   # motor → 機車
+        # 淨位移用備援座標也要算得出來（60px/29.113 ≈ 2.06 m）
+        self.assertAlmostEqual(ts[21]["net_disp_m"], 60.0 / 29.113, places=3)
 
     def test_需要PYTHONPATH的腳本要帶環境(self):
         """eval_haware_replay 與 filter_and_enrich 都 `from trafficlab...` import，

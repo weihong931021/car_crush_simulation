@@ -246,6 +246,13 @@ def main():
                              'are read and discarded, not seeked — CAP_PROP_POS_FRAMES '
                              'seeking has been unreliable on some test videos. --frames counts '
                              'from this point, not from frame 0.')
+    parser.add_argument('--bbox-fallback', action='store_true',
+                        help='For YOLO tracks with no PifPaf match, emit a fallback record '
+                             'whose position comes from the bbox reference point through the '
+                             'homography (status="bbox_fallback", coords in '
+                             'bbox_fallback_sat_coords — NOT sat_coords, which stays under '
+                             'the localization authority). Downstream must opt in via '
+                             'filter_and_enrich --accept-bbox-fallback.')
     parser.add_argument('--localizer', choices=['procrustes', 'reprojection'], default='procrustes',
                         help='procrustes = closed-form 2D Procrustes on lifted sat coords '
                              '(default); reprojection = fit the 3D template directly against '
@@ -275,6 +282,7 @@ def main():
     location_code = _infer_location_code(args.g_proj)
 
     # --- Dimensions & template ---
+    prior_map_all = {}          # class → dims；bbox 備援定位的 h/2 視差修正用
     if args.spec_csv:
         dims = compute_car_dims_from_spec_csv(args.spec_csv, body_type=args.body_type)
     else:
@@ -290,9 +298,11 @@ def main():
             with open(dims_path) as f:
                 pj = json.load(f)
             dims = pj.get('measurements_visdrone', {}).get('car', dict(_FALLBACK_DIMS))
+            prior_map_all = pj.get('measurements_visdrone', {})
             print(f'[haware] Using prior_dimensions.json: {dims}')
         else:
             dims = dict(_FALLBACK_DIMS)
+            prior_map_all = {}
             print(f'[haware] Using built-in fallback dims: {dims}')
 
     template = build_car_template(dims)
@@ -361,6 +371,8 @@ def main():
     n_yolo_det = 0
     n_yolo_frames = 0
     n_frames_pifpaf_fewer = 0        # frames where PifPaf count < YOLO count
+    n_bbox_fallback = 0              # --bbox-fallback 產生的備援定位筆數
+    bbox_fallback_tids: set = set()  # 拿過備援定位的 track
     yolo_tid_frames: dict = {}       # tid → frames YOLO detected it
     matched_tid_frames: dict = {}    # tid → frames PifPaf matched it
     no_pifpaf_tid_frames: dict = {}  # tid → YOLO saw it but PifPaf detected nothing
@@ -563,6 +575,56 @@ def main():
                                      for i in range(24)],
             })
 
+        # --- bbox 備援定位（--bbox-fallback）---
+        # PifPaf 的 Apollo-24 是**汽車**關鍵點模型，機車偵測不到——實測 tainan_yongkong
+        # 全片 7 條機車 track 與 PifPaf 框的最佳 IoU 全部是 0.000（不是門檻問題）。
+        # 沒被任何 PifPaf 偵測認領的 YOLO track，改用 bbox 參考點過單應性取位置。
+        # 這與 run_inference 的 center_box+z_cam 座標模型相同，有已知系統性偏移
+        # （bbox 中心不是地面接觸點；正解需要相機高度）——所以座標**不寫 sat_coords**：
+        # 那是 localization authority 的權威欄位，政策被下游測試凍結為只信 status='ok'。
+        # 放 bbox_fallback_sat_coords，由 filter_and_enrich --accept-bbox-fallback
+        # 明示採用，provenance 全程機器可讀，任何一層都能拒收。
+        if args.bbox_fallback and (yolo_model is not None or yolo_boxes_by_frame is not None):
+            claimed = set(t for t in tracked_ids if t is not None)
+            for fb_box, fb_tid in zip(yolo_boxes, yolo_tids):
+                if fb_tid is None or fb_tid in claimed:
+                    continue
+                fb_cls = yolo_tid_class.get(fb_tid, 'car')
+                fb_h = float((prior_map_all.get(fb_cls) or {}).get('height',
+                                                                   dims.get('height', 1.55)))
+                fx1, fy1, fx2, fy2 = fb_box
+                proj = g_engine.get_ground_contact_from_box(
+                    (fx1, fy1, fx2 - fx1, fy2 - fy1), fb_h,
+                    ref_method=g_data.get('ref_method', 'center_bottom_side'),
+                    proj_method=g_data.get('proj_method', 'down_h'))
+                n_bbox_fallback += 1
+                bbox_fallback_tids.add(fb_tid)
+                frame_objects.append({
+                    'id':               len(frame_objects),
+                    'tracked_id':       fb_tid,
+                    'class':            fb_cls,
+                    'confidence':       None,
+                    'bbox_2d':          [float(v) for v in fb_box],
+                    'reference_point':  list(proj.get('cctv_ref_point') or []) or None,
+                    'sat_coords':       None,      # 權威欄位留給 authority，這裡絕不寫
+                    'bbox_fallback_sat_coords': [float(proj['sat_coords'][0]),
+                                                 float(proj['sat_coords'][1])],
+                    'have_heading':     False,
+                    'have_measurements': fb_cls in prior_map_all,
+                    'default_heading':  False,
+                    'heading':          None,
+                    'speed_kmh':        0.0,
+                    'sat_floor_box':    None,
+                    'bbox_3d':          None,
+                    'n_keypoints':      0,
+                    'status':           'bbox_fallback',
+                    'method':           'bbox_homography',
+                    'spread_m':         None,
+                    'n_wheel_kp':       0,
+                    'kp_cctv':          None,
+                    'kp_sat':           None,
+                })
+
         out_data['frames'].append({'frame_index': frame_idx, 'objects': frame_objects})
 
         if (frame_idx + 1) % 50 == 0:
@@ -584,6 +646,9 @@ def main():
 
     print(f'\nDone: {n_frames_processed} frames, {n_det} detections')
     print(f'  ok={n_ok}  ambiguous={n_ambig}  failed={n_fail}')
+    if args.bbox_fallback:
+        print(f'  bbox 備援定位: {n_bbox_fallback} 筆'
+              f'（{len(bbox_fallback_tids)} tracks: {sorted(bbox_fallback_tids)}）')
     if yolo_model is not None or yolo_boxes_by_frame is not None:
         pct = 100 * n_matched / n_det if n_det > 0 else 0.0
         print(f'  YOLO frames:      {n_yolo_frames}/{n_frames_processed}  detections: {n_yolo_det}')

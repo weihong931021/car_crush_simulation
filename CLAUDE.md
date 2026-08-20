@@ -182,6 +182,18 @@ numpy／cv2／PIL（`detail_score` 用 cv2、`is_blank` 用 numpy）。三條必
   `from trafficlab...` import，但那個 repo 沒裝成套件，不設就 ModuleNotFoundError。
   三支腳本還要三個不同直譯器（推論的 ultralytics 只有 `littering_prediction/venv` 有），
   且 repo 內 7 組 inference config 權重全部不存在 → 用 `--config-path` 自帶一份
+- **機車的位置走 bbox 備援定位**（2026-08-20）：PifPaf 的 Apollo-24 是**汽車**關鍵點
+  模型，機車偵測不到——實測全片 7 條機車 track 與 PifPaf 框的最佳 IoU **全部 0.000**
+  （不是門檻問題，調 `--iou-threshold` 沒用）。沒被認領的 YOLO track 由
+  `eval_haware_replay --bbox-fallback` 用 bbox 參考點過單應性取位置，座標放
+  **旁路欄位 `bbox_fallback_sat_coords`**、`status='bbox_fallback'`——不寫 `sat_coords`，
+  因為 authority 政策被 `test_localization_authority` 凍結為只信 `status='ok'`，
+  這是順著架構而不是繞過它。下游 `filter_and_enrich --accept-bbox-fallback` 明示才在
+  sanitize **之後**注入 `position_m`（`position_m` 在 `_SPATIAL_DERIVED_FIELDS` 清單裡，
+  先注入會被清掉）並標 `position_source`。挑車介面的「定位」欄標 PifPaf／bbox／混合。
+  已知代價：bbox 參考點不是地面接觸點，有系統性偏移（正解需相機高度，todo #2）。
+  另注意「移動」欄——**停放車的品質分數反而最高**（track 1 移動 0.0m 卻 100% 可用率），
+  挑當事車先看移動再看可用率
 - **`px_per_meter` 一路帶到底**：`sat_meta_<code>.json` 由 ② 的 Web Mercator 解析值寫入，
   ③ 直接採用；`DistStage` 也加了「採用已知比例尺」讀同一份，免去人工量兩點
 - **`locked: true` 之後 `size_m`／`px_per_meter` 就是座標系**，要改只能重新擷取（整組覆蓋）

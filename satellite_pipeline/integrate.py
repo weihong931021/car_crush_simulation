@@ -78,7 +78,10 @@ def list_track_candidates(raw, ppm_fallback=None):
         idx = frame.get("frame_index")
         for obj in frame.get("objects") or []:
             tid = obj.get("tracked_id")
-            if tid is None or obj.get("sat_coords") is None:
+            # 位置來源兩種：sat_coords（PifPaf 定位，authority 認證）或
+            # bbox_fallback_sat_coords（bbox+單應性備援，機車唯一的路）。都沒有才跳過。
+            pos = obj.get("sat_coords") or obj.get("bbox_fallback_sat_coords")
+            if tid is None or pos is None:
                 continue                       # 沒有位置的 track 不能當當事車
             # cls_suggested：偵測類別 → build_scene 的車種鍵（VisDrone 的 motor →
             # Two_Wheeler、van → Van…）。**用 build_scene 自己的別名表**，不另寫一份，
@@ -89,8 +92,9 @@ def list_track_candidates(raw, ppm_fallback=None):
                                          "frames_present": 0, "first": idx, "last": idx})
             rec["frames_present"] += 1
             rec["last"] = idx
-            fl = first_last.setdefault(tid, [obj["sat_coords"], obj["sat_coords"]])
-            fl[1] = obj["sat_coords"]
+            rec["n_bbox_pos"] = rec.get("n_bbox_pos", 0) + (0 if obj.get("sat_coords") else 1)
+            fl = first_last.setdefault(tid, [pos, pos])
+            fl[1] = pos
             spread, n_wheel = kp_quality(obj, ppm)
             if spread is not None:
                 q = quality.setdefault(tid, {"spread": [], "wheel": []})
@@ -106,6 +110,9 @@ def list_track_candidates(raw, ppm_fallback=None):
         rec["net_disp_m"] = (
             ((fl[1][0] - fl[0][0]) ** 2 + (fl[1][1] - fl[0][1]) ** 2) ** 0.5 / ppm
             if fl and ppm else None)
+        n_bbox = rec.get("n_bbox_pos", 0)
+        rec["pos_source"] = ("bbox" if n_bbox == rec["frames_present"]
+                             else "pifpaf" if n_bbox == 0 else "mixed")
         q = quality.get(tid)
         rec["spread_med"] = _median(q["spread"]) if q else None
         rec["wheel_med"] = _median(q["wheel"]) if q else None
@@ -207,12 +214,16 @@ def haware_cmd(python, video, g_projection, yolo_boxes, out_path, frames=-1) -> 
     `--yolo-boxes-json` 餵第一步的追蹤結果，讓 haware 的輸出沿用同一組 tracked_id，
     使用者在畫面上挑的 track 才對得起來。
     """
+    # --bbox-fallback：PifPaf 的 Apollo-24 汽車模型看不到機車（實測全片 7 條機車
+    # track 最佳 IoU 全 0.000），沒有備援定位的話當事機車永遠進不了挑車清單。
+    # 備援座標走 bbox_fallback_sat_coords 旁路欄位，enrich 端要配 --accept-bbox-fallback。
     return [str(python), "scripts/eval_haware_replay.py",
             "--video", str(Path(video).resolve()),
             "--g-proj", str(Path(g_projection).resolve()),
             "--method", "geometric",
             "--yolo-boxes-json", str(Path(yolo_boxes).resolve()),
             "--yolo-boxes-class", ",".join(HAWARE_YOLO_BOX_CLASSES),
+            "--bbox-fallback",
             "--out", str(Path(out_path).resolve()),
             "--frames", str(int(frames))]
 
@@ -231,7 +242,8 @@ def enrich_cmd(python, raw_path, out_path, ids, g_projection) -> list:
     return [str(python), "scripts/filter_and_enrich_output.py",
             str(Path(raw_path).resolve()), str(Path(out_path).resolve()),
             "--ids", *[str(int(i)) for i in ids],
-            "--g-projection", str(Path(g_projection).resolve())]
+            "--g-projection", str(Path(g_projection).resolve()),
+            "--accept-bbox-fallback"]
 
 
 def build_scene_cmd(python, code, trajectory, location_dir, colliders,
