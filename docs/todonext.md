@@ -173,7 +173,8 @@ Codex review 後修正並回歸（JS 86/86、verify_scenes 全過）：
 
 ### 驗收場地
 
-**不要用 taipei-cm**：z_cam=3.596m 是 8 個地點最低（1/k 懲罰 1.85× vs kee-cc 1.29×），
+**不要用 taipei-cm**：z_cam=3.596m 在 8 個地點中第二低（僅次於 test4 的 3.418m），
+但**是有真實影片的地點裡最低**的（1/k 懲罰 1.85× vs kee-cc 1.29×），
 且有獨立的 homography 度量缺陷（h=0 輪對量觀測軸距，模板 2.546m 但實測中位 5.92m、
 合理率僅 12.5%；kee-cc 53.2%）。改用 kee-cc / taoyuan-tc。
 

@@ -221,16 +221,25 @@ def _file_stamp(path: Path) -> str:
 
 
 def handoff_to_trafficlab(out_dir, loc_root, code: str, video=None, cctv_image=None,
-                          force: bool = False) -> dict:
+                          force: bool = False, variant: str | None = None) -> dict:
     """把 ② 鎖定的底圖擺成 trafficlab 標註 GUI 認得的樣子：
 
-        location/<code>/sat_<code>.png        ← sat_clean（忠實版，位移 0.00m；絕不拿 genai）
+        location/<code>/sat_<code>.png        ← 由 variant 指定，預設 sat_clean（忠實版）
         location/<code>/sat_meta_<code>.json  ← 已知 px/m、lat/lon、size_m（DistStage 可直接採用）
         location/<code>/cctv_<code>.png       ← 影片首幀或使用者給的截圖（選配）
         location/<code>/footage/<video>       ← 影片本體（選配，給 Inference 分頁）
 
-    px/m 要乘上 sat_clean 相對 raw 的放大倍率（它是 2x），否則標在它上面的座標會差一倍。
+    px/m 要乘上交付那張相對 raw 的放大倍率，否則標在它上面的座標會差一倍。
     已有 G_projection_<code>.json 就拒絕（覆蓋 sat 會讓既有標註的座標全失效），force 才放行。
+
+    `variant` ＝ ① 頁面上使用者當下在看的那張（前端送 S.tab）。**沒指定時不會自己挑
+    sat_genai**，維持 sat_clean → sat_raw；要用 genai 必須明示，並且會被記進
+    `sat_meta.sat_variant` 與 `geometry`，標註頁上也看得到自己標在哪一張上面。
+
+    交付 genai 的代價（實測 tainan_yongkong，同一張 sat_raw 同 prompt 連跑兩次）：
+    位移中位數 0.04 m 與 0.40 m、>10px 的區塊 22% 與 56%——生圖不是確定性的，
+    每次拿到的幾何都不一樣，且無法事後校正（擬合最佳全域仿射只救得回一小部分）。
+    這個誤差會原樣傳進 G_projection → position_m → 碰撞判定。
     """
     import shutil
     from PIL import Image
@@ -240,11 +249,18 @@ def handoff_to_trafficlab(out_dir, loc_root, code: str, video=None, cctv_image=N
     meta = json.loads((out_dir / "meta.json").read_text())
     if not meta.get("locked"):
         raise ValueError("底圖尚未鎖定——先按「鎖定」讓 size_m / px_per_meter 定案再交付")
-    # 交付順序：有增強版就用（幾何仍忠實），否則用原圖。**永遠不用 sat_genai**——
-    # 它是生圖重畫，位移中位數 0.20m，標在上面等於把誤差烙進 G-projection。
-    src = next((out_dir / n for n in ("sat_clean.png", "sat_raw.png") if (out_dir / n).exists()), None)
-    if src is None:
-        raise ValueError("找不到底圖（sat_clean.png / sat_raw.png 都不在）")
+    # 明示的 variant 優先（使用者在 ① 看哪張就交付哪張）；沒指定才走忠實版優先的預設。
+    if variant is not None:
+        if variant not in VARIANTS:
+            raise ValueError(f"未知的底圖版本 {variant!r}（可用：{'、'.join(VARIANTS)}）")
+        src = out_dir / variant
+        if not src.exists():
+            raise ValueError(f"{variant} 不存在——請先在底圖頁產生它再交付")
+    else:
+        src = next((out_dir / n for n in ("sat_clean.png", "sat_raw.png")
+                    if (out_dir / n).exists()), None)
+        if src is None:
+            raise ValueError("找不到底圖（sat_clean.png / sat_raw.png 都不在）")
 
     import integrate
 
@@ -284,8 +300,18 @@ def handoff_to_trafficlab(out_dir, loc_root, code: str, video=None, cctv_image=N
         "size_m": meta["size_m"],
         "lat": meta["lat"], "lon": meta["lon"], "zoom": meta["zoom"],
         "source": "satellite_pipeline/webapp handoff",
-        "note": "px_per_meter 已含 sat_clean 的放大倍率；DistStage 可直接採用，不必再量兩點",
+        "note": "px_per_meter 已含交付版本的放大倍率；DistStage 可直接採用，不必再量兩點",
     }
+    # 標註在生圖版上面就把出處寫死在 sat_meta 裡。下游（trafficlab GUI、eval、
+    # 未來的自己）只看得到一張 sat_<code>.png，不寫的話沒人知道那是重畫過的路面。
+    if src.name == "sat_genai.png":
+        sat_meta.update({
+            "geometry": "rewritten_by_genai",
+            "genai_provider": meta.get("genai_provider"),
+            "genai_model": meta.get("genai_model"),
+            "genai_prompt": meta.get("genai_prompt"),
+            "note": sat_meta["note"] + "；底圖是生圖模型重畫的，幾何非原始影像",
+        })
     (dst_dir / f"sat_meta_{code}.json").write_text(json.dumps(sat_meta, indent=2, ensure_ascii=False))
     written.append(f"sat_meta_{code}.json")
 
@@ -829,7 +855,8 @@ class Handler(BaseHTTPRequestHandler):
                 cctv = resolve_upload(code, body.get("cctv_image"), must_exist=True)
                 info = handoff_to_trafficlab(OUTPUT_DIR / code, LOCATION_ROOT, code,
                                              video=video, cctv_image=cctv,
-                                             force=bool(body.get("force")))
+                                             force=bool(body.get("force")),
+                                             variant=body.get("variant"))
                 if body.get("launch"):
                     info["launched"] = launch_trafficlab_gui()
                 return self._json(info)

@@ -36,7 +36,10 @@ import os from 'node:os';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = 8946;
 const BASE = `http://127.0.0.1:${PORT}`;
-const SETTLE_MS = 2500;      // networkidle 後再等這麼久，讓 GLB 載入與首幀模擬跑完
+const SETTLE_MS = 8000;      // networkidle 後再等這麼久，讓 GLB 載入與首幀模擬跑完
+// 2500 在機器忙時不夠：test1（trajectory 2.3MB + ground 3.5MB + car.glb 18.5MB）會在
+// 載完前就被斷言，回報 colliderCount 0 但 console error 0——看起來像場景壞掉，其實是計時。
+// 這個假失敗會讓人以為自己改壞了東西，成本遠高於多等幾秒。
 const GOTO_TIMEOUT_MS = 30000;
 
 // ── Playwright 解析（含機器特定 fallback，見檔頭）────────────────────────────

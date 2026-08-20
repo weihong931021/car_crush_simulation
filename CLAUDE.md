@@ -188,8 +188,15 @@ numpy／cv2／PIL（`detail_score` 用 cv2、`is_blank` 用 numpy）。三條必
 - **銳化不放大**（2026-08-20 實測）：2x 會把一次重取樣烤進檔案，真實底圖在**每個顯示
   尺寸**都比 1x 銳化差 2–3 倍（554px：260 vs 624；1630px：47 vs 69）。瀏覽器要放大自己
   會放。量法陷阱：「縮回同尺寸再比」量的是「銳化有沒有發生」，不是使用者看到的畫面
-- **標註只能對著 `sat_clean`**：`sat_genai` 是生圖重畫，實測位移中位數 0.20 m（gemini）／
-  0.30 m（gpt-image-2），`sat_clean` 是 0.00 m。標在 genai 上＝把 0.2m 誤差烙進 G-projection。
+- **交付給標註的底圖＝使用者在 ① 當下看的那張**（2026-08-20 改）：前端把 `S.tab` 當
+  `variant` 送進 `/api/handoff`，後端照做並把出處寫進 `sat_meta_<code>.json`
+  （`sat_variant`，genai 另寫 `geometry: rewritten_by_genai` 與 provider/model/prompt），
+  標註頁「衛星底圖」旁常駐顯示是哪一版。**沒指定 variant 時仍不會自動挑 genai**
+  （sat_clean → sat_raw），要用它必須明示。
+  代價已量化：`sat_clean` 位移 0.00 m 且**位元組可重現**；`sat_genai` 是重畫，
+  同一張 sat_raw、同 prompt 連跑兩次得到 **0.04 m／22%** 與 **0.40 m／56%**（>10px 區塊佔比）
+  ——不只有誤差，而且**每次都不一樣**，事前無從得知。這個誤差會原樣傳進
+  G_projection → `position_m` → 碰撞判定（minGap 本來就在 0.66–1.48 m 量級）。
   量法：`satellite_pipeline/measure_genai_drift.py`（分塊相位相關）
 - `meta.decar_status`（ok／no_vehicles／no_key／failed／**skipped**）讓去車降級不再靜默——注意 `skipped` 是使用者主動不去車，**不是降級**，前端不該警示；Gemini 偵測有
   隨機性（同圖三次 5／13／4 台），鎖定後才出現的「去車」按鈕可重複按

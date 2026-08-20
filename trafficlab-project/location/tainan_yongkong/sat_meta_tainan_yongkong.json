@@ -1,0 +1,19 @@
+{
+  "location_code": "tainan_yongkong",
+  "sat_variant": "sat_genai.png",
+  "decar_status": "skipped",
+  "vehicles_removed": 0,
+  "px_per_meter": 29.113,
+  "px_per_meter_raw": 29.113,
+  "upscale_factor": 1.0,
+  "size_m": 35.0,
+  "lat": 23.026901,
+  "lon": 120.249615,
+  "zoom": 21,
+  "source": "satellite_pipeline/webapp handoff",
+  "note": "px_per_meter 已含交付版本的放大倍率；DistStage 可直接採用，不必再量兩點；底圖是生圖模型重畫的，幾何非原始影像",
+  "geometry": "rewritten_by_genai",
+  "genai_provider": "gemini",
+  "genai_model": "gemini-3.1-flash-image",
+  "genai_prompt": "sharp"
+}

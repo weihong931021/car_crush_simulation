@@ -44,6 +44,30 @@ from trafficlab.io.replay_writer import ReplayWriter
 from trafficlab.inference.pifpaf_haware_adapter import create_openpifpaf_predictor
 
 
+def _check_resolution_match(video_path, g_data):
+    """影片解析度 vs 標定的 undistort.resolution。不符就 exit，不是警告。"""
+    cap = cv2.VideoCapture(video_path)
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+    if not w or not h:
+        sys.exit(f"ERROR: 讀不到影片解析度：{video_path}")
+
+    calib = (g_data.get("undistort") or {}).get("resolution")
+    if not calib or len(calib) != 2:
+        print(f"警告：G_projection 沒有 undistort.resolution，無法驗證解析度一致性"
+              f"（影片為 {w}x{h}）", file=sys.stderr)
+        return
+    cw, ch = int(calib[0]), int(calib[1])
+    if (cw, ch) != (w, h):
+        sys.exit(
+            f"ERROR: 影片解析度 {w}x{h} 與標定的 undistort.resolution {cw}x{ch} 不符。\n"
+            f"  標定的內參（K 的 cx/cy）綁在 {cw}x{ch} 上，套到 {w}x{h} 的影格會讓每個\n"
+            f"  像素座標投影到錯的地面位置——而且不會報錯，只會靜默偏移數公尺。\n"
+            f"  修法：用與影片同解析度的影格重抽 cctv_<code>.png 並重標，\n"
+            f"  或確認 --video 指到的是標定當時那支影片。")
+
+
 def _infer_location_code(g_proj_path: str) -> str:
     """Extract location code from path like .../location/<code>/G_projection_*.json."""
     m = re.search(r'location[/\\]([^/\\]+)[/\\]', os.path.abspath(g_proj_path))
@@ -123,21 +147,34 @@ def _match_by_bbox_iou(pifpaf_boxes, yolo_boxes, yolo_tids, iou_threshold=0.3):
     return tracked_ids, matched_boxes
 
 
-def _load_yolo_boxes_json(path: str, car_class: str) -> dict:
+def _load_yolo_boxes_json(path: str, car_class: str) -> tuple:
     """Load a pre-computed replay JSON (e.g. from a separate YOLO run) and return
-    {frame_index: (boxes_xyxy, track_ids)}, filtered to car_class — an alternative
-    YOLO box source for --method geometric IoU matching, in place of a live model."""
+    ({frame_index: (boxes_xyxy, track_ids)}, {track_id: class}), filtered to
+    comma-separated car_class — an alternative YOLO box source for --method geometric
+    IoU matching, in place of a live model.
+
+    第二個回傳值是每個 tracked_id 的**多數決類別**。沒有它的話輸出的 `class` 只能寫死
+    'car'（本來就是這樣），下游的挑車介面就看不出哪一條 track 是機車——而事故當事車
+    常常是機車。用多數決而非首次出現：YOLO 的類別在單幀會跳動（機車被瞄成 car 之類）。
+    """
     opener = gzip.open if path.endswith('.gz') else open
     with opener(path, 'rt') as f:
         data = json.load(f)
-    by_frame = {}
+    car_classes = {value.strip() for value in car_class.split(',') if value.strip()}
+    by_frame, tid_class_votes = {}, {}
     for fr in data['frames']:
-        cars = [o for o in fr['objects'] if o.get('class') == car_class and o.get('bbox_2d')]
+        cars = [o for o in fr['objects'] if o.get('class') in car_classes and o.get('bbox_2d')]
         if cars:
             boxes = [tuple(o['bbox_2d']) for o in cars]
             tids  = [o.get('tracked_id') for o in cars]
             by_frame[fr['frame_index']] = (boxes, tids)
-    return by_frame
+            for obj, tid in zip(cars, tids):
+                if tid is not None:
+                    votes = tid_class_votes.setdefault(tid, {})
+                    votes[obj['class']] = votes.get(obj['class'], 0) + 1
+    tid_class = {tid: max(votes.items(), key=lambda kv: kv[1])[0]
+                 for tid, votes in tid_class_votes.items()}
+    return by_frame, tid_class
 
 
 def _extract_yolo(results) -> tuple:
@@ -202,7 +239,8 @@ def main():
                              'running a live YOLO model. When set, --yolo/--yolo-conf/'
                              '--yolo-classes are ignored.')
     parser.add_argument('--yolo-boxes-class', default='car',
-                        help='class value in --yolo-boxes-json to treat as a car (default "car")')
+                        help='Comma-separated class values in --yolo-boxes-json to treat as vehicles '
+                             '(default "car")')
     parser.add_argument('--start-frame', type=int, default=0,
                         help='First frame index to process (default 0). Frames before this '
                              'are read and discarded, not seeked — CAP_PROP_POS_FRAMES '
@@ -227,6 +265,12 @@ def main():
     with open(args.g_proj) as f:
         g_data = json.load(f)
     g_engine = GProjection(g_data, base_dir=g_proj_dir)
+
+    # 解析度三方一致性——必須在載模型之前擋下，否則要等幾十秒才發現輸入根本不匹配。
+    # 影片解析度必須等於標定當時的解析度，否則每個像素座標都被套在錯的內參上：
+    # 失敗方式不是報錯而是**靜默偏移**（test1 就是這樣——標定寫 1920x1004、影片是
+    # 1920x1080，畫面上緣造成數公尺的地面誤差，至今沒有任何程式會發現）。
+    _check_resolution_match(args.video, g_data)
 
     location_code = _infer_location_code(args.g_proj)
 
@@ -268,8 +312,10 @@ def main():
     yolo_model = None
     yolo_classes = None
     yolo_boxes_by_frame = None
+    yolo_tid_class = {}          # tracked_id → 來源偵測類別（live-YOLO 路徑留空）
     if args.method == 'geometric' and args.yolo_boxes_json:
-        yolo_boxes_by_frame = _load_yolo_boxes_json(args.yolo_boxes_json, args.yolo_boxes_class)
+        yolo_boxes_by_frame, yolo_tid_class = _load_yolo_boxes_json(
+            args.yolo_boxes_json, args.yolo_boxes_class)
         n_loaded = sum(len(v[0]) for v in yolo_boxes_by_frame.values())
         print(f'[haware] Loaded {n_loaded} "{args.yolo_boxes_class}" boxes across '
               f'{len(yolo_boxes_by_frame)} frames from {args.yolo_boxes_json} '
@@ -483,7 +529,10 @@ def main():
             frame_objects.append({
                 'id':               j,
                 'tracked_id':       tracked_ids[j],
-                'class':            'car',
+                # 來源偵測的類別；橋接不到（或走 live-YOLO 路徑）才退回 'car'。
+                # 注意：定位用的**模板仍然是汽車模板**，這個欄位只說明它原本被偵測成什麼，
+                # 不代表 localize() 換了模板——機車的位置誤差問題不因這行而改變。
+                'class':            yolo_tid_class.get(tracked_ids[j], 'car'),
                 'confidence':       result.confidence,
                 'bbox_2d':          list(bbox_2d_list[j]) if bbox_2d_list[j] is not None else None,
                 'reference_point':  None,
