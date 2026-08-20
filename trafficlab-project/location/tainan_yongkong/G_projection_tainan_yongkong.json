@@ -1,0 +1,154 @@
+{
+  "meta": {
+    "location_code": "tainan_yongkong",
+    "timestamp": "2026-08-20T13:39:15",
+    "source": "satellite_pipeline web annotate",
+    "reprojection_rms_px": 8.079362407671075,
+    "reprojection_max_px": 14.84971547760566
+  },
+  "inputs": {
+    "cctv_path": "cctv_tainan_yongkong.png",
+    "sat_path": "sat_tainan_yongkong.png",
+    "layout_path": "",
+    "roi_path": "",
+    "note": "對應點在網頁工作台標定；px_per_meter 由衛星底圖解析值帶入"
+  },
+  "undistort": {
+    "resolution": [
+      1280,
+      720
+    ],
+    "K": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "D": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "model": "radial_tangential"
+  },
+  "homography": {
+    "H": [
+      [
+        -4.556367908792785,
+        14.570688031437045,
+        -1659.068782790748
+      ],
+      [
+        -6.2492495574608,
+        7.643639213147082,
+        3244.822955051455
+      ],
+      [
+        -0.006837586561614692,
+        0.016210057213472184,
+        1.0
+      ]
+    ],
+    "fov_polygon": [],
+    "anchors_list": [
+      {
+        "id": 0,
+        "name": "Pair 0",
+        "coords_cctv": [
+          538.0933628941441,
+          547.8378026463964
+        ],
+        "coords_sat": [
+          609.9038927952671,
+          652.7025968269152
+        ]
+      },
+      {
+        "id": 1,
+        "name": "Pair 1",
+        "coords_cctv": [
+          572.0081644144144,
+          616.4045960022522
+        ],
+        "coords_sat": [
+          673.930593242837,
+          620.1677093566589
+        ]
+      },
+      {
+        "id": 2,
+        "name": "Pair 2",
+        "coords_cctv": [
+          1017.8312218468468,
+          572.8337204391892
+        ],
+        "coords_sat": [
+          617.3106914183119,
+          380.2894936378732
+        ]
+      },
+      {
+        "id": 3,
+        "name": "Pair 3",
+        "coords_cctv": [
+          883.1875,
+          463.90663710585585
+        ],
+        "coords_sat": [
+          433.3025941850892,
+          512.0200566346574
+        ]
+      },
+      {
+        "id": 4,
+        "name": "Pair 4",
+        "coords_cctv": [
+          430.8451928490991,
+          456.58477618243245
+        ],
+        "coords_sat": [
+          561.5188225013543,
+          742.9918487294826
+        ]
+      }
+    ]
+  },
+  "parallax": {
+    "x_cam_coords_sat": 0.0,
+    "y_cam_coords_sat": 0.0,
+    "z_cam_meters": 0.0,
+    "scale": {
+      "source": "satellite_pipeline (Web Mercator)",
+      "measured_px": 0.0,
+      "real_m": 0.0,
+      "reference_anchors": []
+    },
+    "px_per_meter": 29.113
+  },
+  "use_svg": false,
+  "layout_svg": {
+    "A": [],
+    "association_pairs": []
+  },
+  "use_roi": false,
+  "roi_method": "partial",
+  "ref_method": "center_box",
+  "proj_method": "down_h_2",
+  "sat_size": [
+    1019,
+    1019
+  ]
+}
