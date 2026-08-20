@@ -123,20 +123,51 @@ IMAGE_MIN_PIXELS = 655_360
 IMAGE_MAX_PIXELS = 8_294_400
 IMAGE_MAX_ASPECT = 3.0
 
-# 2026-08-20 換掉舊 prompt。舊版要求「一致柏油色調 / edges crisp / markings rendered plain
-# white / 只清理路面」，實測直接逼出四個失敗模式：路面變平塗多邊形＋白色描邊、標線變成
-# 完美等寬的向量色塊、周圍建物維持糊的造成硬邊界。模型不是沒聽話，是**照做才壞**。
+# 兩套 prompt，**預設 sharp**（2026-08-20 使用者看過對照後拍板：舊版最清楚，就用舊版）。
+# 這是觀感決定，不是量測決定——量測站在 faithful 那邊，兩邊的代價都列在這裡：
 #
-# 實測（taipei_sogo 同一張 sat_raw，measure_genai_drift.py tile=128）：
-#   舊 prompt + gemini  0.15 m / >10px 39% / 全域相關 0.915   ← 向量插畫、硬邊界
-#   舊 prompt + gpt-2   0.56 m / >10px 75% / 全域相關 0.345   ← 最差
-#   新 prompt + gemini  0.11 m / >10px 21% / 全域相關 0.960   ← 仍像照片、浮水印保留
-#   新 prompt + gpt-2   0.09 m / >10px 10% / 全域相關 0.952   ← 幾何最佳但變版畫質感
-# 結論：先前「Gemini 比 OpenAI 忠於原圖」其實是 prompt 造成的，不是模型差異。
+#   （taipei_sogo 同一張 sat_raw，measure_genai_drift.py tile=128）
+#   sharp    + gemini  0.15 m / >10px 39% / 全域相關 0.915   ← 現行預設，最「乾淨清楚」
+#   sharp    + gpt-2   0.56 m / >10px 75% / 全域相關 0.345   ← 最差，勿用
+#   faithful + gemini  0.11 m / >10px 21% / 全域相關 0.960   ← 像照片，但受 1024 天花板拖累
+#   faithful + gpt-2   0.09 m / >10px 10% / 全域相關 0.952   ← 幾何最佳、質感偏版畫
 #
-# ⚠ 驗收漏洞：最後那句「寧可糊也不要改」讓「什麼都不做」在漂移指標上滿分。
-#   指標分不出「忠實」與「沒動」，所以換 prompt 後**必須人眼看過**才算通過。
-GENAI_PROMPT = (
+# sharp 的已知代價（都是實測，不是推測；換 prompt 前先看懂你在買什麼）：
+#   1. 標線被重畫成等寬純白向量色塊，還會無中生有（sogo 多出一個雙箭頭 ↔）
+#   2. 只清路面 → 路面銳利而建物維持糊，兩者之間出現硬邊界
+#   3. 非道路鋪面會被當成路：kaohsiung_wufu 的行人徒步區整片被改畫成柏油＋新斑馬線
+#   4. 會刪東西：嘉義的攤販糊成斑塊、永康整排停放車輛消失、Google 浮水印被抹掉
+#   5. 配 gpt-image-2 時標線會被誤讀成實體：sogo 的路面箭頭被畫成一排停放車輛
+# 所以 sharp 產物只當**展示底圖**。座標一律走 enhance_file()／sat_clean（實測 0.00 m）。
+#
+# faithful 保留的理由：來源 >1024 時 Gemini 會先降到 1024 再放大回去（細節能量
+# sogo 214→53、五福 318→56），那個情境下 faithful + gpt-image-2 才是唯一又清楚又不亂改的路。
+# ⚠ faithful 有驗收漏洞：最後那句「寧可糊也不要改」讓「什麼都不做」在漂移指標上滿分，
+#   指標分不出「忠實」與「沒動」（實測 temp 0.2 有一次幾乎沒動卻拿到最高相關）。
+GENAI_PROMPT_SHARP = (
+    "Clean up and sharpen this aerial/satellite top-down photo of a road.\n"
+    "GOALS:\n"
+    "1. Render the road surface as REALISTIC ASPHALT: a dark grey asphalt colour like "
+    "a real city road, with a clearly ROUGH, grainy, coarse asphalt texture (visible "
+    "aggregate / gritty surface) — NOT smooth, NOT a flat solid shape or cut-out. "
+    "Make the whole road one consistent asphalt material/tone, but clean: remove stains, "
+    "oil patches, tyre marks and repair scars while keeping the rough natural asphalt "
+    "look (photorealistic, matte, top-down).\n"
+    "2. Make the ROAD EDGES (kerb lines / road outline) crisp and well defined.\n"
+    "3. Markings: be MINIMAL and restrained. Keep ONLY the markings that are clearly and "
+    "unmistakably present, rendered plain white. Do NOT bold, brighten, thicken, multiply, "
+    "extend or invent any marking. When in doubt, leave it out. Fewer markings is better.\n"
+    "HARD CONSTRAINTS — do NOT violate:\n"
+    "- If a marking is blurry or ambiguous (motorcycle waiting box, an unreadable "
+    "arrow), leave it faint or omit it. NEVER guess, invent, duplicate or redraw.\n"
+    "- Keep the EXACT same road layout, shapes and positions of every road, kerb, "
+    "building, tree and structure. Do not add roundabouts, plazas, parks or buildings.\n"
+    "- Only the road/asphalt area is cleaned; do NOT repaint buildings, vegetation "
+    "or pavement.\n"
+    "Treat this as a clean-up + deblur pass on the existing image, not a redraw."
+)
+
+GENAI_PROMPT_FAITHFUL = (
     "This is a low-resolution satellite PHOTOGRAPH. Perform PHOTOGRAPHIC RESTORATION only: "
     "reduce blur and compression artefacts so that detail ALREADY PRESENT becomes legible.\n"
     "THIS IS NOT AN ILLUSTRATION TASK. The output must still read as a photograph of this "
@@ -158,6 +189,16 @@ GENAI_PROMPT = (
     "If you cannot recover detail in a region, leave that region exactly as it is. "
     "A slightly blurry faithful result is CORRECT; a sharp reinterpreted result is WRONG."
 )
+
+GENAI_PROMPTS = {"sharp": GENAI_PROMPT_SHARP, "faithful": GENAI_PROMPT_FAITHFUL}
+GENAI_PROMPT_DEFAULT = "sharp"
+# 舊呼叫端相容：GENAI_PROMPT 一律指向現行預設
+GENAI_PROMPT = GENAI_PROMPTS[GENAI_PROMPT_DEFAULT]
+
+# 風格參考圖：sharp 需要它才是使用者驗收過的那個效果（那組對照就是帶 ref 跑的）；
+# faithful 反而**不能**帶——它要求整張同一處理、完全保留原表面，與「把參考圖的柏油
+# 質感套到道路」直接矛盾，會把硬邊界裝回來。genai_enhance() 會在 faithful 時自動丟棄。
+STYLE_REF_DEFAULT = "refs/road_style_ref.png"
 
 STYLE_REF_NOTE = (
     "STYLE REFERENCE: The SECOND image is a real high-quality drone photo of a road. "
@@ -326,13 +367,16 @@ def genai_enhance(code: str, key: str | None = None,
                   src_name: str = "sat_raw.png",
                   provider: str = GENAI_PROVIDER_DEFAULT,
                   quality: str = GENAI_QUALITY,
-                  style_ref: str | None = None,
-                  temperature: float | None = None) -> Path:
+                  style_ref: str | None = STYLE_REF_DEFAULT,
+                  temperature: float | None = None,
+                  prompt_style: str = GENAI_PROMPT_DEFAULT) -> Path:
     """生圖 HD 化（已去車的）衛星圖，輸出 sat_genai.png。
 
-    provider：`gemini`（預設，實測較忠於原圖）或 `openai`（gpt-image-2）。
+    provider：`gemini`（預設）或 `openai`（gpt-image-2）。
     quality：僅 openai 有效（low / medium / high / auto）。
-    style_ref：可選的風格參考圖，只借它的柏油材質質感，不借標線/佈局。
+    prompt_style：`sharp`（預設，乾淨清楚但會重畫標線與鋪面）或 `faithful`
+        （像照片、保留髒污與浮水印）。兩者的代價對照見上方常數區。
+    style_ref：風格參考圖，只借它的柏油材質質感，不借標線/佈局；faithful 會自動丟棄。
 
     ⚠ 兩家都是**重畫**不是修圖：實測位移中位數 Gemini 0.20m / gpt-image-2 0.30m。
     承載座標的地面圖請走 `enhance_file()`（sat_clean，實測 0.00m）。
@@ -346,12 +390,20 @@ def genai_enhance(code: str, key: str | None = None,
 
     if provider not in GENAI_PROVIDERS:
         sys.exit(f"ERROR: 未知的 --genai-provider {provider!r}（可選 {GENAI_PROVIDERS}）")
+    if prompt_style not in GENAI_PROMPTS:
+        sys.exit(f"ERROR: 未知的 --genai-prompt {prompt_style!r}"
+                 f"（可選 {tuple(GENAI_PROMPTS)}）")
     if temperature is not None:
         print(f"  警告：temperature 已不由呼叫端控制（收到 {temperature}），忽略")
 
     out_dir, src = _resolve_genai_source(code, src_name)
+    if prompt_style == "faithful" and style_ref:
+        print("  風格參考圖與 faithful prompt 矛盾（會裝回硬邊界），本次忽略")
+        style_ref = None
     ref = _resolve_style_ref(style_ref)
-    prompt = GENAI_PROMPT + ("\n\n" + STYLE_REF_NOTE if ref else "")
+    prompt = GENAI_PROMPTS[prompt_style] + ("\n\n" + STYLE_REF_NOTE if ref else "")
+    print(f"  prompt={prompt_style}"
+          f"{'（現行預設：乾淨清楚，但會重畫標線與鋪面）' if prompt_style == 'sharp' else ''}")
 
     src_w, src_h = Image.open(src).size
     if provider == "gemini":
@@ -374,6 +426,7 @@ def genai_enhance(code: str, key: str | None = None,
     if meta_path.exists():
         meta = json.loads(meta_path.read_text())
         meta["genai_provider"] = provider
+        meta["genai_prompt"] = prompt_style      # 沒有這欄就查不出這張是哪套 prompt 產的
         meta["genai_size"] = [img.size[0], img.size[1]]
         meta["genai_matches_raw_size"] = (img.size == (src_w, src_h))
         meta["genai_src"] = src.name
@@ -519,11 +572,13 @@ def main():
                          "low 試 prompt、medium 預設、high 定稿")
     ap.add_argument("--genai-temp", type=float, default=None,
                     help="（已棄用）OpenAI images API 無 temperature，傳了會被忽略")
-    # 預設停用：STYLE_REF_NOTE 要求「把參考圖的柏油質感只套到道路」，與新 prompt 的
-    # 「整張同一處理、完全保留原表面」直接矛盾，會把硬邊界裝回來。而且那張參考圖是
-    # test1 的地面圖（真空拍照），拿它當風格來源等於叫模型把別的地點的樣子搬過來。
-    ap.add_argument("--style-ref", default="",
-                    help="風格參考圖（真實空拍馬路）；設空字串關閉")
+    ap.add_argument("--genai-prompt", choices=tuple(GENAI_PROMPTS),
+                    default=GENAI_PROMPT_DEFAULT,
+                    help="sharp 預設（乾淨清楚，代價是重畫標線與鋪面）、"
+                         "faithful（像照片、保留髒污與浮水印）")
+    ap.add_argument("--style-ref", default=STYLE_REF_DEFAULT,
+                    help="風格參考圖（真實空拍馬路），只借柏油質感；設空字串關閉。"
+                         "faithful prompt 會自動忽略")
     args = ap.parse_args()
 
     if args.input or args.output:
@@ -548,6 +603,7 @@ def main():
         genai_enhance(args.code, provider=args.genai_provider,
                       quality=args.genai_quality,
                       temperature=args.genai_temp,
+                      prompt_style=args.genai_prompt,
                       style_ref=args.style_ref or None)
     print("[image_enhance] Done.")
 

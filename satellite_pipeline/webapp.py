@@ -389,11 +389,14 @@ def run_capture(lat, lon, code, want_zoom=None) -> dict:
     return read_state(code)
 
 
-def run_enhance(code, genai=False, upscale=2) -> dict:
-    """對目前的 raw 銳化 2x（選配 genai HD）。
+def run_enhance(code, genai=False, upscale=1) -> dict:
+    """對目前的 raw 銳化（**不放大**，選配 genai HD）。
 
-    銳化只動像素密度不動幾何（UnsharpMask + LANCZOS 整數倍，image_enhance 內有尺寸
-    assert），呼叫端把 px_per_meter 乘上倍率即可（handoff 已經這樣算）。
+    2026-08-20 從 2x 改回 1x：放大會把一次重取樣烤進檔案，之後不論縮小顯示或放大檢視
+    都在那個損失之上。真實底圖實測（Laplacian 變異數，1x 銳化 vs 2x 版）：
+    顯示 400px 407 vs 162、554px 624 vs 260、815px 658 vs 208、1630px 69 vs 47——
+    **每個尺寸 1x 都贏 2–3 倍**。瀏覽器要放大自己會放，而且是從更銳利的來源放。
+    順帶 px_per_meter 不必再乘倍率，少一個座標換算的出錯點。
 
     **不做去車**：那是 Gemini 偵測 + inpaint，有隨機性又要等，而標對應點根本用不到
     乾淨路面（2026-08-20 使用者拍板移除）。CLI 端 `image_enhance --code` 仍保留該功能。
@@ -403,7 +406,7 @@ def run_enhance(code, genai=False, upscale=2) -> dict:
     image_enhance.enhance(code, upscale=upscale, decar=False)   # 寫 decar_status、保留 locked
     if genai:
         try:
-            image_enhance.genai_enhance(code, style_ref=None)   # 風格參考圖已停用，見 image_enhance 的 --style-ref 說明
+            image_enhance.genai_enhance(code)   # prompt/風格參考圖都用 image_enhance 的預設（sharp + ref）
         except SystemExit as e:      # genai_enhance 用 sys.exit 報錯，不能讓它殺掉 server
             print(f"  genai 失敗：{e}")
     return read_state(code)
@@ -417,7 +420,7 @@ def run_genai(code, provider=None) -> dict:
     """
     import image_enhance
     validate_code(code)
-    kwargs = {"style_ref": None}   # 風格參考圖已停用（會與新 prompt 矛盾並搬入他地樣貌）
+    kwargs = {}   # prompt=sharp、風格參考圖開啟，都用 image_enhance 的預設
     if provider:
         kwargs["provider"] = provider
     try:
@@ -427,7 +430,7 @@ def run_genai(code, provider=None) -> dict:
     return read_state(code)
 
 
-def run_lock(code, size_m, genai=False, upscale=2) -> dict:
+def run_lock(code, size_m, genai=False, upscale=1) -> dict:
     """鎖定大小 → 對裁好的 raw 去車銳化 → 選配 genai HD。
 
     鎖定前先確認目前這張是**能裝下 size_m 的最高 zoom**。使用者為了看更大範圍按過
@@ -455,9 +458,8 @@ def run_lock(code, size_m, genai=False, upscale=2) -> dict:
             capture_best_zoom(meta["lat"], meta["lon"], code, want_zoom=meta["zoom"])
 
     lock_size(out_dir, size_m)
-    # 鎖定後一定跑**銳化**：下一步就是在圖上點對應點，786px 的原圖糊到點不準。
-    # 銳化是本機、確定性、不動幾何的（UnsharpMask + LANCZOS 整數倍，內有尺寸 assert），
-    # 約 1 秒。**去車**才是有隨機性、要等的那個（Gemini），維持選配。
+    # 鎖定後一定跑**銳化**（本機、確定性、不動幾何，約 1 秒）。
+    # 不放大：見 run_enhance 的說明，2x 在每個顯示尺寸都比 1x 差。
     st = run_enhance(code, genai=genai, upscale=upscale)
     if upgraded:
         st["zoom_upgraded"] = upgraded

@@ -236,6 +236,37 @@ class LockSizeTest(unittest.TestCase):
         self.assertEqual(meta["decar_status"], "skipped")
         self.assertEqual(clean.size, (2560, 2560))
 
+    def test_多一次重取樣是純損失(self):
+        """為什麼銳化不放大：2x 會把一次重取樣**烤進檔案**，之後不論縮小顯示或放大檢視
+        都在那個損失之上；瀏覽器要放大自己會放，而且是從更銳利的來源放。
+
+        這裡釘的是機制而不是統計量——放大再縮回來必然回不到原樣。
+        （真實底圖 tainan_yongkong 的實測，Laplacian 變異數，1x 銳化 vs 交付的 2x 版：
+         顯示 400px 407 vs 162、554px 624 vs 260、815px 658 vs 208、1630px 69 vs 47、
+         2400px 18 vs 13——每個尺寸 1x 都贏 2–3 倍。合成圖沒有這個特性，別拿它當依據。）
+        """
+        import numpy as np
+        src = _noise_img(300, 300, 11)
+        roundtrip = src.resize((600, 600), Image.LANCZOS).resize((300, 300), Image.LANCZOS)
+        a = np.asarray(src.convert("L"), np.float32)
+        b = np.asarray(roundtrip.convert("L"), np.float32)
+        self.assertGreater(np.abs(a - b).mean(), 0.5, "放大再縮回竟然無損？那前提就不成立")
+
+    def test_鎖定產出的銳化底圖與原圖同尺寸(self):
+        """鎖定＝裁切 + 銳化，**不放大**。同尺寸代表 px_per_meter 不必乘倍率。"""
+        import webapp
+        out_dir = webapp.OUTPUT_DIR / "unittest_1x_tmp"
+        self.addCleanup(lambda: __import__("shutil").rmtree(out_dir, ignore_errors=True))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        _noise_img(1280, 1280, 12).save(out_dir / "sat_raw.png")
+        (out_dir / "meta.json").write_text(json.dumps({
+            "lat": 23.0, "lon": 120.0, "zoom": 21, "scale": 2,
+            "px_per_meter": 29.0, "img_w": 1280, "img_h": 1280, "size_m": 1280 / 29.0}))
+        st = webapp.run_lock("unittest_1x_tmp", 25.0)
+        side = round(25.0 * 29.0)
+        self.assertEqual(st["variants"]["sat_clean.png"]["w"], side)   # 1x，不是 side*2
+        self.assertEqual(st["variants"]["sat_raw.png"]["w"], side)
+
     def test_run_lock必定留下可標註的銳化底圖(self):
         """整合層：鎖定完就要能直接標註，所以 run_lock 一定要留下 sat_clean。
 
@@ -252,8 +283,8 @@ class LockSizeTest(unittest.TestCase):
                 "px_per_meter": 29.0, "img_w": 1280, "img_h": 1280, "size_m": 1280 / 29.0}))
             st = webapp.run_lock("unittest_lock_tmp", 25.0)
             side = round(25.0 * 29.0)
-            self.assertIn("sat_clean.png", st["variants"], "鎖定後沒有銳化底圖，標註會拿到糊的原圖")
-            self.assertEqual(st["variants"]["sat_clean.png"]["w"], side * 2)
+            self.assertIn("sat_clean.png", st["variants"], "鎖定後沒有銳化底圖，標註會拿到原圖")
+            self.assertEqual(st["variants"]["sat_clean.png"]["w"], side)   # 1x
             self.assertEqual(st["meta"]["decar_status"], "skipped")   # 銳化做、去車不做
 
     def test_run_lock對已鎖定的地點要直接拒絕(self):
@@ -448,6 +479,23 @@ class HandoffTest(unittest.TestCase):
         (out_dir / "meta.json").write_text(json.dumps({
             "lat": 23.0, "lon": 120.0, "zoom": 21, "px_per_meter": ppm,
             "img_w": side, "img_h": side, "size_m": side / ppm, "locked": True}))
+
+    def test_交付給標註的比例尺跟著實際尺寸走(self):
+        """sat_clean 現在是 1x，px_per_meter 就等於 raw 的值，upscale_factor = 1。
+        （這條刻意用「跟著實際寬度算」的方式驗，將來若又改倍率也不會靜默失準。）"""
+        import webapp
+        with tempfile.TemporaryDirectory() as d:
+            out_dir, loc_root = Path(d) / "out" / "loc", Path(d) / "location"
+            out_dir.mkdir(parents=True)
+            _noise_img(400, 400, 1).save(out_dir / "sat_raw.png")
+            _noise_img(400, 400, 2).save(out_dir / "sat_clean.png")     # 1x
+            (out_dir / "meta.json").write_text(json.dumps({
+                "lat": 23.0, "lon": 120.0, "zoom": 21, "px_per_meter": 29.0,
+                "img_w": 400, "img_h": 400, "size_m": 400 / 29.0, "locked": True}))
+            info = webapp.handoff_to_trafficlab(out_dir, loc_root, "loc")
+        self.assertEqual(info["sat_meta"]["sat_variant"], "sat_clean.png")
+        self.assertAlmostEqual(info["sat_meta"]["px_per_meter"], 29.0)
+        self.assertEqual(info["sat_meta"]["upscale_factor"], 1.0)
 
     def test_交付給標註的是2x銳化版而不是原圖(self):
         """標註要在圖上點準位置，786px 的原圖糊到點不準。

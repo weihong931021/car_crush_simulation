@@ -185,6 +185,9 @@ numpy／cv2／PIL（`detail_score` 用 cv2、`is_blank` 用 numpy）。三條必
 - **`px_per_meter` 一路帶到底**：`sat_meta_<code>.json` 由 ② 的 Web Mercator 解析值寫入，
   ③ 直接採用；`DistStage` 也加了「採用已知比例尺」讀同一份，免去人工量兩點
 - **`locked: true` 之後 `size_m`／`px_per_meter` 就是座標系**，要改只能重新擷取（整組覆蓋）
+- **銳化不放大**（2026-08-20 實測）：2x 會把一次重取樣烤進檔案，真實底圖在**每個顯示
+  尺寸**都比 1x 銳化差 2–3 倍（554px：260 vs 624；1630px：47 vs 69）。瀏覽器要放大自己
+  會放。量法陷阱：「縮回同尺寸再比」量的是「銳化有沒有發生」，不是使用者看到的畫面
 - **標註只能對著 `sat_clean`**：`sat_genai` 是生圖重畫，實測位移中位數 0.20 m（gemini）／
   0.30 m（gpt-image-2），`sat_clean` 是 0.00 m。標在 genai 上＝把 0.2m 誤差烙進 G-projection。
   量法：`satellite_pipeline/measure_genai_drift.py`（分塊相位相關）
@@ -341,6 +344,17 @@ vs kee-cc 1.29×），而且有**獨立的 homography 度量缺陷**——用 h=
   **仍未解**：兩家都是「重畫」不是「修圖」，`--input` 座標關鍵路徑照舊禁用 `--genai`。
   完整證據、量測方法與可重跑指令見 `docs/decisions/2026-08-17-satellite-genai-provider-choice.md`；
   重量請用 `python3 satellite_pipeline/measure_genai_drift.py --code <code>`（比較時固定 `--tile`）。
+  ⚠ 上表那句「Gemini 比 OpenAI 忠於原圖」**是 prompt 造成的，不是模型差異**——換成
+  faithful prompt 後 gpt-image-2 反而最好（0.09 m / 相關 0.952）。見下一項。
+- **生圖 prompt 兩套，預設 `sharp`（2026-08-20 使用者看過對照後拍板，觀感決定）**：
+  `--genai-prompt sharp`＝乾淨清楚的舊版（`GENAI_PROMPT_SHARP`，配預設 style-ref），
+  `faithful`＝只去糊不准改的修復版。**別再用「量測比較好」把它改回 faithful**，
+  代價清單寫在 `image_enhance.py` 常數區：sharp 會重畫標線成等寬純白、把非道路鋪面
+  當成路（五福徒步區→柏油＋新斑馬線）、清掉攤販與停放車輛、抹掉浮水印；配 gpt-image-2
+  時路面箭頭會被畫成停放車輛（所以 sharp 請配 gemini）。產物寫 `meta.genai_prompt`。
+  **Gemini 回傳固定 1024²**：來源 >1024 的場景（sogo 1182²）等於先降解析度再放大回去，
+  細節能量 214→53 反而比原圖糊——那種來源要清楚只能走 `faithful + openai`。
+  對照頁（含 1:1 細部、逐張漂移數字）：<https://claude.ai/code/artifact/993c19d7-755f-46ff-9a20-57ddb4ba1dee>
 
 ---
 
