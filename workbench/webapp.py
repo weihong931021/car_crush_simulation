@@ -36,7 +36,7 @@ VARIANTS = ("sat_raw.png", "sat_clean.png", "sat_genai.png")
 
 # 播放器要從這台 server 開，而 scene-loader.js 走 `../scenes/` 相對路徑，
 # 所以站根必須同時看得到這兩個同層目錄（CLAUDE.md 的部署約束）。只開這兩個。
-STATIC_ROOTS = ("threejs", "scenes")
+STATIC_ROOTS = ("player", "scenes")
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript",
                  ".mjs": "text/javascript", ".json": "application/json",
                  ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg",
@@ -681,7 +681,7 @@ def build_scene_for(code: str, colliders, collision_frame):
         raise ValueError(f"場景包產生失敗（returncode {rc}），詳見記錄")
 
     _job_set(code, phase="done")
-    return {"scene": f"scenes/{code}", "player": f"/threejs/index.html?scene={code}"}
+    return {"scene": f"scenes/{code}", "player": f"/player/index.html?scene={code}"}
 
 
 # ---------- HTTP ----------

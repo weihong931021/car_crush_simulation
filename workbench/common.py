@@ -4,7 +4,7 @@ import re
 
 # 地點代號只允許英數與 - _：它會變成 output/<code> 目錄名（capture/enhance 都用）。
 # 放行 `/` 或 `..` 會讓輸出寫到 output 之外，放行引號/換行也可能污染下游取用。
-# 與 threejs/scene-loader.js 的場景代號規則（/^[\w-]+$/）維持同一條界線。
+# 與 player/scene-loader.js 的場景代號規則（/^[\w-]+$/）維持同一條界線。
 CODE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 

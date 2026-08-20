@@ -5,7 +5,7 @@
 
     scripts/run_inference.py            → output/<...>/<loc>/<video>.json.gz（全部 track）
     scripts/filter_and_enrich_output.py → trajectory.json（只留當事車，補 position_m）
-    tools/build_scene.py                → scenes/<code>/ → threejs/index.html?scene=<code>
+    tools/build_scene.py                → scenes/<code>/ → player/index.html?scene=<code>
 
 三個必須知道的環境事實（都是踩過才知道的）：
 

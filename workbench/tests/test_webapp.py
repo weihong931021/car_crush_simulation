@@ -435,7 +435,7 @@ class FramePreviewTest(unittest.TestCase):
 
 
 class StaticServeTest(unittest.TestCase):
-    """播放器要能從這台 server 開，所以得服務 threejs/ 與 scenes/。
+    """播放器要能從這台 server 開，所以得服務 player/ 與 scenes/。
 
     這是第二個「用戶端字串接路徑」的地方（第一個是上傳檔名），同樣要擋穿越——
     而且靜態檔是 GET，任何網頁都能誘導瀏覽器去讀。
@@ -443,8 +443,8 @@ class StaticServeTest(unittest.TestCase):
 
     def test_正常路徑可通過(self):
         import webapp
-        got = webapp.safe_static("threejs", "index.html")
-        self.assertEqual(got, webapp.REPO_ROOT / "threejs" / "index.html")
+        got = webapp.safe_static("player", "index.html")
+        self.assertEqual(got, webapp.REPO_ROOT / "player" / "index.html")
         self.assertEqual(webapp.safe_static("scenes", "test1/scene.json"),
                          webapp.REPO_ROOT / "scenes" / "test1" / "scene.json")
 
@@ -453,7 +453,7 @@ class StaticServeTest(unittest.TestCase):
         for bad in ("../satellite_pipeline/.env", "../../etc/passwd", "/etc/passwd",
                     "a/../../.env"):
             with self.subTest(bad=bad):
-                self.assertIsNone(webapp.safe_static("threejs", bad))
+                self.assertIsNone(webapp.safe_static("player", bad))
 
     def test_只開放白名單目錄(self):
         import webapp
