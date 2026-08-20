@@ -1,4 +1,5 @@
 import argparse
+import sys
 import copy
 import gzip
 import json
@@ -76,6 +77,7 @@ def build_track_stats(selected_ids):
             "frames_present": 0,
             "missing_heading_count": 0,
             "missing_speed_count": 0,
+            "missing_position_count": 0,
         }
         for track_id in selected_ids
     }
@@ -199,6 +201,8 @@ def filter_and_enrich(data, selected_ids, px_per_meter, prior_map):
                 fps,
                 previous_states.get(track_id),
             )
+            if enriched["position_m"] is None:
+                stats["missing_position_count"] += 1
             if enriched["position_m"] is not None and is_real:
                 previous_states[track_id] = {
                     "frame_index": frame_index,
@@ -235,6 +239,38 @@ def filter_and_enrich(data, selected_ids, px_per_meter, prior_map):
     return output
 
 
+def tracks_without_position(output, selected_ids):
+    """回傳「有出現過但一格位置都沒算出來」的 track id。
+
+    零星漏偵測是正常的（真實資料本來就有），但**整條 track 全無位置**幾乎只有一個原因：
+    輸入來自純 `run_inference`（YOLO bbox），它寫 `sat_coords` 但不寫 `status`，
+    而 localization 政策只接受 `status == "ok"`，於是每格都被判成證據不足。
+    """
+    stats = output.get("selected_track_stats", {})
+    bad = []
+    for track_id in selected_ids:
+        st = stats.get(track_id)
+        if not st:
+            continue
+        present = st.get("frames_present", 0)
+        if present > 0 and st.get("missing_position_count", 0) == present:
+            bad.append(track_id)
+    return bad
+
+
+def describe_missing_position(track_ids):
+    ids = ", ".join(str(t) for t in track_ids)
+    return (
+        f"tracked_id {ids} 出現在影格中，但**一格位置都沒算出來**。\n"
+        f"最可能的原因：輸入來自純 scripts/run_inference.py（YOLO bbox 路徑）——"
+        f"它寫 sat_coords 但不寫 status，而 localization 政策只接受 status == 'ok'，"
+        f"於是每一格都被判成證據不足、position_m 變成 null。\n"
+        f"位置那半的正確產出者是 haware 路徑：scripts/eval_haware_replay.py"
+        f"（會寫出 status / kp_sat / spread_m / n_wheel_kp）。\n"
+        f"若確定要在無位置的情況下繼續，加 --allow-missing-position。"
+    )
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -243,6 +279,9 @@ def parse_args():
         )
     )
     parser.add_argument("input_path", help="Path to input output.json or output.json.gz")
+    parser.add_argument(
+        "--allow-missing-position", action="store_true",
+        help="即使選到的 track 完全沒有位置也照樣寫出（預設會擋下並說明原因）")
     parser.add_argument("output_path", help="Path to filtered output json/json.gz")
     parser.add_argument(
         "--ids",
@@ -284,6 +323,15 @@ def main():
     output_path = resolve_output_path(args.output_path)
 
     filtered = filter_and_enrich(input_data, selected_ids, px_per_meter, prior_map)
+
+    # 缺位置以前是靜默的：寫出一份每格 position_m 都是 null 的檔，下游 build_scene
+    # 再把它併進「collider 不存在」的訊息，使用者永遠查不到真正的原因。
+    missing = tracks_without_position(filtered, selected_ids)
+    if missing and not args.allow_missing_position:
+        sys.exit("ERROR: " + describe_missing_position(missing))
+    if missing:
+        print("WARNING: " + describe_missing_position(missing))
+
     write_json(output_path, filtered)
 
     print(f"Saved filtered output to: {output_path}")
@@ -295,7 +343,8 @@ def main():
             f"  tracked_id={track_id} "
             f"frames_present={stats['frames_present']} "
             f"missing_heading={stats['missing_heading_count']} "
-            f"missing_speed={stats['missing_speed_count']}"
+            f"missing_speed={stats['missing_speed_count']} "
+            f"missing_position={stats['missing_position_count']}"
         )
     print("Localization counts by status/decisive reason:")
     for status, reasons in filtered["localization_counts"].items():

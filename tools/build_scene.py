@@ -27,6 +27,19 @@ from pathlib import Path
 
 SCHEMA_VERSION = 1
 REQUIRED_KEYS = ["code", "ground", "origin_offset_m", "frames", "vehicles", "collision"]
+# 地面圖優先序：genai > clean > raw。**這條路徑上畫質優先是對的，不要「修」它。**
+#
+# 為什麼 genai 排第一不違反座標安全（2026-08-18 走了一趟冤枉路後補的說明）：
+# pick_sat() 只有 `--sat-dir` 那一支呼叫，而 --sat-dir **只適用於在衛星座標系合成的
+# 軌跡**（tainan_yongkang）——那種軌跡的 position_m 是直接以公尺編出來的名目座標，
+# 不是從這張圖上量出來的，所以 genai 重畫造成的 0.20 m 局部位移不影響任何結論。
+# 真實影片走的是另一支 from_location_dir()，用 G-projection 的校正參考圖，
+# genai 從來就不在那條路上（image_enhance 的 --input 路徑也明文禁用 --genai）。
+#
+# 實測代價（若誤改成 clean 優先）：tainan_yongkang 的 sat_clean 帶著 38 個去車 inpaint
+# 塗抹（多數是斑馬線／陰影誤報），渲染出來路口糊成一片、Google 浮水印也跑出來；
+# 而 repo 內另外 5 個地點（banqiao_xianmin / chiayi_fountain / kaohsiung_wufu /
+# taipei_nanjing / taipei_sogo）根本沒有 sat_clean，會靜默掉到 sat_raw ——車還在路上。
 SAT_VARIANTS = ["sat_genai.png", "sat_clean.png", "sat_raw.png"]
 DEFAULT_FPS = 30
 
@@ -205,6 +218,66 @@ def list_tracks(trajectory):
     return scan_tracks(trajectory)[0]
 
 
+# 大量出界幾乎只有一個原因：標定壞了。門檻由實測訂——捏造的 G_projection 會產出
+# 83% 出界，而合成軌跡尾端溢出只有 2.6%（scenes/tainan_yongkang 的 14/532）。
+OUT_OF_BOUNDS_ERROR_FRAC = 0.20
+
+
+def check_positions_in_bounds(trajectory, size_m, colliders):
+    """檢查 collider 的 position_m 是否落在地面圖範圍內。
+
+    **這是目前唯一能分辨「標定標好了」與「標壞了但整條鏈照樣跑完」的檢查。**
+    2026-08-19 實測：用一份捏造的 G_projection 跑完 ⑤⑥⑦⑧，331 個位置點有 276 個
+    落在地面圖外、143 m 的路徑塞進 37.5×26 m 的平面，build_scene 照樣產包、
+    播放器照樣回報 collided=true——全程沒有任何一行警告。
+
+    只看 collider：extras（路人車）出界不影響碰撞結論，不該因此擋下整包。
+    回傳 {"severity": ok|warn|error, "out_of_bounds": {track_id: {...}}}。
+    """
+    ids = {tid for tid, _ in colliders}
+    seen = {tid: {"n": 0, "out": 0, "xs": [], "zs": []} for tid in ids}
+    for frame in trajectory.get("frames", []):
+        for obj in frame.get("objects", []):
+            tid = obj.get("tracked_id")
+            if tid not in ids:
+                continue
+            pos = obj.get("position_m")
+            if not pos or len(pos) < 2:
+                continue
+            x, z = float(pos[0]), float(pos[1])
+            st = seen[tid]
+            st["n"] += 1
+            st["xs"].append(x)
+            st["zs"].append(z)
+            if not (0.0 <= x <= size_m[0] and 0.0 <= z <= size_m[1]):
+                st["out"] += 1
+
+    report, severity = {}, "ok"
+    for tid, st in seen.items():
+        if not st["n"] or not st["out"]:
+            continue
+        frac = st["out"] / st["n"]
+        report[tid] = {
+            "n": st["n"], "out": st["out"], "frac": frac,
+            "x_range": [min(st["xs"]), max(st["xs"])],
+            "z_range": [min(st["zs"]), max(st["zs"])],
+            "bounds": [float(size_m[0]), float(size_m[1])],
+        }
+        severity = "error" if frac > OUT_OF_BOUNDS_ERROR_FRAC else (
+            "error" if severity == "error" else "warn")
+    return {"severity": severity, "out_of_bounds": report}
+
+
+def describe_out_of_bounds(report):
+    lines = []
+    for tid, r in sorted(report["out_of_bounds"].items()):
+        lines.append(
+            f"  track {tid}: {r['out']}/{r['n']} 點（{r['frac']*100:.1f}%）落在地面圖外；"
+            f"x {r['x_range'][0]:.1f}~{r['x_range'][1]:.1f}（界 0~{r['bounds'][0]:.1f}）、"
+            f"z {r['z_range'][0]:.1f}~{r['z_range'][1]:.1f}（界 0~{r['bounds'][1]:.1f}）")
+    return "\n".join(lines)
+
+
 def build(trajectory, code, ground_image, px_per_meter, size_m, colliders,
           source_collision, anim=(1, 32, 89), name=None):
     track_list, diag = scan_tracks(trajectory)
@@ -220,6 +293,16 @@ def build(trajectory, code, ground_image, px_per_meter, size_m, colliders,
         raise SceneBuildError(
             f"source_collision {source_collision} 必須嚴格介於 src_start={src_start} 與 "
             f"src_end={src_end} 之間（不可等於端點，否則 frame mapper 除以零）")
+
+    bounds = check_positions_in_bounds(trajectory, size_m, colliders)
+    if bounds["severity"] == "error":
+        raise SceneBuildError(
+            "collider 的位置大量落在地面圖出界範圍——這幾乎一定是 G-projection 標定錯誤，"
+            "不是資料噪音：\n" + describe_out_of_bounds(bounds) +
+            "\n（若確定要照樣產出，目前沒有旁路旗標；請先檢查標定的 anchors 與 parallax）")
+    if bounds["severity"] == "warn":
+        print("[build_scene] 警告：部分 collider 位置落在地面圖外\n"
+              + describe_out_of_bounds(bounds), file=sys.stderr)
 
     vehicles = []
     for tid, cls in colliders:
