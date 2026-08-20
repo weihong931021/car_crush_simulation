@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""satellite_pipeline 的所有路徑，集中一處。
+"""workbench 的所有路徑，集中一處。
 
 每支腳本各自寫 `Path(__file__).resolve().parent / "output"` 的時候，搬檔案、改目錄層級、
 或有人從別的 cwd 執行，就會各自算出不同答案而且沒人發現。這裡是唯一事實來源：
 
     repo/
-    ├── satellite_pipeline/          PKG_DIR
+    ├── workbench/                   PKG_DIR
     │   ├── web/                     WEB_DIR      網頁工作台前端
     │   └── output/<code>/           OUTPUT_DIR   底圖與 meta（gitignore）
     │       └── _uploads/<code>/     UPLOAD_DIR   使用者上傳的影片／截圖暫存
@@ -32,7 +32,7 @@ LOCATION_ROOT = TRAFFICLAB_DIR / "location"
 
 
 def output_dir(code: str) -> Path:
-    """satellite_pipeline 產出目錄 output/<code>/。"""
+    """workbench 產出目錄 output/<code>/。"""
     return OUTPUT_DIR / validate_code(code)
 
 

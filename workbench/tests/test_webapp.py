@@ -359,7 +359,7 @@ class UploadPathTest(unittest.TestCase):
 
     def test_檔案不存在要給看得懂的訊息而不是內部路徑(self):
         """上傳檔可能已被清掉（換 code、清暫存、重開機）。原本會漏出
-        `FileNotFoundError: ... /satellite_pipeline/output/_uploads/...` 這種內部路徑，
+        `FileNotFoundError: ... /workbench/output/_uploads/...` 這種內部路徑，
         使用者只看得到一串跟自己無關的路徑，也不知道該做什麼。
         """
         import webapp
@@ -450,14 +450,14 @@ class StaticServeTest(unittest.TestCase):
 
     def test_穿越會被擋下(self):
         import webapp
-        for bad in ("../satellite_pipeline/.env", "../../etc/passwd", "/etc/passwd",
+        for bad in ("../workbench/.env", "../../etc/passwd", "/etc/passwd",
                     "a/../../.env"):
             with self.subTest(bad=bad):
                 self.assertIsNone(webapp.safe_static("player", bad))
 
     def test_只開放白名單目錄(self):
         import webapp
-        self.assertIsNone(webapp.safe_static("satellite_pipeline", "webapp.py"))
+        self.assertIsNone(webapp.safe_static("workbench", "webapp.py"))
         self.assertIsNone(webapp.safe_static("..", "x"))
 
 
