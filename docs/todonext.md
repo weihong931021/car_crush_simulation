@@ -267,8 +267,11 @@ ground.px_per_meter = meta.px_per_meter × 縮放比    （不縮放時就是 me
       （現在要人工算三個數字，是最容易出錯的一步）
 - [ ] `--sat-dir` 對真實軌跡加防呆：偵測到 `trajectory.meta.px_per_meter` 與衛星圖
       推算值不符時警告或拒絕（現在會靜默產出錯位的場景包）
-- [ ] 端到端驗一個真實新場景（taipei-cm 資料已齊：影片、G_projection、軌跡），
-      跑完 `verify_scenes.mjs` 才算真正證明「新影片同樣流程同樣效果」
+- [x] **端到端驗一個真實新場景**（✅ 2026-08-20，tainan_yongkong 走網頁流程 ①→④
+      全線跑通，`verify_scenes.mjs` 4 場景全過）。誠實結論：整合鏈運作正常，但真實
+      資料模擬結果「未碰撞、最近 7.50 m」——撞車那台機車追蹤器沒抓穩（全部機車 track
+      淨位移僅 0.2–0.7 m），屬偵測層品質（隊友凍結範圍）。詳見 web-onboarding spec
+      「④ 首次真實資料端到端的結果」
 - [x] **格式契約已用第二份真實樣本驗過**（2026-07-24，haware 管線的
       `trafficlab-project/output/haware/taipei-cm/taipei-cm_trajectory.json`）：
       `python3 tools/build_scene.py --trajectory <該檔> --list` **不改碼直接讀得出**
@@ -312,8 +315,11 @@ ground.px_per_meter = meta.px_per_meter × 縮放比    （不縮放時就是 me
 - 順手修掉的兩個既有坑：`size_m: null` → 寫實際涵蓋公尺數（`pick_sat` 不再 TypeError）、
       `map_capture` 拆出 `finish_capture()` 讓裁切／meta 規則可離線測
 
-**接 ③ 標註的硬約束**：對應點只能標在 `sat_clean`（位移 0.00 m），不可標在 `sat_genai`
-（生圖重畫，位移 0.20–0.30 m，見 `measure_genai_drift.py`）。
+**接 ③ 標註的底圖**（2026-08-20 改）：交付「使用者在 ① 當下看的那張」（variant 隨
+`S.tab`），預設仍 sat_clean → sat_raw、不會自動挑 genai；明示選 genai 時出處寫進
+sat_meta（`geometry: rewritten_by_genai`）。代價：genai 是重畫且**非確定性**（同來源
+同 prompt 兩次 0.04 m／0.40 m），只要對應點標在交付的同一張圖上座標系自洽，誤差
+表現為相對真實世界的整體偏差。見 web-onboarding spec 同名章節與 `measure_genai_drift.py`。
 
 待補（不擋 ③ 開工）：網頁端寫死預設 provider（gemini）、CLI `pipeline.py` 一鍵仍不含 genai、
 Gemini 呼叫無 timeout／重試、`--strict`（去車失敗非零退出）未做。

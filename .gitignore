@@ -36,5 +36,9 @@ secrets.json
 
 # 凍結的基準播放器（本地快速參考，不入庫）
 threejs-v1/
+# 開發過程驗證截圖：留在磁碟供查閱，不入庫（2026-08-20 重整）
+/archive/
+# openpifpaf apollo24 權重 92 MB：模型檔不入庫
+/pifpaf-weights/
 # brainstorming 視覺協作板暫存
 .superpowers/
