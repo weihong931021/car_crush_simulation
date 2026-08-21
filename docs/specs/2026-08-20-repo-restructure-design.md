@@ -378,3 +378,22 @@ Codex 針對「搬進 `vendor/`」提出的四處 repo 深度修正
 `test_haware_replay_adapter_integration.py:12,163`、
 `haware_observation_replay.py:627,662`）在本設計中**不需要**——
 因為 `trafficlab-project/` 留在頂層、深度未變。
+
+
+---
+
+## 後記：實作結果（2026-08-21）
+
+重整已完成並通過驗收（五件套逐項與基準線相同），但**最終佈局與本 spec 有一處刻意偏離**：
+
+- 本 spec 第八節寫「不引入 frontend/ / backend/ 二分」。實作隔天使用者明確要求前後端獨立，
+  故第二階段把 `workbench/` 拆成 `backend/`（Python）與 `frontend/onboarding/`（①②③④ 三頁），
+  `player/` 移為 `frontend/player/`。
+- 代價如第二節預估的反面：`scene-loader.js` 的 `../scenes/` 改為 `../../scenes/`，
+  部署約束從「player 與 scenes 同層」變成「**frontend/ 與 scenes/ 同層**」。
+  已用 `verify_scenes.mjs`（真瀏覽器）驗證解析正確。
+- `workbench` 這個名字只存在了一天（2026-08-20 → 08-21），歷史文件若提到它，指的就是
+  現在的 `backend/` + `frontend/onboarding/`。
+
+最終佈局見 `README.md` 的目錄樹；分工歸屬見 `README.md` 分工表與
+`trafficlab-project/OWNERSHIP.md`。

@@ -1,7 +1,7 @@
 """地點代號驗證測試（2026-07-24 審查）。
 
 code 被拿來當 output/<code> 路徑。未驗證時 `../` 可寫到 output 之外。
-這裡鎖住「只接受 [A-Za-z0-9_-]」這條界線，與 player/scene-loader.js 的場景代號規則一致。
+這裡鎖住「只接受 [A-Za-z0-9_-]」這條界線，與 frontend/player/scene-loader.js 的場景代號規則一致。
 """
 import unittest
 from pathlib import Path

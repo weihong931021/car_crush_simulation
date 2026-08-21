@@ -359,7 +359,7 @@ class UploadPathTest(unittest.TestCase):
 
     def test_檔案不存在要給看得懂的訊息而不是內部路徑(self):
         """上傳檔可能已被清掉（換 code、清暫存、重開機）。原本會漏出
-        `FileNotFoundError: ... /workbench/output/_uploads/...` 這種內部路徑，
+        `FileNotFoundError: ... /backend/output/_uploads/...` 這種內部路徑，
         使用者只看得到一串跟自己無關的路徑，也不知道該做什麼。
         """
         import webapp
@@ -435,7 +435,7 @@ class FramePreviewTest(unittest.TestCase):
 
 
 class StaticServeTest(unittest.TestCase):
-    """播放器要能從這台 server 開，所以得服務 player/ 與 scenes/。
+    """播放器要能從這台 server 開，所以得服務 frontend/ 與 scenes/。
 
     這是第二個「用戶端字串接路徑」的地方（第一個是上傳檔名），同樣要擋穿越——
     而且靜態檔是 GET，任何網頁都能誘導瀏覽器去讀。
@@ -443,21 +443,21 @@ class StaticServeTest(unittest.TestCase):
 
     def test_正常路徑可通過(self):
         import webapp
-        got = webapp.safe_static("player", "index.html")
-        self.assertEqual(got, webapp.REPO_ROOT / "player" / "index.html")
+        got = webapp.safe_static("frontend", "player/index.html")
+        self.assertEqual(got, webapp.REPO_ROOT / "frontend" / "player" / "index.html")
         self.assertEqual(webapp.safe_static("scenes", "test1/scene.json"),
                          webapp.REPO_ROOT / "scenes" / "test1" / "scene.json")
 
     def test_穿越會被擋下(self):
         import webapp
-        for bad in ("../workbench/.env", "../../etc/passwd", "/etc/passwd",
+        for bad in ("../backend/.env", "../../etc/passwd", "/etc/passwd",
                     "a/../../.env"):
             with self.subTest(bad=bad):
-                self.assertIsNone(webapp.safe_static("player", bad))
+                self.assertIsNone(webapp.safe_static("frontend", bad))
 
     def test_只開放白名單目錄(self):
         import webapp
-        self.assertIsNone(webapp.safe_static("workbench", "webapp.py"))
+        self.assertIsNone(webapp.safe_static("backend", "webapp.py"))
         self.assertIsNone(webapp.safe_static("..", "x"))
 
 

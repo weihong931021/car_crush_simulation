@@ -13,7 +13,7 @@ pipeline.py — 一鍵：經緯度 → 衛星圖 → 去車銳化
 產出的 sat_*.png + meta.json 供 tools/build_scene.py 以 --sat-dir 取用，
 產生場景包的 ground.png（見專案根 README「新增場景」）。
 
-key 從環境變數或 workbench/.env 讀：GOOGLE_MAPS_KEY、GEMINI_API_KEY
+key 從環境變數或 backend/.env 讀：GOOGLE_MAPS_KEY、GEMINI_API_KEY
 """
 import argparse
 import os
@@ -64,7 +64,7 @@ def main():
         enhance(args.code, upscale=args.upscale)
 
     print(f"\n[pipeline] 完成。輸出在 output/{args.code}/")
-    print(f"  接場景包：tools/build_scene.py --sat-dir workbench/output/{args.code} ...")
+    print(f"  接場景包：tools/build_scene.py --sat-dir backend/output/{args.code} ...")
 
 
 if __name__ == "__main__":

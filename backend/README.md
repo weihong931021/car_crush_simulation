@@ -1,4 +1,4 @@
-# workbench — 進場流程 ①②③④ 端到端工作台
+# backend — 進場流程 ①②③④ 端到端工作台
 
 事故地點經緯度 → 衛星圖 → 去車 + 銳化高清化。輸出的 `sat_*.png` + `meta.json`
 供 `tools/build_scene.py --sat-dir` 取用，產生場景包的 `ground.png`。
@@ -18,7 +18,7 @@ lat/lon
 ## 網頁版（2026-08-16，spec `docs/specs/2026-08-16-web-onboarding-flow-design.md`）
 
 ```bash
-python3 workbench/webapp.py        # → http://127.0.0.1:8765/
+python3 backend/webapp.py        # → http://127.0.0.1:8765/
 ```
 
 零依賴（stdlib http.server），輸出與 CLI 同一個 `output/<code>/`。流程：
@@ -72,19 +72,19 @@ python3 workbench/webapp.py        # → http://127.0.0.1:8765/
 ## 用法（CLI）
 
 ```bash
-# 設 key（擇一）：環境變數 或 workbench/.env
+# 設 key（擇一）：環境變數 或 backend/.env
 #   GOOGLE_MAPS_KEY=...   (Static API)
 #   GEMINI_API_KEY=...    (去車偵測，只回 bbox JSON 不生圖)
 #   OPENAI_API_KEY=...    (--genai-provider openai 才需要)
 
 # 一鍵全流程
-python3 workbench/pipeline.py \
+python3 backend/pipeline.py \
     --lat 23.026901 --lon 120.249615 --code tainan_yongkang --size 25
 
 # 單步 / 重跑
-python3 workbench/map_capture.py  --lat .. --lon .. --code ..
-python3 workbench/image_enhance.py --code .. --genai     # 出 HD 版 sat_genai.png
-python3 workbench/pipeline.py --code .. --skip-capture   # 只重新增強
+python3 backend/map_capture.py  --lat .. --lon .. --code ..
+python3 backend/image_enhance.py --code .. --genai     # 出 HD 版 sat_genai.png
+python3 backend/pipeline.py --code .. --skip-capture   # 只重新增強
 
 # HD 版預設帶風格參考圖 refs/road_style_ref.png（真實空拍馬路，借柏油材質）
 # 關閉風格參考：--style-ref ""
@@ -142,7 +142,7 @@ python3 workbench/pipeline.py --code .. --skip-capture   # 只重新增強
 
   完整證據（含「是內容被改寫、不是取景跑掉」的診斷，與 prompt／mask／input_fidelity
   三條死路的查證）見 [`docs/decisions/2026-08-17-satellite-genai-provider-choice.md`](../docs/decisions/2026-08-17-satellite-genai-provider-choice.md)。
-  自己重量：`python3 workbench/measure_genai_drift.py --code <code>`
+  自己重量：`python3 backend/measure_genai_drift.py --code <code>`
 - **OpenAI 那邊為什麼不是更便宜的 `gpt-image-1-mini`**：只有 `gpt-image-2` 能指定任意輸出尺寸
   （邊長 16 倍數、長邊 ≤3840、比例 ≤3:1、總像素 655,360–8,294,400）；
   `gpt-image-1` / `-mini` 只吐 1024x1024、1024x1536、1536x1024 三種比例，

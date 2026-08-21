@@ -10,7 +10,7 @@
         --collider 1:car --collider 53:car --source-collision 180
   產生場景包（**合成軌跡**：衛星 pipeline 輸出當地面）:
     python3 tools/build_scene.py --code tainan_yongkang --trajectory T.json \
-        --sat-dir workbench/output/tainan_yongkang \
+        --sat-dir backend/output/tainan_yongkang \
         --collider 1:Car --collider 2:Two_Wheeler --source-collision 100
 
 --sat-dir 只適用於**在衛星座標系合成的軌跡**；真實影片的 position_m 活在校正參考圖的
@@ -404,7 +404,7 @@ def from_location_dir(location_dir, code, trajectory):
 
     真實影片的 position_m 就活在 `location/<code>/sat_<code>.png` 這張**校正參考圖**的
     平面上（原點＝圖左上角、尺度＝trajectory.meta.px_per_meter），所以地面圖必須是那張
-    圖本身或其等比縮放。用 workbench 新擷取的圖是另一張取景，會整個錯位。
+    圖本身或其等比縮放。用 backend 新擷取的圖是另一張取景，會整個錯位。
 
     實證：test1 的 sat 圖 1676×1148 @34.41px/m → 48.71×33.36m，與 committed scene.json
     的 size_m 完全相同；taipei-cm 1190×1258 @27.85 → 42.72×45.16m，軌跡範圍完全落在內。
@@ -431,7 +431,7 @@ def from_location_dir(location_dir, code, trajectory):
     w, h = png_size(img)
     base_size_m = [w / ppm, h / ppm]
 
-    # 優先採用去車＋銳化過的增強版（workbench/image_enhance.py --input/--output 產生）。
+    # 優先採用去車＋銳化過的增強版（backend/image_enhance.py --input/--output 產生）。
     # 它是原圖的整數倍等比放大，所以**覆蓋的公尺數不變、只有像素密度變高** ——
     # px_per_meter 跟著乘上縮放比即可，座標仍然正確。
     hd = img.with_name(f"{img.stem}_hd{img.suffix}")
@@ -464,7 +464,7 @@ def main(argv=None):
     ap.add_argument("--location-dir",
                     help="G-projection 校正目錄 location/<code>/（真實影片用；自動由 "
                          "sat_<code>.png 與 trajectory.meta.px_per_meter 推出尺度）")
-    ap.add_argument("--sat-dir", help="workbench 輸出目錄（自動讀 meta.json）"
+    ap.add_argument("--sat-dir", help="backend 輸出目錄（自動讀 meta.json）"
                                       "；僅適用於在衛星座標系合成的軌跡")
     ap.add_argument("--ground-image", help="手動指定地面圖（與 --px-per-meter/--size-m 併用）")
     ap.add_argument("--px-per-meter", type=float)
