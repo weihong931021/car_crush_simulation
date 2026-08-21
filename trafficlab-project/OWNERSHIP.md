@@ -25,7 +25,7 @@ trafficlab/io/haware_observation_replay.py      haware_track_provenance.py
 trafficlab/measurement/{haware_pilot,haware_held_out}.py
 trafficlab/projection/haware_forward.py
 trafficlab/inference/pifpaf_haware_adapter.py
-tests/                     25 支
+tests/                     24 支
 tests/properties/          19 支 property test
 detection_tests/           偵測模型驗收記錄（2026-08-20 從 repo 頂層移入）
 evidence/haware/           量測產物
