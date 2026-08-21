@@ -42,7 +42,7 @@ DETECT_PROMPT = (
 
 
 def _load_key(name: str) -> str | None:
-    """環境變數優先，其次 workbench/.env。"""
+    """環境變數優先，其次 backend/.env。"""
     key = os.environ.get(name, "").strip()
     if key:
         return key
@@ -527,7 +527,7 @@ def enhance_file(src, dst, key: str | None = None, upscale: int = 2,
 
 def enhance(code: str, key: str | None = None, upscale: int = 2,
             out_dir: Path | None = None, decar: bool = True) -> Path:
-    """workbench 的標準路徑：output/<code>/sat_raw.png → sat_clean.png。
+    """backend 的標準路徑：output/<code>/sat_raw.png → sat_clean.png。
 
     out_dir 預設 output/<code>；可注入（webapp／測試用）。
     """
@@ -556,7 +556,7 @@ def enhance(code: str, key: str | None = None, upscale: int = 2,
 def main():
     ap = argparse.ArgumentParser(description="衛星圖去車 + 銳化高清化")
     ap.add_argument("--code", type=validate_code,
-                    help="workbench 標準路徑：output/<code>/sat_raw.png → sat_clean.png")
+                    help="backend 標準路徑：output/<code>/sat_raw.png → sat_clean.png")
     ap.add_argument("--input", help="任意輸入圖（與 --output 併用）。用於把 G-projection "
                                     "校正參考圖原地變好看——等比放大，座標仍然有效")
     ap.add_argument("--output", help="與 --input 併用的輸出路徑")

@@ -6,7 +6,7 @@
     # 目前 tainan_yongkong 用的參數（角度單位：度）：
     python3 tools/place_synth_trajectory.py 16.6 17.0 0 -60 /tmp/traj_placed.json
     python3 tools/build_scene.py --code tainan_yongkong --trajectory /tmp/traj_placed.json \
-        --sat-dir workbench/output/tainan_yongkong \
+        --sat-dir backend/output/tainan_yongkong \
         --collider 1:Car --collider 2:Two_Wheeler --source-collision 100
 
 角度是看渲染截圖調出來的，不是算出來的——主幹道在路口會轉彎，一條直線沒辦法兩頭都

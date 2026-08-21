@@ -6,16 +6,17 @@
 
 | 目錄 | 誰維護 | 動它之前 |
 | --- | --- | --- |
-| `workbench/` | 本 repo | 進場流程 ①②③④ 的後端與網頁。改完跑 `workbench/tests` |
-| `player/` | 本 repo | 3D 播放器與碰撞物理。**物理已模組化在 `player/lib/`，不要重新推導**（spec：[碰撞模擬](docs/specs/2026-07-20-collision-simulation-design.md)） |
+| `backend/` | 本 repo | 進場流程 ①②③④ 的 HTTP server 與影像/標註/整合邏輯。改完跑 `backend/tests` |
+| `frontend/onboarding/` | 本 repo | ①②③④ 的三個頁面（自足 HTML，CSS/JS 內嵌） |
+| `frontend/player/` | 本 repo | 3D 播放器與碰撞物理。**物理已模組化在 `frontend/player/lib/`，不要重新推導**（spec：[碰撞模擬](docs/specs/2026-07-20-collision-simulation-design.md)） |
 | `tools/` | 本 repo | 場景包產生器與驗證腳本 |
 | `scenes/` | 產出 | 由 `build_scene.py` 產生，不手改 |
 | `trafficlab-project/` | **混合** | 先讀 [OWNERSHIP.md](trafficlab-project/OWNERSHIP.md)——haware 定位那 64 檔是本 repo 維護的，偵測與軌跡（`inference/pipeline.py`、`trajectory/`、`inference_config.yaml`、`models/`）由隊友主導且**已凍結，不要優化** |
 
 兩條硬約束，改架構前務必知道：
 
-- **`player/` 與 `scenes/` 必須是同層目錄** —— `scene-loader.js` 走 `../scenes/`，
-  只部署 `player/` 會全數 404
+- **`frontend/` 與 `scenes/` 必須是同層目錄** —— `scene-loader.js` 走 `../../scenes/`
+  （player 在 frontend/ 下一層），只部署 `frontend/` 會全數 404
 - **`trafficlab-project/` 不能改名成 `trafficlab/`** —— 會與其內同名 Python 套件衝突，
   `import trafficlab.motion` 會拋 `ModuleNotFoundError` 且訊息不指向真正原因
 
@@ -23,19 +24,19 @@
 
 ```bash
 # 1. 需要什麼
-#    Python 3（標準庫即可跑 workbench 與 tools）、Node 18+（播放器測試）
+#    Python 3（標準庫即可跑 backend 與 tools）、Node 18+（播放器測試）
 #    影像處理另需 numpy / opencv-python / Pillow
 #    haware 定位那套用 trafficlab-project/.venv-pifpaf（uv 建的，已在磁碟上）
 
 # 2. 設 API key（只有擷取底圖與 AI 去車需要，跑既有場景不用）
-echo "GOOGLE_MAPS_KEY=..." >> workbench/.env      # ① 擷取衛星底圖
-echo "GEMINI_API_KEY=..."  >> workbench/.env      # 選配：AI 去車
+echo "GOOGLE_MAPS_KEY=..." >> backend/.env      # ① 擷取衛星底圖
+echo "GEMINI_API_KEY=..."  >> backend/.env      # 選配：AI 去車
 
 # 3. 確認環境沒問題——先看得到既有場景再說
 node tools/verify_scenes.mjs                      # 期望「✓ 4 場景全過」
 
 # 4. 開起來看
-python3 workbench/webapp.py                       # → http://127.0.0.1:8765/
+python3 backend/webapp.py                       # → http://127.0.0.1:8765/
 ```
 
 跑不動的話最常見兩個原因：haware 測試要用 `.venv-pifpaf`（系統 python3 缺 `ultralytics`）、
@@ -43,7 +44,7 @@ python3 workbench/webapp.py                       # → http://127.0.0.1:8765/
 
 ## Pipeline
 
-從 2026-08 起，整條進場流程都在瀏覽器裡完成（`workbench/webapp.py`）：
+從 2026-08 起，整條進場流程都在瀏覽器裡完成（`backend/webapp.py`）：
 
 ```text
 ① 選地點   經緯度 + 事故影片
@@ -66,7 +67,7 @@ scripts/filter_and_enrich_output.py 只留當事車 + 補 position_m
     ↓
 tools/build_scene.py                → scenes/<code>/（scene.json + ground.png + trajectory.json）
     ↓
-player/index.html?scene=<code>      JS 碰撞物理 + 互動 UI，渲染全在瀏覽器
+frontend/player/index.html?scene=<code>      JS 碰撞物理 + 互動 UI，渲染全在瀏覽器
 ```
 
 只剩兩個人工判斷：**挑兩台當事車**、**標碰撞幀**（追蹤器碰前 0.5 s 會凍結，無法自動判定）。
@@ -98,7 +99,7 @@ Fallback 是主要路徑之一；零輪點不代表必然 fallback，只要非�
 **<https://claude.ai/code/artifact/1fec3a43-8ccf-4bbb-bcaa-55ac1e9f044f>**（私人連結，可從頁面分享）
 
 - **完整 three.js 3D 版**單頁打包（~6.9MB）：three r165 以 data:URI importmap 內嵌、
-  車輛 GLB 經 meshopt 壓縮（car 18.5→3.2MB）base64 內嵌、`player/lib/` 物理 bundle、
+  車輛 GLB 經 meshopt 壓縮（car 18.5→3.2MB）base64 內嵌、`frontend/player/lib/` 物理 bundle、
   衛星地面、光影/三種視角（頂視/45°/跟車）/OrbitControls，離線可用
 - 軌跡經淨化管線：時間窗平滑 → 切除碰前凍結尾 → RDP 直線化＋轉角細分（路徑＝兩點
   連線、線段間僅些微角度）→ 投影（幾何/時序分離：每點時刻與速度剖面原樣保留）→
@@ -106,10 +107,10 @@ Fallback 是主要路徑之一；零輪點不代表必然 fallback，只要非�
   車身朝向受轉向率上限（單車模型＋側向抓地）約束
 - 功能與完整版一致：車速倍率滑桿（即時重模擬）、碰撞/未碰撞結論、求安全車速區間、
   最近間距標註；依會議決定呈現至碰撞瞬間為止
-- 產生方式：`scenes/test1/` 資料 + `player/lib/` bundle 組頁。**組頁流程沒有腳本化**，
+- 產生方式：`scenes/test1/` 資料 + `frontend/player/lib/` bundle 組頁。**組頁流程沒有腳本化**，
   當初在 session scratchpad 裡完成，要重產得重寫（候選檔名 `tools/build_demo_page.py`，
   目前不存在）
-- 完整互動 3D 版在 `player/index.html`，本地用網頁工作台或 `python3 -m http.server` 開；
+- 完整互動 3D 版在 `frontend/player/index.html`，本地用網頁工作台或 `python3 -m http.server` 開；
   GitHub Pages 待 repo 管理者於 Settings → Pages 啟用 main / root
 
 ## 資料夾結構
@@ -118,14 +119,10 @@ Fallback 是主要路徑之一；零輪點不代表必然 fallback，只要非�
 blender_crash_project/
 ├── CLAUDE.md                       ← Claude 行為指令
 ├── README.md
-├── index.html                      ← 根目錄轉址至 player/index.html
+├── index.html                      ← 根目錄轉址至 frontend/player/index.html
 │
-├── workbench/                      ← ★ 進場流程 ①②③④ 端到端工作台
-│   ├── webapp.py                   ← ★ 進場流程 server（同時服務 player/ 與 scenes/）
-│   ├── web/                        ← 前端三頁
-│   │   ├── index.html              ←   ①② 選地點 / 框範圍
-│   │   ├── annotate.html           ←   ③ 對應點標註（縮放平移、leave-one-out 診斷）
-│   │   └── integrate.html          ←   ④ 偵測 → 挑當事車 → 標碰撞幀 → 場景包
+├── backend/                        ← ★ 進場流程 ①②③④ 的 Python 端
+│   ├── webapp.py                   ← ★ HTTP server（服務 frontend/ 與 scenes/、所有 /api/*）
 │   ├── annotate.py                 ← 對應點 → 單應性 → G_projection（schema 對齊 trafficlab）
 │   ├── integrate.py                ← 串接 trafficlab 四段腳本（含直譯器/PYTHONPATH 探測）
 │   ├── paths.py                    ← 所有路徑的唯一事實來源
@@ -134,17 +131,22 @@ blender_crash_project/
 │   ├── image_enhance.py            ← 去車 + 銳化 / --genai HD（預設 gemini，可選 gpt-image-2）
 │   ├── measure_genai_drift.py      ← 量生圖把幾何搬了多遠（分塊相位相關）
 │   ├── common.py                   ← 地點代號驗證
-│   ├── models/FSRCNN_x4.pb         ← 超解析模型（不入庫；無程式引用，待清理）
+│   ├── tests/                      ← 111 測
 │   └── output/<code>/              ← sat_raw / sat_clean / sat_genai / meta.json（不入庫）
 │
-├── player/                         ← ★ Three.js 播放器與碰撞模擬
-│   ├── index.html                  ← Three.js r165，場景載入 + 播放控制 UI
-│   ├── main.js                     ← 核心動畫、碰撞物理、互動邏輯
-│   ├── scene-loader.js             ← scene.json 載入器（走 ../scenes/，故兩者必須同層）
-│   ├── lib/                        ← 物理與軌跡模組（path/obb/simulate/solve/physics…）
-│   │   └── tests/                  ← node --test player/lib/tests/*.test.js
-│   ├── models/                     ← GLB 模型 + registry.json（前方軸向、縮放、hide 清單）
-│   └── vendor/three/               ← 本地 Three.js 0.165.0（不可外連）
+├── frontend/                       ← ★ 所有網頁
+│   ├── onboarding/                 ← 進場流程三頁（自足 HTML，CSS/JS 內嵌）
+│   │   ├── index.html              ←   ①② 選地點 / 框範圍
+│   │   ├── annotate.html           ←   ③ 對應點標註（縮放平移、leave-one-out 診斷）
+│   │   └── integrate.html          ←   ④ 偵測 → 挑當事車 → 標碰撞幀 → 場景包
+│   └── player/                     ← 3D 播放器與碰撞模擬
+│       ├── index.html              ← Three.js r165，場景載入 + 播放控制 UI
+│       ├── main.js                 ← 核心動畫、碰撞物理、互動邏輯
+│       ├── scene-loader.js         ← scene.json 載入器（走 ../../scenes/）
+│       ├── lib/                    ← 物理與軌跡模組（path/obb/simulate/solve/physics…）
+│       │   └── tests/              ← node --test frontend/player/lib/tests/*.test.js
+│       ├── models/                 ← GLB 模型 + registry.json（前方軸向、縮放、hide 清單）
+│       └── vendor/three/           ← 本地 Three.js 0.165.0（不可外連）
 │
 ├── tools/
 │   ├── build_scene.py              ← 半自動場景包產生器
@@ -156,18 +158,13 @@ blender_crash_project/
 │
 ├── scenes/                         ← 場景包（scene.json + ground.png + trajectory.json）
 ├── docs/
-│   ├── specs/                      ← 設計文件（含當前方向 spec）
-│   ├── plans/                      ← 實作計畫
-│   ├── decisions/                  ← 決策記錄
+│   ├── specs/  plans/  decisions/  ← 設計文件、實作計畫、決策記錄
 │   ├── legacy-specs/               ← Kiro 時期 spec（haware 定位準確度）
 │   ├── trafficlab-notes/           ← 我們對隊友腳本的使用說明
 │   ├── handouts/                   ← 交付簡報 PDF
 │   ├── diagrams/                   ← 對外簡報圖（改字請改 make_diagrams.py 再重跑）
 │   ├── papers/                     ← 外部參考文獻 PDF
-│   ├── PROJECT.md                  ← 專案總覽、競品分析、已知風險
-│   ├── todonext.md                 ← 待辦清單
-│   ├── reference.md                ← 座標轉換、車規、時間軸快速參考
-│   └── video-processing-commands.md ← yt-dlp / ffmpeg / RIFE 指令速查
+│   ├── PROJECT.md  todonext.md  reference.md  video-processing-commands.md
 ├── environments/                   ← trafficlab-pifpaf.yml（pifpaf 環境配方）
 │
 │   ── 以下留在磁碟但不入庫 ──
@@ -176,7 +173,7 @@ blender_crash_project/
 ├── pifpaf-weights/                 ← openpifpaf apollo24 權重 92 MB
 ├── threejs-v1/                     ← 播放器前一版（保留對照）
 │
-└── trafficlab-project/             ← 混合歸屬——64 檔 25,354 行是我們的
+└── trafficlab-project/             ← 混合歸屬——64 檔 25,442 行是我們的
     ├── OWNERSHIP.md                ← ★ 先讀這個再決定要不要改裡面的東西
     ├── trafficlab/                 ← 核心函式庫（haware_* 與 localization_authority 是我們的）
     ├── tests/                      ← 43 支（24 + properties 19），全是我們寫的
@@ -192,13 +189,13 @@ blender_crash_project/
 ## 啟動方式
 
 ```bash
-# 網頁工作台（進場流程 ①②③④ 全在這裡；同時也服務 player/ 與 scenes/）
-python3 workbench/webapp.py
+# 網頁工作台（進場流程 ①②③④ 全在這裡；同時也服務 frontend/player/ 與 scenes/）
+python3 backend/webapp.py
 # → http://127.0.0.1:8765/                        選地點 → 框範圍 → 標註 → 整合
-# → http://127.0.0.1:8765/player/index.html?scene=test1    直接看既有場景
+# → http://127.0.0.1:8765/frontend/player/index.html?scene=test1    直接看既有場景
 
 # 只想看播放器（不跑工作台）
-python3 -m http.server 8765     # 站根要同時看得到 player/ 與 scenes/
+python3 -m http.server 8765     # 站根要同時看得到 frontend/player/ 與 scenes/
 
 # TrafficLab 桌面 GUI（選配；網頁標註已涵蓋校正，這條不是預設路徑）
 python3 trafficlab-project/main.py
@@ -214,7 +211,7 @@ python3 trafficlab-project/main.py
 
 ## 新增場景（新影片進場）
 
-**建議走網頁工作台**：`python3 workbench/webapp.py` → 填經緯度、選影片，
+**建議走網頁工作台**：`python3 backend/webapp.py` → 填經緯度、選影片，
 四步走完就有可播放的重建。底圖、比例尺、校正檔、場景包都自動落到正確位置。
 
 ### 座標系是怎麼定的（無論走哪條路都要懂）
@@ -238,15 +235,15 @@ python3 tools/build_scene.py --code <code> --trajectory T.json \
 node tools/verify_scenes.mjs      # 加新場景包後必跑：唯一會實際渲染的驗證
 ```
 
-`--sat-dir`（workbench 新擷取的圖）只適用於**在衛星座標系合成的軌跡**
+`--sat-dir`（backend 新擷取的圖）只適用於**在衛星座標系合成的軌跡**
 （如 `scenes/tainan_yongkang/`）。走網頁流程則沒有這個限制——那張圖本身就是座標系。
 
 ## 測試
 
 ```bash
-node --test player/lib/tests/*.test.js                      # 物理/軌跡模組 86 測（必用 glob）
+node --test frontend/player/lib/tests/*.test.js                      # 物理/軌跡模組 86 測（必用 glob）
 python3 -m unittest discover -s tools/tests                  # 場景包產生器 46 測（只用標準庫）
-python3 -m unittest discover -s workbench/tests              # 網頁流程/標註/整合/底圖 111 測
+python3 -m unittest discover -s backend/tests              # 網頁流程/標註/整合/底圖 111 測
 (cd trafficlab-project && .venv-pifpaf/bin/python -m unittest discover -s tests)   # haware 271 測
 node tools/verify_scenes.mjs                                 # 全場景 headless 冒煙
 ```

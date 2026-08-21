@@ -37,7 +37,7 @@ test1：`origin_offset_m = [24.355, 16.68]`；`ground.png` 1515×1038 px、px_pe
 ## 模型資產來源
 
 - car.glb = Tesla 2018 Model 3，Sketchfab UID `5ef9b845aaf44203b6d04e2c677e444f`
-  （CC Attribution）。此類 provenance 記在 `player/models/registry.json` 的 `_comment_provenance`。
+  （CC Attribution）。此類 provenance 記在 `frontend/player/models/registry.json` 的 `_comment_provenance`。
 
 ## TrafficLab 常用指令
 

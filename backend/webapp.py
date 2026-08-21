@@ -2,8 +2,8 @@
 """
 webapp.py — 底圖自動化的網頁前端（spec docs/specs/2026-08-16-web-onboarding-flow-design.md ①②）
 
-    python3 workbench/webapp.py            # http://127.0.0.1:8765/
-    python3 workbench/webapp.py --port 9000
+    python3 backend/webapp.py            # http://127.0.0.1:8765/
+    python3 backend/webapp.py --port 9000
 
 流程：
     輸入 lat/lon/code → POST /api/capture：探測可用 zoom、抓整張 1280² 原圖（不去車，1 秒）
@@ -34,9 +34,9 @@ from paths import (               # noqa: E402  所有路徑的唯一事實來�
 
 VARIANTS = ("sat_raw.png", "sat_clean.png", "sat_genai.png")
 
-# 播放器要從這台 server 開，而 scene-loader.js 走 `../scenes/` 相對路徑，
-# 所以站根必須同時看得到這兩個同層目錄（CLAUDE.md 的部署約束）。只開這兩個。
-STATIC_ROOTS = ("player", "scenes")
+# 播放器要從這台 server 開，而 scene-loader.js 走 `../../scenes/` 相對路徑
+# （player 在 frontend/ 底下），所以站根必須同時看得到 frontend/ 與 scenes/。只開這兩個。
+STATIC_ROOTS = ("frontend", "scenes")
 CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript",
                  ".mjs": "text/javascript", ".json": "application/json",
                  ".css": "text/css", ".png": "image/png", ".jpg": "image/jpeg",
@@ -681,7 +681,7 @@ def build_scene_for(code: str, colliders, collision_frame):
         raise ValueError(f"場景包產生失敗（returncode {rc}），詳見記錄")
 
     _job_set(code, phase="done")
-    return {"scene": f"scenes/{code}", "player": f"/player/index.html?scene={code}"}
+    return {"scene": f"scenes/{code}", "player": f"/frontend/player/index.html?scene={code}"}
 
 
 # ---------- HTTP ----------

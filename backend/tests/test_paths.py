@@ -16,7 +16,7 @@ class PathsTest(unittest.TestCase):
     def test_全部路徑都掛在專案根底下(self):
         self.assertTrue(paths.PKG_DIR.is_dir())
         self.assertEqual(paths.OUTPUT_DIR.parent, paths.PKG_DIR)
-        self.assertEqual(paths.WEB_DIR, paths.PKG_DIR / "web")
+        self.assertEqual(paths.WEB_DIR, paths.REPO_ROOT / "frontend" / "onboarding")
         self.assertEqual(paths.UPLOAD_DIR.parent, paths.OUTPUT_DIR)
         self.assertEqual(paths.TRAFFICLAB_DIR.parent, paths.REPO_ROOT)
         self.assertEqual(paths.LOCATION_ROOT, paths.TRAFFICLAB_DIR / "location")

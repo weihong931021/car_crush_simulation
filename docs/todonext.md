@@ -6,7 +6,7 @@
 > plan：`docs/plans/2026-08-20-repo-restructure.md`
 > 回復點：`git tag reorg-preflight-20260820`
 
-- [x] `satellite_pipeline/` → `workbench/`、`threejs/` → `player/`（前後端按角色命名，全留頂層）
+- [x] `satellite_pipeline/` → `backend/`、`threejs/` → `frontend/player/`（前後端按角色命名，全留頂層）
 - [x] `trafficlab-project/` 留原地不改名 + 新增 `OWNERSHIP.md`——那棵樹有 64 檔 25,354 行是我們的
       （改名成 `trafficlab/` 會與其內同名 Python 套件衝突，實測 `import trafficlab.motion` 會爆）
 - [x] `detection_tests/` → `trafficlab-project/`、`open-player.command` → `tools/`、
@@ -69,7 +69,7 @@
 - [x] three.js 本地 vendor（離線可用）、手機 RWD
 - [x] MODEL_FLIP per-model 設定（確認 car.glb / moto.glb 前方軸向 → registry.json）
 - [ ] 靜態部署（GitHub Pages）（待 repo 管理者於 Settings → Pages 啟用）
-- [x] 第二場景驗證（workbench 既有地點 + 合成軌跡，`tools/synth_trajectory.py` +
+- [x] 第二場景驗證（backend 既有地點 + 合成軌跡，`tools/synth_trajectory.py` +
   `scenes/tainan_yongkang/`，換場景零程式碼修改驗證通過）
 - [x] **全面轉 Three.js 網頁渲染，Blender 工具鏈移除**（2026-08-05）：渲染／出版級畫面
   都由 Three.js 負責，原「第二階段 Blender 出版渲染」取消（見本檔末與決策記錄）
@@ -85,7 +85,7 @@ sha256 相同，scene.json 僅 `0.70` vs `0.7` 的浮點格式差異）。
       無錯誤 overlay）。**加新場景包必跑**——這是唯一會實際渲染的驗證
 - [x] 缺口測試（`todo` / `expectedFailure` ＝已知缺口的執行式文件，非壞測試）：
       `tools/tests/test_build_scene_edges.py`（新增 8 測，套件期望 OK + expected failures=5）、
-      `player/lib/tests/contract-gaps.test.js`（新增 4 測，其中 3 個 todo；套件期望 fail 0）
+      `frontend/player/lib/tests/contract-gaps.test.js`（新增 4 測，其中 3 個 todo；套件期望 fail 0）
 
 ### 播放器全功能實測與修正（2026-08-17）
 
@@ -107,7 +107,7 @@ Codex review 後修正並回歸（JS 86/86、verify_scenes 全過）：
       ——待決定拿掉或用 kee-cc／taoyuan-tc 重出
 - [ ] 視窗 resize 後不重新 fit 鏡頭；背景車（extras）用 GLB 原始比例（Codex 提的兩個小風險）
 
-**底圖工作台（`workbench/webapp.py`，①②）實測到的 bug（使用者決定先修播放器，
+**底圖工作台（`backend/webapp.py`，①②）實測到的 bug（使用者決定先修播放器，
 這些待處理；③ 標註另開 spec）**：對已鎖定代號再擷取會靜默覆蓋（locked 消失、clean 圖被刪）、
 重新整理全丟沒有「打開既有代號」、鎖 30 m 滑桿顯示 29 m 與上限提示永不出現（floor 取整）、
 降 zoom 重抓後滑桿仍停 40 m、去車隨機（同圖 9 台→1 台）且銳化放大 Google 浮水印、favicon 404。
@@ -170,7 +170,7 @@ Codex review 後修正並回歸（JS 86/86、verify_scenes 全過）：
       `--genai-provider {gemini,openai}`，**預設 `gemini`**。同一張 sat_raw 實測位移中位數
       `sat_clean` 0.00 m ／ `gemini-3.1-flash-image` 0.20 m ／ `gpt-image-2` 0.30 m，
       Gemini 兩次獨立跑一致。原本「HD 底圖只能人眼確認」現在有可重跑的數字
-      （`workbench/measure_genai_drift.py`）。
+      （`backend/measure_genai_drift.py`）。
       診斷過「是不是只是取景跑掉」：扣掉最佳全域仿射只降 16%，是內容被改寫、不可校正。
       prompt／`mask`／`input_fidelity` 三條路都查證無效（官方文件明載 mask 也是整張重生）。
       決策文件：`docs/decisions/2026-08-17-satellite-genai-provider-choice.md`
@@ -240,7 +240,7 @@ Codex review 後修正並回歸（JS 86/86、verify_scenes 全過）：
       `break` 整個迴圈，其他仍超標的彎道全被放生。改為封鎖不可細分的角並繼續；
       `maxIter` 只計成功插入（封鎖不吃額度）；兩側鄰段都試
 - [x] **衛星 pipeline 代號未驗證**：`code` 會變成 `output/<code>` 路徑，`../` 可寫到 output
-      外。新增 `workbench/common.py` 的 `validate_code`（`^[A-Za-z0-9_-]+$`，
+      外。新增 `backend/common.py` 的 `validate_code`（`^[A-Za-z0-9_-]+$`，
       各進入點都擋）。（當時 `blender_ground` 產生 Blender 原始碼的注入面也一併封了，
       該檔已於 2026-08-05 隨 Blender 移除刪除）
 - [x] ~~`import_vehicle.py` 選錯匯入物件~~：當時改為根物件差集具名鎖定；該檔已於
@@ -276,7 +276,7 @@ ground.px_per_meter = meta.px_per_meter × 縮放比    （不縮放時就是 me
 - taipei-cm：`sat_taipei-cm.png` 1190×1258 @27.85px/m → 42.72×45.16m，軌跡
   x 9.0–33.2／y 15.7–43.1 完全落在平面內
 
-**陷阱**：`--sat-dir`（workbench 新擷取的 Google 圖）是另一張不同取景的圖，
+**陷阱**：`--sat-dir`（backend 新擷取的 Google 圖）是另一張不同取景的圖，
 對真實軌跡會錯位；它只適用於在衛星座標系合成的軌跡（tainan_yongkang 即是）。
 真實影片走 `--ground-image / --px-per-meter / --size-m` 手動路徑。
 
@@ -311,7 +311,7 @@ ground.px_per_meter = meta.px_per_meter × 縮放比    （不縮放時就是 me
 - [ ] `scenes/test1/road_features.json` 定位不明：不在 build_scene 產出清單、播放器與
       工具皆不讀——納入 schema 或移除
 
-## Track A：衛星圖自動化 pipeline（→ `workbench/` 模組，✅ 已完成）
+## Track A：衛星圖自動化 pipeline（→ `backend/` 模組，✅ 已完成）
 
 > **2026-08-16 網頁化進場流程**：spec `docs/specs/2026-08-16-web-onboarding-flow-design.md`
 > （① 輸入經緯度/影片/大小 → ② 底圖自動截圖＋去車、滑桿調大小、人工確認鎖定 →
@@ -320,7 +320,7 @@ ground.px_per_meter = meta.px_per_meter × 縮放比    （不縮放時就是 me
 
 ### ①② 底圖網頁工作台（✅ 2026-08-16 完成，2026-08-17 實機驗證）
 
-`workbench/webapp.py` + `web/index.html`，`python3 workbench/webapp.py`
+`backend/webapp.py` + `web/index.html`，`python3 backend/webapp.py`
 → <http://127.0.0.1:8765/>。stdlib http.server，零依賴，輸出與 CLI 共用 `output/<code>/`。
 
 - [x] 探測可用 zoom（空白圖磚自動降級）＋抓整張 1280² 原圖
@@ -349,17 +349,17 @@ Gemini 呼叫無 timeout／重試、`--strict`（去車失敗非零退出）未�
     Bing/Earth KH/NLSC 皆不可用。換不同 Google API 不會更清楚（同一份底圖）
 - **去車 + 增強定案**：Gemini 偵測 bbox + cv2 inpaint + PIL 銳化
   - 否決 Gemini 重畫整張（會幻想假道路/標線）
-- **`workbench/` 一鍵流程已完成並驗證**：
+- **`backend/` 一鍵流程已完成並驗證**：
   `pipeline.py --lat --lon --code` → sat_raw → sat_clean(去車)；`sat_*.png` + `meta.json`
   供 `build_scene.py --sat-dir` 產場景包 ground.png
   - 台南永康點端到端通過（去 24 台車、25×25m @ 29px/m）
-- 詳細決策見 `workbench/README.md`
-- 圖源比對：`workbench/compare/source_compare.png`
+- 詳細決策見 `backend/README.md`
+- 圖源比對：`backend/compare/source_compare.png`
 
 ### 待辦（微調）
 
 - [x] genai prompt 定案：真實深柏油 + 粗糙質感 + 標線最小化 + 風格參考圖（refs/road_style_ref.png，借柏油材質）（temp 0.4, raw 來源）
-- [x] 多地點範例：`workbench/demo/` 5 個台灣路口原圖 vs HD 對比圖
+- [x] 多地點範例：`backend/demo/` 5 個台灣路口原圖 vs HD 對比圖
 - [x] Codex 審查 #1 修正：map_capture 重抓時清除過時 sat_clean/sat_genai（修「新地形配舊圖」bug）
 - [ ] Codex 審查 #2（待軌跡接入時驗）：`uv.reset()` 沒明確指定哪個 UV 角=世界原點，image-y-down 映射是隱性的，衛星圖可能上下相反
 - [x] Codex 審查 #3：px_per_meter 是「此緯度」專屬非通用常數（README 已註明「此地點 29px/m」）
@@ -376,11 +376,11 @@ Gemini 呼叫無 timeout／重試、`--strict`（去車失敗非零退出）未�
 - [ ] `--genai` 的 help 寫「在**去車結果**上做 HD 化」，但 `genai_enhance()` 的
       `src_name` 預設是 `sat_raw.png`（image_enhance.py:108，且 fallback 也是 raw）——
       實際吃的是未去車的原圖。修 help 或改預設，兩者擇一
-- 註：`models/FSRCNN_x4.pb` 無任何**程式碼**引用（workbench 五支 .py 全數零命中），
+- 註：`models/FSRCNN_x4.pb` 無任何**程式碼**引用（backend 五支 .py 全數零命中），
   且被根 `.gitignore` 的 `*.pb` 忽略、git 未追蹤——死資產。但根 `README.md` 與 docs/specs
   仍有文字提及，清理時一併移除
 - 註：舊版 `trafficlab-project/scripts/{map_capture,image_enhance,pipeline_mapground}.py`
-  （Esri 版）已被 `workbench/` 取代
+  （Esri 版）已被 `backend/` 取代
 
 ## Track B：TrafficLab 偵測優化（❄️ 凍結，隊友主導）
 
@@ -410,6 +410,6 @@ Gemini 呼叫無 timeout／重試、`--strict`（去車失敗非零退出）未�
 
 ## 已知坑（勿忘）
 
-- 換車輛模型：放新 GLB 到 `player/models/`、`registry.json` 補 file/flip/hide；flip 在
+- 換車輛模型：放新 GLB 到 `frontend/player/models/`、`registry.json` 補 file/flip/hide；flip 在
   瀏覽器量前後輪中心連線 `atan2(dx,-dy)` 取負，量法見 `registry.json` `_comment`
 - 斜角碰撞後有旋轉：角動量 = F × 力臂，轉動慣量 ≈ 1/12 × m × L²（在 `physics.js`）

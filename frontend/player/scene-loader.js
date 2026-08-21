@@ -7,7 +7,7 @@ export function sceneCodeFromURL() {
 
 export async function loadScene(code) {
   if (!/^[\w-]+$/.test(code)) throw new Error(`場景代號不合法：${code}`);
-  const basePath = `../scenes/${code}/`;
+  const basePath = `../../scenes/${code}/`;
   const cfgRes = await fetch(basePath + 'scene.json');
   if (!cfgRes.ok) throw new Error(`scenes/${code}/scene.json 載入失敗（HTTP ${cfgRes.status}）`);
   const cfg = await cfgRes.json();
