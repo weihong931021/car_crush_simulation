@@ -4,28 +4,28 @@
   "name": "tainan_yongkong 事故重建",
   "ground": {
     "image": "ground.png",
-    "px_per_meter": 29.114285714285714,
+    "px_per_meter": 29.113,
     "size_m": [
-      35.0,
-      35.0
+      28.990485350187203,
+      28.990485350187203
     ]
   },
   "origin_offset_m": [
-    17.5,
-    17.5
+    14.495242675093602,
+    14.495242675093602
   ],
   "frames": {
-    "source_start": 1,
-    "source_collision": 100,
-    "source_end": 200,
+    "source_start": 26,
+    "source_collision": 179,
+    "source_end": 359,
     "anim_start": 1,
     "anim_collision": 32,
     "anim_end": 89,
-    "fps": 25
+    "fps": 30
   },
   "vehicles": [
     {
-      "track_id": 1,
+      "track_id": 3,
       "class": "Car",
       "label": "汽車",
       "model": "car.glb",
@@ -37,7 +37,7 @@
       "pre_samples": 15
     },
     {
-      "track_id": 2,
+      "track_id": 21,
       "class": "Two_Wheeler",
       "label": "機車",
       "model": "moto.glb",

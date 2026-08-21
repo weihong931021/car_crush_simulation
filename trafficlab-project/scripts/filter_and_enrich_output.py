@@ -132,7 +132,8 @@ def compute_velocity_mps(position_m, previous_state, frame_index, fps):
     ]
 
 
-def enrich_object(obj, prior_map, px_per_meter, frame_index, fps, previous_state):
+def enrich_object(obj, prior_map, px_per_meter, frame_index, fps, previous_state,
+                  accept_bbox_fallback=False):
     enriched = copy.deepcopy(obj)
     class_name = str(enriched.get("class", "")).strip().lower()
     dims = prior_map.get(class_name)
@@ -154,10 +155,22 @@ def enrich_object(obj, prior_map, px_per_meter, frame_index, fps, previous_state
         )
     else:
         enriched["collider_sat_floor_box"] = None
-    return sanitize_spatial_record_for_export(enriched)
+    sanitized = sanitize_spatial_record_for_export(enriched)
+    # bbox 備援定位：authority 政策只信 status='ok'（下游測試凍結），所以備援座標
+    # 走 bbox_fallback_sat_coords 旁路欄位、在 sanitize **之後**注入 position_m
+    # （position_m 在 _SPATIAL_DERIVED_FIELDS 清單裡，先注入會被 sanitize 清掉）。
+    # 沒帶旗標就照舊全 null——精度代價（bbox 中心不是地面接觸點）必須明示才吞。
+    if (accept_bbox_fallback and sanitized.get("status") == "bbox_fallback"
+            and sanitized.get("position_m") is None):
+        pos = compute_position_m(obj.get("bbox_fallback_sat_coords"), px_per_meter)
+        if pos is not None:
+            sanitized["position_m"] = pos
+            sanitized["position_source"] = "bbox_homography"
+    return sanitized
 
 
-def filter_and_enrich(data, selected_ids, px_per_meter, prior_map):
+def filter_and_enrich(data, selected_ids, px_per_meter, prior_map,
+                      accept_bbox_fallback=False):
     output = copy.deepcopy(data)
     output.setdefault("meta", {})
     output["meta"]["px_per_meter"] = px_per_meter
@@ -166,6 +179,7 @@ def filter_and_enrich(data, selected_ids, px_per_meter, prior_map):
     fps = output.get("meta", {}).get("fps")
     previous_states = {}
     authority_counts = {}
+    n_bbox_positions = [0]          # 用 list 讓內層迴圈能改（closure 寫入）
 
     def count(status, reason):
         reasons = authority_counts.setdefault(status, {})
@@ -200,7 +214,10 @@ def filter_and_enrich(data, selected_ids, px_per_meter, prior_map):
                 frame_index,
                 fps,
                 previous_states.get(track_id),
+                accept_bbox_fallback=accept_bbox_fallback,
             )
+            if enriched.get("position_source") == "bbox_homography":
+                n_bbox_positions[0] += 1
             if enriched["position_m"] is None:
                 stats["missing_position_count"] += 1
             if enriched["position_m"] is not None and is_real:
@@ -236,6 +253,9 @@ def filter_and_enrich(data, selected_ids, px_per_meter, prior_map):
         status: {reason: reasons[reason] for reason in sorted(reasons)}
         for status, reasons in sorted(authority_counts.items())
     }
+    # authority 的統計會把 bbox_fallback 記成 rejected（政策不認識它，這是設計），
+    # 所以備援位置有幾筆要另立一行，否則報表看起來像「大量拒絕」其實位置都有
+    output["bbox_fallback_position_count"] = n_bbox_positions[0]
     return output
 
 
@@ -304,6 +324,13 @@ def parse_args():
         "--prior-set",
         help="Optional prior set name inside prior_dimensions.json, e.g. measurements_visdrone",
     )
+    parser.add_argument(
+        "--accept-bbox-fallback",
+        action="store_true",
+        help="採用 eval_haware_replay --bbox-fallback 產生的 bbox+單應性備援位置"
+             "（status='bbox_fallback'）。精度較 PifPaf 定位差：bbox 參考點不是地面"
+             "接觸點，有系統性偏移。不帶此旗標時那些記錄的 position_m 維持 null。",
+    )
     return parser.parse_args()
 
 
@@ -322,7 +349,11 @@ def main():
     prior_map = load_prior_map(args.prior_dimensions, args.prior_set)
     output_path = resolve_output_path(args.output_path)
 
-    filtered = filter_and_enrich(input_data, selected_ids, px_per_meter, prior_map)
+    filtered = filter_and_enrich(input_data, selected_ids, px_per_meter, prior_map,
+                                 accept_bbox_fallback=args.accept_bbox_fallback)
+    if filtered.get("bbox_fallback_position_count"):
+        print(f"bbox 備援位置採用: {filtered['bbox_fallback_position_count']} 筆"
+              f"（--accept-bbox-fallback）")
 
     # 缺位置以前是靜默的：寫出一份每格 position_m 都是 null 的檔，下游 build_scene
     # 再把它併進「collider 不存在」的訊息，使用者永遠查不到真正的原因。

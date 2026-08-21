@@ -1,9 +1,11 @@
 # 網頁化進場流程（經緯度＋影片 → 底圖確認 → 標註 → Three.js）— 設計文件
 
-日期：2026-08-16（2026-08-17 更新實作狀態）
-狀態：**① ② ③ ④ 全數實作**（`satellite_pipeline/webapp.py`，全程瀏覽器）。
-④ 的三支子行程（推論／enrich／build_scene）串接與挑車介面已驗；**真實影片端到端未跑過**
-（需要一支真的事故影片與數分鐘推論時間）。
+日期：2026-08-16（2026-08-20 更新實作狀態）
+狀態：**① ② ③ ④ 全數實作，真實影片端到端已跑通**（2026-08-20，tainan_yongkong：
+一支真實事故影片從輸入經緯度到 Three.js 播放器全程走完，四段軌跡鏈
+run_inference → eval_haware_replay → filter_and_enrich → build_scene 實跑約 15 分鐘，
+瓶頸是 PifPaf 逐格 1.5–2.5 秒）。端到端的結論與剩餘缺口見文末「④ 首次真實資料
+端到端的結果」。
 
 ## 背景
 
@@ -145,7 +147,8 @@ File 物件自動重傳**再試一次，使用者根本不用重選。
 
 ```text
 trafficlab-project/location/<code>/
-├── sat_<code>.png          ← sat_clean 優先，沒有就 sat_raw；**永遠不用 sat_genai**
+├── sat_<code>.png          ← ① 頁面「使用者當下看的那張」（前端送 S.tab 當 variant）；
+│                              沒指定時 sat_clean → sat_raw，**不會自動挑 sat_genai**
 ├── sat_meta_<code>.json    ← 已知 px/m（含變體放大倍率）、size_m、lat/lon/zoom
 ├── cctv_<code>.png         ← 影片首幀（或使用者給的截圖）
 └── footage/<影片>          ← 給 Inference 分頁
@@ -162,19 +165,32 @@ trafficlab-project/location/<code>/
 - 順手修掉 `main.py` 的 `apply_dark_theme` **無限遞迴**（2.x 分支呼叫自己而不是
   `qdarktheme.setup_theme()`）——這台裝的正是 2.x，標註 GUI 本來就開不起來
 
-### ⚠ 交給 ③ 標註的硬約束：只能對著 `sat_clean` 標
+### 交給 ③ 標註的底圖：預設忠實版，genai 要明示（2026-08-20 改）
 
-2026-08-17 另一條線用分塊相位相關量出生圖的幾何漂移（`satellite_pipeline/measure_genai_drift.py`）：
+原規則是「只能對著 `sat_clean` 標」。2026-08-20 使用者拍板改成**交付使用者在 ①
+當下看的那張**：前端把 `S.tab` 當 `variant` 送進 `/api/handoff`，後端照做並把出處
+寫進 `sat_meta_<code>.json`（`sat_variant`；genai 另寫 `geometry: rewritten_by_genai`
+與 provider/model/prompt），標註頁「衛星底圖」旁常駐顯示是哪一版。三道防呆：
+
+- **沒指定 variant 時仍不會自動挑 genai**（sat_clean → sat_raw），要用它必須明示
+- 指定了但檔案不存在→直接報錯不默默降級（默默降級正是「以為高清有進去」的失敗模式）
+- ① 頁面常駐標籤顯示「XX版・標註會用這張」，取代原本會被 apply() 清掉的一次性警告
+
+代價已量化（`satellite_pipeline/measure_genai_drift.py`，分塊相位相關）：
 
 | 變體 | 位移中位數 | 全域相關 |
 | --- | --- | --- |
-| `sat_clean`（inpaint + 銳化，不生圖） | **0.00 m** | 0.968 |
-| `sat_genai`（gemini-3.1-flash-image） | 0.20 m | 0.876 |
+| `sat_clean`（inpaint + 銳化，不生圖） | **0.00 m**（位元組可重現） | 0.968 |
+| `sat_genai`（gemini，2026-08-17 量測） | 0.20 m | 0.876 |
+| `sat_genai`（gemini，同來源同 prompt 連跑兩次） | **0.04 m／0.40 m** | 0.833–0.995 |
 | `sat_genai`（gpt-image-2） | 0.30 m | 0.746 |
 
-生圖是「重畫」不是「修圖」，路面結構會整體被搬動 0.2–0.3 m。**③ 的對應點一定要標在
-`sat_clean` 上**——標在 `sat_genai` 上等於把 0.2 m 誤差直接烙進 G-projection，之後所有
-`position_m` 都帶著它。`sat_genai` 只能當「好看的展示底圖」，不能當座標載體。
+生圖是「重畫」不是「修圖」，而且**不是確定性的**——同一張來源、同一組參數，兩次的
+位移差 10 倍，事前無從得知這次拿到哪種。這個誤差會原樣傳進 G-projection →
+`position_m` → 碰撞判定（minGap 本來就在 0.66–1.48 m 量級）。之所以仍開放：只要
+③ 的對應點**標在交付的同一張圖上**，整條鏈的座標系是自洽的，誤差表現為「相對真實
+世界的整體偏差」而非內部矛盾；使用者以觀感優先接受了這個代價（tainan_yongkong
+即用 genai 版標定，rms 6.3 px ≈ 0.22 m）。
 
 > 注意這與 `build_scene.pick_sat` 的偏好相反（它以 `sat_genai.png` 為第一優先）。合成軌跡
 > 路徑影響僅止於視覺（車會偏離畫上去的車道線 0.2 m）；但真實影片的標註路徑不可妥協。
@@ -192,9 +208,9 @@ trafficlab-project/location/<code>/
 
 不重寫任何軌跡邏輯，只串既有腳本。三個踩過才知道的環境事實：
 
-- **三支腳本要三個不同的直譯器**：推論要 ultralytics + supervision（只有
-  `littering_prediction/venv` 有）、enrich 要 numpy + trafficlab（`.venv-pifpaf`）、
-  build_scene 純標準庫。`pick_python()` 逐一探測。
+- **四支腳本要三個不同的直譯器**：推論要 ultralytics + supervision（只有
+  `littering_prediction/venv` 有）、eval_haware 與 enrich 要 openpifpaf／numpy +
+  trafficlab（`.venv-pifpaf`）、build_scene 純標準庫。`pick_python()` 逐一探測。
 - **repo 內 7 組 inference config 的權重全部指向不存在的檔案**，而 `run_inference.py`
   沒有 `--weights` 覆寫。改用 `--config-path` 自帶一份（`make_inference_config()`
   複製第一組、只換權重），不去動隊友凍結中的 `inference_config.yaml`。
@@ -244,7 +260,8 @@ run_inference → eval_haware_replay → filter_and_enrich → build_scene
   的區間（實測 0–9 → 3–8）
 
 尚未處理（記錄在案）：`center_box + z_cam=0` 把 bbox 中心當地面接觸點（需要相機高度才能
-正解）、per-code 併發鎖、job 狀態只在記憶體、`/api/solve` 的請求競態。
+正解；bbox 備援定位同樣受此偏移影響）、per-code 併發鎖、`/api/solve` 的請求競態。
+~~job 狀態只在記憶體~~ ✅ 2026-08-20 修掉：server 重啟後從磁碟產物回退重建狀態。
 
 ### 標註看起來糊 ≠ 底圖沒銳化（2026-08-20）
 
@@ -285,6 +302,38 @@ Retina 上再被放大回 1900 裝置像素。而且底層 Google 影像本來�
 量法的教訓：先前用「把 2x 縮回原尺寸再比」得出 208 vs 114，看起來 2x 有效——
 那個量法量的是「銳化有沒有發生」，不是「使用者實際看到的畫面」。要比就得在**實際顯示
 尺寸**上比。合成圖也不能當依據（人工邊緣特性不同，結果會反過來），必須用真實底圖。
+
+## ④ 首次真實資料端到端的結果（2026-08-20，tainan_yongkong）
+
+一支真實事故影片（1280×720、360 幀、汽車撞機車）從 ① 跑到播放器。過程中修掉三個
+阻斷點、加了一條備援路徑，全部含回歸測試：
+
+- **`--method` 缺參**：`eval_haware_replay.py` 的 `--method` 是 `required=True`，
+  `haware_cmd()` 沒傳→argparse exit 2（網頁上只看得到「returncode 2」）。補
+  `geometric`——只有它會讀 `--yolo-boxes-json`（track id 橋接檔），選 `crop` 該參數
+  被整個忽略
+- **機車被類別過濾丟光**：`--yolo-boxes-class` 原是精確比對單一類別（預設 `car`），
+  VisDrone 的機車叫 `motor`——實測 car 697 框／motor 143 框／van 13 框，舊行為只載
+  697。改逗號分隔多類別（排除 pedestrian/people），載入 853 框
+- **輸出 `class` 寫死 `'car'`**：挑車介面的類別欄一直是死值。改由 tracked_id 的
+  **多數決**偵測類別帶出（單幀類別會跳動），挑車選單據此把偵測車種排第一並標「（偵測）」
+- **機車的位置走 bbox 備援定位**：PifPaf 的 Apollo-24 是**汽車**關鍵點模型，機車
+  偵測不到——實測 7 條機車 track 與 PifPaf 框的最佳 IoU **全部 0.000**（22–52 px 小
+  目標，調門檻無效）。`eval_haware_replay --bbox-fallback` 對沒被認領的 YOLO track
+  用 bbox 參考點過單應性取位置，座標放**旁路欄位 `bbox_fallback_sat_coords`**
+  （`status='bbox_fallback'`；`sat_coords` 權威欄位不寫——localization authority 的
+  政策被測試凍結為只信 `status='ok'`，順著架構走）。下游
+  `filter_and_enrich --accept-bbox-fallback` 明示才在 sanitize 之後注入 `position_m`
+  並標 `position_source`。挑車介面新增「定位」欄（PifPaf／bbox／混合）與「移動」欄
+  （頭尾淨位移——**停放車的品質分數反而最高**，360 幀不動的 track 1 可用率 100%，
+  這欄就是防這個陷阱）
+
+**端到端跑完的誠實結論**：整合鏈全線運作（含出界閘門、解析度一致性檢查、碰撞幀
+限縮），但以真實資料模擬的結果是「未發生碰撞、最近距離 7.50 m」——所有機車 track
+淨位移僅 0.2–0.7 m（路口等紅燈那排），**真正撞車那台機車追蹤器沒有抓穩**。這屬於
+偵測／追蹤品質（隊友主導的凍結範圍）；整合端的接口已就緒，track 一穩位置就會自己
+流進來。對外 demo 用合成軌跡場景包（`tools/place_synth_trajectory.py` 擺位到真實
+底圖，見 421da6a）。
 
 ## satellite_pipeline 需先補的缺口
 

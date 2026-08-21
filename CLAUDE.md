@@ -6,7 +6,7 @@
 
 ## 當前工作方向（2026-08-20 起）
 
-**整條進場流程都在瀏覽器裡**（`satellite_pipeline/webapp.py`），前面的成果全部接進去了。
+**整條進場流程都在瀏覽器裡**（`workbench/webapp.py`），前面的成果全部接進去了。
 spec：`docs/specs/2026-08-16-web-onboarding-flow-design.md`。
 
 ```text
@@ -24,10 +24,10 @@ spec：`docs/specs/2026-08-16-web-onboarding-flow-design.md`。
    本地 vendor——**這就是最終呈現，渲染全在網頁**
 
 > **2026-08-05：全面轉 Three.js 網頁渲染，Blender 工具鏈已移除。** 車輛 GLB 是 committed
-> 資產（`threejs/models/`），執行期只靠 `GLTFLoader` + `registry.json`，不需要 Blender。
+> 資產（`player/models/`），執行期只靠 `GLTFLoader` + `registry.json`，不需要 Blender。
 > 原「第二階段 Blender 出版渲染」已從 roadmap 移除；出版級畫面也由 Three.js 負責。
 
-### 碰撞物理（已模組化在 `threejs/lib/`，不要重新推導）
+### 碰撞物理（已模組化在 `player/lib/`，不要重新推導）
 
 spec：`docs/specs/2026-07-20-collision-simulation-design.md`。前向模擬 + OBB SAT 偵測 +
 衝量（含切向摩擦、真實接觸點、完整力臂 `(r×J)_y = r_z·J_x − r_x·J_z`、`I=mL²/12`）。
@@ -35,15 +35,15 @@ spec：`docs/specs/2026-07-20-collision-simulation-design.md`。前向模擬 + O
 - `path.js` 弧長參數化／速度剖面／軌跡淨化、`obb.js` SAT、`simulate.js` 迭代接觸解算、
   `solve.js` 安全速度區間（交會事故無單一門檻，回傳 slowerK/fasterK 區間）
 - 座標約定：`heading = atan2(dx, dz)`、前向 `(sin h, cos h)`、rotation.y 右手系
-- 測試：`node --test threejs/lib/tests/*.test.js`（目錄形式會失敗，必用 glob）
+- 測試：`node --test player/lib/tests/*.test.js`（目錄形式會失敗，必用 glob）
 
 ### 驗證五件套（改完務必全跑）
 
 ```bash
-node --test threejs/lib/tests/*.test.js                     # 期望 fail 0（todo 3 是已知缺口）
+node --test player/lib/tests/*.test.js                      # 期望 fail 0（todo 3 是已知缺口）
 python3 -m unittest discover -s tools/tests                  # 期望 OK（46 測，已無 expected failure）
-python3 -m unittest discover -s satellite_pipeline/tests     # 網頁流程/標註/整合/底圖（105 測）
-(cd trafficlab-project && .venv-pifpaf/bin/python -m unittest discover -s tests)  # haware 手性回歸
+python3 -m unittest discover -s workbench/tests              # 網頁流程/標註/整合/底圖（111 測）
+(cd trafficlab-project && .venv-pifpaf/bin/python -m unittest discover -s tests)  # haware 手性回歸（271 測）
 node tools/verify_scenes.mjs                                 # 全場景 headless 冒煙，期望全過
 ```
 
@@ -104,7 +104,7 @@ sun 3.2/shadow 4096）。ACES+IBL 電影感已試過並否決（revert d917786�
 
 **模型坑**：`MotoCollider`/`CarCollider` 是整個模型層級的**父節點**（砍子樹＝全滅，
 只能拔 mesh 引用或隱藏）；moto.glb 另帶零厚度地面圓片 `Object_4`（父節點 `floor_0`）。
-播放器由 `threejs/models/registry.json` 的 per-model `hide` 清單隱藏這類參考幾何，比對是
+播放器由 `player/models/registry.json` 的 per-model `hide` 清單隱藏這類參考幾何，比對是
 **精確節點名稱、不是前綴**——Sketchfab 的 `Object_N` 流水號下前綴會誤殺真零件
 （`Object_4` 曾連 `Object_41/43/44/46/48` 一起隱藏，機車缺件）。要隱藏整棵子樹就列父節點名。
 
@@ -113,7 +113,7 @@ sun 3.2/shadow 4096）。ACES+IBL 電影感已試過並否決（revert d917786�
 ```bash
 # 0.（選配，建議）地面圖去車＋銳化。**等比整數倍放大，座標仍然有效**；
 #    build_scene 會自動優先採用 sat_<code>_hd.png 並把 px_per_meter 乘上縮放比
-python3 satellite_pipeline/image_enhance.py \
+python3 workbench/image_enhance.py \
   --input  trafficlab-project/location/<code>/sat_<code>.png \
   --output trafficlab-project/location/<code>/sat_<code>_hd.png --upscale 2
 
@@ -129,12 +129,12 @@ python3 tools/build_scene.py --code <code> --trajectory T.json \
   --px-per-meter <trajectory.meta.px_per_meter> --size-m <sat_w/ppm> <sat_h/ppm> \
   --collider <id>:Car --collider <id>:Two_Wheeler --source-collision <frame>
 
-# 3. 播放器零改碼：threejs/index.html?scene=<code>；跑 node tools/verify_scenes.mjs 驗收
+# 3. 播放器零改碼：player/index.html?scene=<code>；跑 node tools/verify_scenes.mjs 驗收
 ```
 
 只剩兩個必要人工判斷：**挑兩台 collider 的 track ID**、**標碰撞幀**（追蹤器碰前凍結，
 無法自動判定）。可重現性**只有 `trajectory.json` 那半成立**（實測 sha256 位元組相同）。
-`ground.png` 不可重現：`satellite_pipeline/output/` 在 gitignore、來源圖從未入庫，且
+`ground.png` 不可重現：`workbench/output/` 在 gitignore、來源圖從未入庫，且
 2026-08-20 已用 `size_m 35` 重抓覆蓋（舊的 25 m 那張已不存在）。要保住這條保證只有兩條路：
 把 `sat_raw.png` + `meta.json` 入庫，或只承諾 trajectory 那半。
 
@@ -149,7 +149,7 @@ python3 tools/build_scene.py --code <code> --trajectory T.json \
 ### 底圖網頁工作台（2026-08-16，spec `docs/specs/2026-08-16-web-onboarding-flow-design.md`）
 
 ```bash
-python3 satellite_pipeline/webapp.py     # → http://127.0.0.1:8765/
+python3 workbench/webapp.py     # → http://127.0.0.1:8765/
 ```
 
 網頁化進場流程的 **①②③**（輸入經緯度 → 底圖確認鎖定 → 對應點標註產出 G_projection），
@@ -182,6 +182,18 @@ numpy／cv2／PIL（`detail_score` 用 cv2、`is_blank` 用 numpy）。三條必
   `from trafficlab...` import，但那個 repo 沒裝成套件，不設就 ModuleNotFoundError。
   三支腳本還要三個不同直譯器（推論的 ultralytics 只有 `littering_prediction/venv` 有），
   且 repo 內 7 組 inference config 權重全部不存在 → 用 `--config-path` 自帶一份
+- **機車的位置走 bbox 備援定位**（2026-08-20）：PifPaf 的 Apollo-24 是**汽車**關鍵點
+  模型，機車偵測不到——實測全片 7 條機車 track 與 PifPaf 框的最佳 IoU **全部 0.000**
+  （不是門檻問題，調 `--iou-threshold` 沒用）。沒被認領的 YOLO track 由
+  `eval_haware_replay --bbox-fallback` 用 bbox 參考點過單應性取位置，座標放
+  **旁路欄位 `bbox_fallback_sat_coords`**、`status='bbox_fallback'`——不寫 `sat_coords`，
+  因為 authority 政策被 `test_localization_authority` 凍結為只信 `status='ok'`，
+  這是順著架構而不是繞過它。下游 `filter_and_enrich --accept-bbox-fallback` 明示才在
+  sanitize **之後**注入 `position_m`（`position_m` 在 `_SPATIAL_DERIVED_FIELDS` 清單裡，
+  先注入會被清掉）並標 `position_source`。挑車介面的「定位」欄標 PifPaf／bbox／混合。
+  已知代價：bbox 參考點不是地面接觸點，有系統性偏移（正解需相機高度，todo #2）。
+  另注意「移動」欄——**停放車的品質分數反而最高**（track 1 移動 0.0m 卻 100% 可用率），
+  挑當事車先看移動再看可用率
 - **`px_per_meter` 一路帶到底**：`sat_meta_<code>.json` 由 ② 的 Web Mercator 解析值寫入，
   ③ 直接採用；`DistStage` 也加了「採用已知比例尺」讀同一份，免去人工量兩點
 - **`locked: true` 之後 `size_m`／`px_per_meter` 就是座標系**，要改只能重新擷取（整組覆蓋）
@@ -197,7 +209,7 @@ numpy／cv2／PIL（`detail_score` 用 cv2、`is_blank` 用 numpy）。三條必
   同一張 sat_raw、同 prompt 連跑兩次得到 **0.04 m／22%** 與 **0.40 m／56%**（>10px 區塊佔比）
   ——不只有誤差，而且**每次都不一樣**，事前無從得知。這個誤差會原樣傳進
   G_projection → `position_m` → 碰撞判定（minGap 本來就在 0.66–1.48 m 量級）。
-  量法：`satellite_pipeline/measure_genai_drift.py`（分塊相位相關）
+  量法：`workbench/measure_genai_drift.py`（分塊相位相關）
 - `meta.decar_status`（ok／no_vehicles／no_key／failed／**skipped**）讓去車降級不再靜默——注意 `skipped` 是使用者主動不去車，**不是降級**，前端不該警示；Gemini 偵測有
   隨機性（同圖三次 5／13／4 台），鎖定後才出現的「去車」按鈕可重複按
 - **zoom 只降不升會白白損失一半解析度**：使用者為了看大範圍按「降 zoom 重抓」後，最終選的
@@ -217,8 +229,8 @@ numpy／cv2／PIL（`detail_score` 用 cv2、`is_blank` 用 numpy）。三條必
 `--genai-provider` 預設 `gemini`（實測較忠於原圖）；選 `openai` 時成本（1280×1280 實測）
 low $0.033／medium $0.089／high 約 $0.28 一張，輸入那份約 $0.026 不隨 quality 變。
 
-`--sat-dir`（satellite_pipeline 新擷取的圖）只適用於**在衛星座標系合成的軌跡**
-（tainan_yongkang），真實影片用它會錯位——satellite_pipeline 的定位是合成場景的地面來源，
+`--sat-dir`（workbench 新擷取的圖）只適用於**在衛星座標系合成的軌跡**
+（tainan_yongkang），真實影片用它會錯位——workbench 的定位是合成場景的地面來源，
 不是真實影片的地面來源。
 
 ### 路徑產生器 haware（2026-07-28 起由本 repo 接管，不再是隊友專屬）
@@ -302,7 +314,7 @@ vs kee-cc 1.29×），而且有**獨立的 homography 度量缺陷**——用 h=
   test1 的 ground.png**。taipei-cm 同樣吻合（1190×1258 @27.85 → 42.72×45.16m，
   軌跡 x 9.0–33.2、y 15.7–43.1 完全落在範圍內）。
 
-  **陷阱**：`--sat-dir`（satellite_pipeline 新擷取的 Google 圖）是**另一張不同取景的圖**，
+  **陷阱**：`--sat-dir`（workbench 新擷取的 Google 圖）是**另一張不同取景的圖**，
   對真實軌跡會錯位——它只適用於在衛星座標系合成的軌跡（tainan_yongkang 就是這樣來的）。
 
   ✅ **2026-07-28 已自動化**：真實影片改用
@@ -330,8 +342,8 @@ vs kee-cc 1.29×），而且有**獨立的 homography 度量缺陷**——用 h=
   `muContact=0.5`，simulate 也沒傳）。build_scene 仍照樣把這組沒人讀的值寫進 scene.json。
   `frames.anim_*` 同理：被驗證但播放器不讀（時間軸由 simulate 輸出決定，`animStart` 由 `main.js:902` 從較晚出現那台的 `startT`
   往前推 `LEAD_IN_SEC=2` 秒算出，不讀 scene.json），`--anim` 預設 1,32,89 是死值
-- **部署約束**：`scene-loader.js` 用 `../scenes/` 相對路徑 → 站根必須同時含 `threejs/`
-  與 `scenes/` 兩個同層目錄，只部署 `threejs/` 會全數 404
+- **部署約束**：`scene-loader.js` 用 `../scenes/` 相對路徑 → 站根必須同時含 `player/`
+  與 `scenes/` 兩個同層目錄，只部署 `player/` 會全數 404
 - **HD 底圖的幾何漂移已量化**（2026-08-17，分塊相位相關，同一張 sat_raw 同 prompt）：
 
   | 路徑 | 位移中位數 | >10px | 全域相關 |
@@ -350,7 +362,7 @@ vs kee-cc 1.29×），而且有**獨立的 homography 度量缺陷**——用 h=
   `sat_genai.png` 與 `sat_raw.png` 必然同尺寸共用 px_per_meter；`genai_enhance()` 也回寫 meta。
   **仍未解**：兩家都是「重畫」不是「修圖」，`--input` 座標關鍵路徑照舊禁用 `--genai`。
   完整證據、量測方法與可重跑指令見 `docs/decisions/2026-08-17-satellite-genai-provider-choice.md`；
-  重量請用 `python3 satellite_pipeline/measure_genai_drift.py --code <code>`（比較時固定 `--tile`）。
+  重量請用 `python3 workbench/measure_genai_drift.py --code <code>`（比較時固定 `--tile`）。
   ⚠ 上表那句「Gemini 比 OpenAI 忠於原圖」**是 prompt 造成的，不是模型差異**——換成
   faithful prompt 後 gpt-image-2 反而最好（0.09 m / 相關 0.952）。見下一項。
 - **生圖 prompt 兩套，預設 `sharp`（2026-08-20 使用者看過對照後拍板，觀感決定）**：
@@ -394,7 +406,7 @@ vs kee-cc 1.29×），而且有**獨立的 homography 度量缺陷**——用 h=
 - **車輛尺寸**：縮放目標讀 `scene.json` 的 `length_m`，用 8 角點投影到車頭軸精確量測後
   scale-to-length（`measureBodyExtentAlongAxis`）——不靠估算值
 - **Heading drift**：不要插值 heading 欄位，要從 segment 的 `(dx, dz)` 動態算 `atan2(dx, dz)`
-- **換模型**：直接放新 GLB 到 `threejs/models/`、在 `registry.json` 補一筆（file/flip/hide），
+- **換模型**：直接放新 GLB 到 `player/models/`、在 `registry.json` 補一筆（file/flip/hide），
   flip 在瀏覽器量前後輪中心連線重算。無需任何離線工具鏈
 
 ## TrafficLab 必記的坑
@@ -476,14 +488,22 @@ Kalman 關鍵參數：`kalman_process_noise=0.1`、`kalman_measure_noise=2.0`、
 進場流程 ①②③④ 全數實作完成（PR #2 已併入 main）。**但真實影片端到端還沒跑過**——
 ④ 的四段串接、直譯器探測、指令組裝都驗過了，YOLO 與 PifPaf 沒有實際跑滿一支事故影片。
 
+~~拿一支真事故影片跑完 ④~~ ✅ **2026-08-20 端到端跑通**（tainan_yongkong）：
+PifPaf 實測約 2 秒/幀（360 幀 ≈ 12 分鐘）；track id 橋接對得上（汽車 100% 配對），
+但**機車全靠 bbox 備援定位**（PifPaf 是汽車模型，機車 IoU 全 0.000）；品質欄位有
+鑑別力但要配「移動」欄看（停放車分數反而最高）。真實資料模擬「未碰撞、最近 7.5 m」
+——撞車機車追蹤器沒抓穩，屬偵測層品質。
+
 接下來（優先序）：
 
-1. **拿一支真事故影片跑完 ④**：要確認的是 PifPaf 實際耗時（文件說 1.5–2.5 秒/幀）、
-   `--yolo-boxes-json` 的 track id 橋接是否真的對得上、挑車畫面的品質欄位是否有鑑別力
+1. **撞車機車的穩定 track**（隊友側，我們只能提需求）：PifPaf 換看得到機車的關鍵點
+   模型，或 ByteTrack 對 22–52px 小目標的參數。整合端接口已就緒（bbox 備援 +
+   `--accept-bbox-fallback`），track 一穩位置就會自己流進來
 2. **`center_box + z_cam=0` 的座標模型**（Codex 審查指出）：推論取 bbox 中心當地面接觸點，
-   但單應性是在路面上標的——系統性偏移，正解需要相機高度，不是改參數就好
-3. 靜態部署（注意 `threejs/` 與 `scenes/` 同層的路徑約束；Pages 未啟用）
-4. 網頁流程的健壯性：per-code 併發鎖、job 狀態只在記憶體（server 重啟就沒了）、
-   `/api/solve` 的請求競態
+   但單應性是在路面上標的——系統性偏移，正解需要相機高度，不是改參數就好；
+   **bbox 備援定位同樣受此偏移影響**
+3. 靜態部署（注意 `player/` 與 `scenes/` 同層的路徑約束；Pages 未啟用）
+4. 網頁流程的健壯性：per-code 併發鎖、`/api/solve` 的請求競態
+   （~~job 狀態只在記憶體~~ ✅ 已改磁碟回退）
 
 凍結（隊友主導）：TrafficLab inference config、Kalman、Motorcycle 濾波器。

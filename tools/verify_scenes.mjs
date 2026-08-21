@@ -8,7 +8,7 @@
 //   2. 自行 spawn `python3 -m http.server 8946`（cwd = repo 根，8946 避免撞埠），
 //      無論成敗都在 finally 必殺
 //   3. 每場景以 Playwright chromium headless 開
-//      http://127.0.0.1:8946/threejs/index.html?scene=<code>，
+//      http://127.0.0.1:8946/player/index.html?scene=<code>，
 //      等 networkidle + 2.5s 後斷言：
 //        - 零 console error（含 pageerror 未捕捉例外）
 //        - 零外部請求（非 127.0.0.1 且非 blob: 即算外部——three.js 是本地 vendor，
@@ -84,7 +84,7 @@ async function waitForServer(timeoutMs = 10000) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     try {
-      const res = await fetch(`${BASE}/threejs/index.html`);
+      const res = await fetch(`${BASE}/player/index.html`);
       if (res.ok) return;
     } catch {
       // server 還沒起來，繼續等
@@ -114,7 +114,7 @@ async function verifyScene(browser, code) {
       if (isExternal(req.url())) externalRequests.push(req.url());
     });
 
-    await page.goto(`${BASE}/threejs/index.html?scene=${code}`,
+    await page.goto(`${BASE}/player/index.html?scene=${code}`,
                     { waitUntil: 'networkidle', timeout: GOTO_TIMEOUT_MS });
     await page.waitForTimeout(SETTLE_MS);
 

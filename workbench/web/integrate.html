@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>整合重建</title>
+<style>
+  :root{
+    --bg:#F4F6F8; --panel:#FFFFFF; --line:#DDE3E9; --line2:#EDF1F4;
+    --ink:#1A2430; --dim:#69798A; --teal:#0E8C7E; --teal-soft:#E4F5F2;
+    --tape:#C88A00; --bad:#C3402A; --bad-soft:#FDECE8; --ok:#0E7A52; --ok-soft:#E6F6EF;
+    --mono:ui-monospace,"SF Mono",Menlo,monospace;
+    --sans:-apple-system,"PingFang TC","Noto Sans TC",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans)}
+  button{font:600 13.5px var(--sans);cursor:pointer;border:1px solid var(--line);border-radius:7px;
+    background:var(--panel);color:var(--ink);padding:8px 14px}
+  button:hover:not(:disabled){border-color:var(--teal);color:var(--teal)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--teal);border-color:var(--teal);color:#fff}
+  button.primary:hover:not(:disabled){background:#0B7A6D;color:#fff}
+  button.cta{background:var(--tape);border-color:var(--tape);color:#fff}
+  button.cta:hover:not(:disabled){background:#B07800;color:#fff}
+  input:focus-visible,button:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
+
+  header{display:flex;align-items:center;gap:16px;padding:13px 22px;background:var(--panel);
+    border-bottom:1px solid var(--line)}
+  header h1{margin:0;font-size:15px;font-weight:600}
+  header .code{font:600 13px var(--mono);color:var(--teal);background:var(--teal-soft);
+    padding:3px 9px;border-radius:5px}
+  header .spacer{flex:1}
+
+  main{max-width:1080px;margin:0 auto;padding:22px}
+  .step{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:18px 20px;margin-bottom:14px}
+  .step[data-state="idle"]{opacity:.5}
+  .step h2{margin:0 0 4px;font-size:14.5px;font-weight:600;display:flex;align-items:center;gap:9px}
+  .step h2 .n{display:grid;place-items:center;width:21px;height:21px;border-radius:50%;
+    background:var(--line2);color:var(--dim);font:600 11.5px var(--mono)}
+  .step[data-state="active"] h2 .n{background:var(--teal);color:#fff}
+  .step[data-state="done"] h2 .n{background:var(--ok);color:#fff}
+  .step p{margin:4px 0 12px;font-size:12.5px;color:var(--dim)}
+
+  .log{font:11.5px/1.6 var(--mono);color:var(--dim);background:#FAFBFC;border:1px solid var(--line2);
+    border-radius:7px;padding:9px 11px;max-height:150px;overflow-y:auto;white-space:pre-wrap;
+    margin-top:10px}
+  .log[hidden]{display:none}
+
+  table{width:100%;border-collapse:collapse;font:12.5px var(--mono)}
+  th{text-align:left;font:600 10.5px var(--sans);letter-spacing:.08em;color:var(--dim);
+    text-transform:uppercase;padding:0 9px 6px}
+  td{padding:6px 9px;border-top:1px solid var(--line2)}
+  tr.picked td{background:var(--teal-soft)}
+  tr.weak td{color:var(--dim)}
+  .badge{display:inline-block;padding:1px 7px;border-radius:20px;font:600 10.5px var(--sans)}
+  .badge.ok{background:var(--ok-soft);color:var(--ok)}
+  .badge.weak{background:var(--bad-soft);color:var(--bad)}
+  select{font:12px var(--mono);padding:3px 6px;border:1px solid var(--line);border-radius:5px;
+    background:var(--panel);color:var(--ink)}
+
+  .preview{position:relative;background:#0F1417;border-radius:8px;overflow:hidden;
+    aspect-ratio:16/9;max-height:340px;display:grid;place-items:center;margin-bottom:10px}
+  .preview img{max-width:100%;max-height:100%;display:none}
+  .preview img.on{display:block}
+  .preview .ph{color:#5A6873;font-size:13px}
+  .frame{display:flex;align-items:center;gap:10px;margin-top:6px}
+  .frame button{padding:6px 12px;font:600 13px var(--mono)}
+  .frame input[type=range]{flex:1;accent-color:var(--tape)}
+  .frame .num{font:600 16px var(--mono);min-width:7ch;text-align:right}
+  .alert{margin-top:10px;padding:9px 12px;border-radius:7px;font-size:12.5px;line-height:1.55}
+  .alert.bad{background:var(--bad-soft);color:var(--bad);border:1px solid rgba(195,64,42,.28)}
+  .alert.ok{background:var(--ok-soft);color:var(--ok);border:1px solid rgba(14,122,82,.28)}
+  .alert code{font:11.5px var(--mono);background:rgba(26,36,48,.07);padding:1px 4px;border-radius:3px}
+  .actions{display:flex;gap:9px;margin-top:12px;align-items:center}
+</style>
+</head>
+<body>
+<header>
+  <h1>整合重建</h1><span class="code" id="code">—</span>
+  <span class="spacer"></span>
+  <button id="back">← 回標註</button>
+</header>
+
+<main>
+  <section class="step" id="s1" data-state="active">
+    <h2><span class="n">1</span>車輛偵測與軌跡</h2>
+    <p>用 trafficlab 既有的推論流程跑整支影片，找出所有車輛的軌跡。這步最花時間。</p>
+    <div class="actions"><button id="run" class="primary">開始偵測</button>
+      <span id="runInfo" style="font-size:12.5px;color:var(--dim)"></span></div>
+    <div class="log" id="log" hidden></div>
+    <div id="err1"></div>
+  </section>
+
+  <section class="step" id="s2" data-state="idle">
+    <h2><span class="n">2</span>挑兩台當事車</h2>
+    <p>選出事故中的兩台車。「移動」是整段軌跡的頭尾直線距離——<strong>停放車的品質分數反而最高</strong>（不動、輪子清楚），別被可用率騙了。「定位」標 bbox 的是機車這類 PifPaf 看不到的車，位置由 YOLO 框過單應性取得，可以挑，但精度較差（有系統性偏移）。</p>
+    <div id="tracks"></div>
+  </section>
+
+  <section class="step" id="s3" data-state="idle">
+    <h2><span class="n">3</span>標碰撞幀</h2>
+    <p>追蹤器在碰撞前約 0.5 秒會凍結，這一幀沒辦法自動判定，需要你指定。</p>
+    <div class="preview"><img id="shot" alt="影片畫面"><div class="ph" id="ph">跑完偵測後可預覽</div></div>
+    <div class="frame">
+      <button id="prev" disabled>◀</button>
+      <input id="frame" type="range" min="0" max="100" value="0" disabled>
+      <button id="next" disabled>▶</button>
+      <span class="num" id="frameNum">—</span>
+    </div>
+    <p style="margin-top:8px">左右鍵或 ◀ ▶ 可逐格移動；滑桿範圍已限縮在兩台當事車同時在場的區間。</p>
+  </section>
+
+  <section class="step" id="s4" data-state="idle">
+    <h2><span class="n">4</span>產生場景包</h2>
+    <p>套用軌跡淨化與碰撞模擬，輸出可在瀏覽器播放的 3D 重建。</p>
+    <div class="actions"><button id="build" class="cta" disabled>產生並開啟播放器 →</button></div>
+    <div id="err4"></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const code = new URLSearchParams(location.search).get("code");
+const G = { tracks: [], picked: {}, frameCount: 0, fps: null, polling: null };
+
+$("code").textContent = code || "—";
+$("back").onclick = () => location.href = `/annotate?code=${encodeURIComponent(code)}`;
+
+const setState = (id, st) => $(id).dataset.state = st;
+const alert_ = (id, kind, html) =>
+  $(id).innerHTML = html ? `<div class="alert ${kind}">${html}</div>` : "";
+
+async function api(path, body){
+  const r = await fetch(path, body
+    ? { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) }
+    : {});
+  const j = await r.json();
+  if(!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+/* ---------- 1. 偵測 ---------- */
+$("run").onclick = async () => {
+  $("run").disabled = true; alert_("err1", "", "");
+  try{
+    const r = await api("/api/integrate/start", { code });
+    $("runInfo").textContent = `${r.video}・模型 ${r.weights}`;
+    $("log").hidden = false;
+    poll();
+  }catch(e){ alert_("err1", "bad", e.message); $("run").disabled = false; }
+};
+
+function poll(){
+  clearInterval(G.polling);
+  G.polling = setInterval(async () => {
+    try{
+      const j = await api(`/api/integrate/status/${encodeURIComponent(code)}`);
+      $("log").textContent = (j.log || []).join("\n");
+      $("log").scrollTop = $("log").scrollHeight;
+      if(j.phase === "localize")
+        $("runInfo").textContent = "關鍵點定位中（PifPaf，逐格約 1.5–2.5 秒）…";
+      if(j.phase === "failed"){
+        clearInterval(G.polling);
+        alert_("err1", "bad", j.error || "偵測失敗，詳見上方記錄");
+        $("run").disabled = false;
+      }else if(j.phase === "picking" || j.phase === "building" || j.phase === "done"){
+        clearInterval(G.polling);
+        setState("s1", "done");
+        loadTracks();
+      }
+    }catch(e){ clearInterval(G.polling); alert_("err1", "bad", e.message); }
+  }, 1500);
+}
+
+/* ---------- 2. 挑車 ---------- */
+async function loadTracks(){
+  const j = await api(`/api/integrate/tracks/${encodeURIComponent(code)}`);
+  G.tracks = j.tracks; G.frameCount = j.frame_count || 0; G.fps = j.fps;
+  setState("s2", "active");
+  renderTracks();
+
+  const f = $("frame");
+  f.max = Math.max(0, G.frameCount - 1); f.disabled = false;
+  $("prev").disabled = $("next").disabled = false;
+  f.value = Math.floor((G.frameCount - 1) / 2);
+  setState("s3", "active");
+  showFrame();
+}
+
+function renderTracks(){
+  if(!G.tracks.length){
+    $("tracks").innerHTML = `<div class="alert bad">偵測沒有找到任何有位置的車輛軌跡。`
+      + `常見原因是影片太短、角度太斜，或標註的對應點不準。</div>`;
+    return;
+  }
+  $("tracks").innerHTML = `<table><thead><tr>
+      <th>當事車</th><th>track</th><th>類別</th><th>出現幀</th>
+      <th>移動</th><th>定位</th><th>展開度</th><th>輪點</th><th>可用率</th></tr></thead><tbody>`
+    + G.tracks.map(t => {
+        const picked = G.picked.a?.track_id === t.track_id || G.picked.b?.track_id === t.track_id;
+        return `<tr class="${picked ? "picked" : (t.ok ? "" : "weak")}">
+          <td><select data-tid="${t.track_id}">${classOptions(t)}</select></td>
+          <td>${t.track_id}</td>
+          <td>${t.cls}${t.cls_suggested ? "" : ' <span class="badge weak">非車輛</span>'}</td>
+          <td>${t.frames_present}（${t.first}–${t.last}）</td>
+          <td>${t.net_disp_m == null ? "—"
+              : t.net_disp_m < 1 ? '<span class="badge weak">停放車</span>'
+              : t.net_disp_m.toFixed(1) + " m"}</td>
+          <td>${{ pifpaf:"PifPaf", mixed:"混合",
+                  bbox:'<span class="badge weak" title="位置來自 YOLO bbox 過單應性：bbox 參考點不是地面接觸點，有系統性偏移，精度較 PifPaf 差">bbox</span>' }[t.pos_source] ?? "—"}</td>
+          <td>${t.spread_med == null ? "—" : t.spread_med.toFixed(1) + " m"}</td>
+          <td>${t.wheel_med ?? "—"}</td>
+          <td><span class="badge ${t.ok ? "ok" : "weak"}">${
+            t.pass_rate == null ? "無資料" : (t.pass_rate * 100).toFixed(0) + "%"}</span></td>
+        </tr>`;
+      }).join("") + `</tbody></table>`;
+  $("tracks").querySelectorAll("select").forEach(s => s.onchange = onPick);
+}
+
+// 車種＝物理參數，不只是外觀：CLASS_DEFAULTS 的 mass_kg 從 200（機車）到 11000（公車）、
+// length_m 從 1.85 到 11.0，選錯直接改變碰撞結論。所以選單要列出 build_scene 收得下的
+// 全部車種，不能只有汽車／機車——VisDrone 本來就會分出 van / truck / bus。
+const SCENE_CLASSES = [
+  ["Car", "汽車"], ["SUV", "休旅車"], ["Van", "廂型車"],
+  ["Truck", "卡車"], ["Bus", "公車"], ["Two_Wheeler", "機車"],
+];
+
+// 偵測到的車種排第一並標「偵測」：這格同時負責「選不選這台」與「它是什麼車」，
+// 預選會變成自動勾選，所以改成把正確答案放在第一個——選一次就對，要改仍然可以改。
+function classOptions(t){
+  const order = t.cls_suggested
+    ? [...SCENE_CLASSES.filter(c => c[0] === t.cls_suggested),
+       ...SCENE_CLASSES.filter(c => c[0] !== t.cls_suggested)]
+    : SCENE_CLASSES;
+  return `<option value="">—</option>` + order.map(([v, label]) =>
+    `<option value="${v}"${sel(t, v)}>${label}${v === t.cls_suggested ? "（偵測）" : ""}</option>`
+  ).join("");
+}
+
+const sel = (t, cls) => {
+  const p = Object.values(G.picked).find(v => v?.track_id === t.track_id);
+  return p && p.cls === cls ? " selected" : "";
+};
+
+function onPick(ev){
+  const tid = +ev.target.dataset.tid, cls = ev.target.value;
+  // 只留最後選的兩台：先清掉這個 track 既有的位置，再放進空位
+  for(const k of ["a", "b"]) if(G.picked[k]?.track_id === tid) delete G.picked[k];
+  if(cls){
+    const slot = !G.picked.a ? "a" : (!G.picked.b ? "b" : null);
+    if(!slot){ ev.target.value = ""; return toastPick(); }
+    G.picked[slot] = { track_id: tid, cls };
+  }
+  renderTracks();
+  const n = Object.keys(G.picked).length;
+  setState("s2", n === 2 ? "done" : "active");
+  narrowFrameRange();
+  updateBuild();
+}
+
+function toastPick(){
+  alert_("err4", "bad", "已經選了兩台——先把其中一台改回「—」再選新的。"
+    + "碰撞模擬本來就是兩台車的事。");
+  setTimeout(() => alert_("err4", "", ""), 3500);
+}
+
+/* ---------- 3. 碰撞幀 ---------- */
+$("frame").oninput = () => { showFrame(); updateBuild(); };
+$("prev").onclick = () => step(-1);
+$("next").onclick = () => step(1);
+document.addEventListener("keydown", ev => {
+  if($("frame").disabled) return;
+  if(ev.key === "ArrowLeft"){ ev.preventDefault(); step(-1); }
+  if(ev.key === "ArrowRight"){ ev.preventDefault(); step(1); }
+});
+
+function step(d){
+  const f = $("frame");
+  f.value = Math.min(+f.max, Math.max(+f.min, +f.value + d));
+  showFrame(); updateBuild();
+}
+
+let shotSeq = 0;
+function showFrame(){
+  const f = +$("frame").value;
+  $("frameNum").textContent = G.fps ? `${f}（${(f / G.fps).toFixed(2)} s）` : String(f);
+  // 取圖是網路往返，拖滑桿會連發——只採用最後一次的結果，避免舊圖蓋掉新圖
+  const seq = ++shotSeq;
+  const im = new Image();
+  im.onload = () => {
+    if(seq !== shotSeq) return;
+    $("shot").src = im.src; $("shot").classList.add("on"); $("ph").style.display = "none";
+  };
+  im.src = `/api/frame/${encodeURIComponent(code)}/${f}`;
+}
+
+function narrowFrameRange(){
+  // 碰撞必然發生在兩台車都在場的區間，範圍縮小就少猜很多
+  const picked = Object.values(G.picked);
+  const f = $("frame");
+  if(picked.length !== 2){ f.min = 0; f.max = Math.max(0, G.frameCount - 1); return; }
+  const rows = picked.map(p => G.tracks.find(t => t.track_id === p.track_id)).filter(Boolean);
+  if(rows.length !== 2) return;
+  const lo = Math.max(...rows.map(r => r.first)), hi = Math.min(...rows.map(r => r.last));
+  if(lo >= hi){ f.min = 0; f.max = Math.max(0, G.frameCount - 1); return; }
+  f.min = lo; f.max = hi;
+  if(+f.value < lo || +f.value > hi) f.value = Math.round((lo + hi) / 2);
+  showFrame();
+}
+
+/* ---------- 4. 產場景包 ---------- */
+function updateBuild(){
+  const ready = Object.keys(G.picked).length === 2;
+  $("build").disabled = !ready;
+  setState("s4", ready ? "active" : "idle");
+}
+
+$("build").onclick = async () => {
+  $("build").disabled = true; alert_("err4", "", "");
+  $("log").hidden = false;
+  try{
+    const r = await api("/api/integrate/build", {
+      code, colliders: [G.picked.a, G.picked.b], collision_frame: +$("frame").value });
+    setState("s4", "done");
+    alert_("err4", "ok", `場景包已產生：<code>${r.scene}</code>，正在開啟播放器…`);
+    setTimeout(() => location.href = r.player, 900);
+  }catch(e){
+    alert_("err4", "bad", e.message);
+    try{
+      const j = await api(`/api/integrate/status/${encodeURIComponent(code)}`);
+      $("log").textContent = (j.log || []).join("\n");
+      $("log").scrollTop = $("log").scrollHeight;
+    }catch{}
+    $("build").disabled = false;
+  }
+};
+
+// 進頁面時若偵測已經跑過，直接跳到挑車
+(async () => {
+  if(!code) return;
+  try{
+    const j = await api(`/api/integrate/status/${encodeURIComponent(code)}`);
+    if(["picking", "building", "done"].includes(j.phase)){
+      setState("s1", "done"); $("run").disabled = true;
+      $("log").hidden = false; $("log").textContent = (j.log || []).join("\n");
+      loadTracks();
+    }else if(j.phase === "detect" || j.phase === "localize"){
+      $("run").disabled = true; $("log").hidden = false; poll();
+    }
+  }catch{}
+})();
+</script>
+</body>
+</html>

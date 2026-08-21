@@ -70,7 +70,7 @@ OPENAI_API_KEY → genai_enhance()    重畫整張做 HD 化                    
 `satellite_pipeline/measure_genai_drift.py`：把兩張圖切成 128px 方塊，逐塊相位相關求位移。
 
 ```bash
-python3 satellite_pipeline/measure_genai_drift.py --code tainan_yongkang
+python3 workbench/measure_genai_drift.py --code tainan_yongkang
 ```
 
 | 指標 | 意義 |
@@ -177,3 +177,18 @@ python3 satellite_pipeline/measure_genai_drift.py --code ab_oai
 
 註：分塊邊長會影響絕對數字（`--tile 128` 對 728px 圖只切出 25 塊、`--tile 91` 切 64 塊），
 **比較時務必固定 `--tile`**。上表用 91，`--code` 模式預設 128。
+
+---
+
+## 後記（2026-08-20）
+
+兩件與本決定相關的後續，不改變本決定的量測結論：
+
+1. **非確定性加碼**：同一張 sat_raw、同 prompt（sharp + gemini）連跑兩次，漂移
+   0.04 m／22% 與 0.40 m／56%（>10px 區塊佔比）——生圖不只有誤差，而且**每次都不
+   一樣**，事前無從得知。
+2. **handoff 政策改動**：`/api/handoff` 改為交付「使用者在 ① 當下看的那張」
+   （variant 隨 `S.tab`；沒指定仍 sat_clean → sat_raw、不自動挑 genai）。使用者以
+   觀感優先明示選 genai 時放行，出處寫進 sat_meta（`geometry: rewritten_by_genai`）。
+   「只能標 sat_clean」從硬約束改為預設值＋明示例外，理由與代價見
+   `docs/specs/2026-08-16-web-onboarding-flow-design.md`「交給 ③ 標註的底圖」節。

@@ -44,6 +44,66 @@ def _haware_obj(tid, x=100.0, y=200.0):
     return o
 
 
+def _bbox_fallback_obj(tid, x=100.0, y=200.0):
+    """eval_haware_replay --bbox-fallback 的形狀：權威欄位空、座標走旁路欄位。"""
+    return {"id": 0, "tracked_id": tid, "class": "motor", "confidence": None,
+            "bbox_2d": [0, 0, 10, 10], "sat_coords": None,
+            "bbox_fallback_sat_coords": [x, y],
+            "have_heading": False, "have_measurements": True,
+            "default_heading": False, "heading": None, "speed_kmh": 0.0,
+            "status": "bbox_fallback", "method": "bbox_homography",
+            "spread_m": None, "n_wheel_kp": 0}
+
+
+class BboxFallbackOptInTest(unittest.TestCase):
+    """備援位置必須**明示**才採用——預設行為與 authority 的凍結政策一字不差。
+
+    為什麼走旁路欄位而不是把 'bbox_fallback' 加進 accepted_statuses：
+    政策被 test_localization_authority 釘死為 ("ok",)（downstream safety property）。
+    備援座標放 bbox_fallback_sat_coords、sanitize 之後才注入 position_m，
+    authority 模組零改動，任何一層都能拒收。
+    """
+
+    def _run(self, frames, ids, accept):
+        data = {"meta": {"fps": 30}, "frames": frames}
+        return fae.filter_and_enrich(data, ids, px_per_meter=29.113, prior_map={},
+                                     accept_bbox_fallback=accept)
+
+    def test_不帶旗標時備援記錄的position維持null(self):
+        out = self._run([_frame(0, [_bbox_fallback_obj(21)])], [21], accept=False)
+        obj = out["frames"][0]["objects"][0]
+        self.assertIsNone(obj["position_m"])
+        self.assertNotIn("position_source", obj)
+        self.assertEqual(out["bbox_fallback_position_count"], 0)
+
+    def test_帶旗標時備援位置以像素除以ppm注入並標明來源(self):
+        out = self._run([_frame(0, [_bbox_fallback_obj(21, x=291.13, y=582.26)])],
+                        [21], accept=True)
+        obj = out["frames"][0]["objects"][0]
+        self.assertAlmostEqual(obj["position_m"][0], 10.0, places=3)
+        self.assertAlmostEqual(obj["position_m"][1], 20.0, places=3)
+        self.assertEqual(obj["position_source"], "bbox_homography")
+        self.assertEqual(out["bbox_fallback_position_count"], 1)
+
+    def test_帶旗標也絕不碰權威欄位(self):
+        """sat_coords 是 authority 的，備援只准動 position_m。"""
+        out = self._run([_frame(0, [_bbox_fallback_obj(21)])], [21], accept=True)
+        obj = out["frames"][0]["objects"][0]
+        self.assertIsNone(obj["sat_coords"])
+
+    def test_旗標不影響status_ok的正常記錄(self):
+        out = self._run([_frame(0, [_haware_obj(7, 291.13, 291.13)])], [7], accept=True)
+        obj = out["frames"][0]["objects"][0]
+        self.assertIsNotNone(obj["position_m"])
+        self.assertNotIn("position_source", obj)
+        self.assertEqual(out["bbox_fallback_position_count"], 0)
+
+    def test_帶旗標後全備援的track能通過缺位置閘門(self):
+        frames = [_frame(i, [_bbox_fallback_obj(21, 100.0 + i, 200.0)]) for i in range(3)]
+        out = self._run(frames, [21], accept=True)
+        self.assertEqual(fae.tracks_without_position(out, [21]), [])
+
+
 class MissingPositionIsNotSilentTest(unittest.TestCase):
 
     def _run(self, frames, ids):
