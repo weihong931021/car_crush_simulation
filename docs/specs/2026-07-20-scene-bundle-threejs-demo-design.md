@@ -1,5 +1,10 @@
 # 場景包驅動的 Three.js 事故重建 Demo — 設計文件
 
+> **路徑對照（2026-08-21 目錄重整後讀本文必看）**：本文寫於重整前，內文的
+> `satellite_pipeline/` ＝現在的 `backend/`（Python）＋ `frontend/onboarding/`（web/ 三頁）；
+> `threejs/` ＝ `frontend/player/`；`scene-loader.js` 現走 `../../scenes/`。
+> 其餘內容仍然有效。完整對照見 `CLAUDE.md` 的「Repo 結構」段。
+
 日期：2026-07-20
 狀態：已與使用者確認方向（方案 A），待實作
 

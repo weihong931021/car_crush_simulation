@@ -1,8 +1,9 @@
-# backend — 進場流程 ①②③④ 端到端工作台
+# backend — 進場流程 ①②③④ 的 Python 端
 
-事故地點經緯度 → 衛星圖 → 去車 + 銳化高清化。輸出的 `sat_*.png` + `meta.json`
-供 `tools/build_scene.py --sat-dir` 取用，產生場景包的 `ground.png`。
-獨立模組，與 `trafficlab-project/`（上游軌跡推論）分開。
+HTTP server（`webapp.py`）＋ 衛星底圖擷取／增強＋標註幾何＋trafficlab 串接。
+**頁面不在這裡**——①②③④ 的三個 HTML 在 `frontend/onboarding/`（webapp 由
+`paths.py` 的 `WEB_DIR` 找到它們）。輸出的 `sat_*.png` + `meta.json` 供
+`tools/build_scene.py --sat-dir` 取用；與 `trafficlab-project/`（上游軌跡推論）分開。
 
 ```text
 lat/lon

@@ -1,5 +1,10 @@
 # 碰撞模擬重構設計：從「重播＋固定時刻衝量」到「前向模擬＋真實碰撞偵測」
 
+> **路徑對照（2026-08-21 目錄重整後讀本文必看）**：本文寫於重整前，內文的
+> `satellite_pipeline/` ＝現在的 `backend/`（Python）＋ `frontend/onboarding/`（web/ 三頁）；
+> `threejs/` ＝ `frontend/player/`；`scene-loader.js` 現走 `../../scenes/`。
+> 其餘內容仍然有效。完整對照見 `CLAUDE.md` 的「Repo 結構」段。
+
 日期：2026-07-20
 狀態：草案，待確認
 前置：`docs/specs/2026-07-20-scene-bundle-threejs-demo-design.md`（場景包架構，已完成）

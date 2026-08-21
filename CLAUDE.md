@@ -4,6 +4,33 @@
 
 ---
 
+## Repo 結構（2026-08-21 重整定案）
+
+```text
+backend/               進場流程 ①②③④ 的 Python 端（webapp/annotate/integrate/影像；111 測）
+frontend/onboarding/   ①②③④ 的三個頁面（自足 HTML；webapp 經 paths.WEB_DIR 服務）
+frontend/player/       Three.js 播放器與碰撞物理（lib/ 86 測）
+tools/                 build_scene / verify_scenes / open-player（46 測）
+scenes/                場景包（產出資料，不手改）
+trafficlab-project/    混合歸屬——先讀其 OWNERSHIP.md：haware 那 64 檔（25,442 行、271 測）
+                       是本 repo 維護的；偵測/軌跡/GUI 由隊友主導且凍結
+docs/                  入口是 docs/README.md（動哪塊 → 讀哪份 spec 的對照表）
+```
+
+兩條硬約束（違反＝整個壞掉且錯誤訊息不指向原因）：
+
+1. **`frontend/` 與 `scenes/` 必須同層**——`scene-loader.js` 走 `../../scenes/`（player 在
+   frontend/ 下一層），只部署其中一個會全數 404
+2. **`trafficlab-project/` 不可改名成 `trafficlab/`**——與其內 Python 套件同名，repo root 進
+   `sys.path` 時 `import trafficlab` 解析成空 namespace package、`import trafficlab.motion`
+   直接 ModuleNotFoundError（實測確認）
+
+歷史名對照：`satellite_pipeline`（→08-20）＝`workbench`（08-20 當天）＝現在的
+`backend`+`frontend/onboarding`；`threejs`＝`player`（08-20）＝`frontend/player`。
+舊文件與 commit 訊息提到這些名字時照此對照，**不要回頭改歷史文件**。
+
+---
+
 ## 當前工作方向（2026-08-20 起）
 
 **整條進場流程都在瀏覽器裡**（`backend/webapp.py`），前面的成果全部接進去了。

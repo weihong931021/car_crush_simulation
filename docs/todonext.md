@@ -6,7 +6,9 @@
 > plan：`docs/plans/2026-08-20-repo-restructure.md`
 > 回復點：`git tag reorg-preflight-20260820`
 
-- [x] `satellite_pipeline/` → `backend/`、`threejs/` → `frontend/player/`（前後端按角色命名，全留頂層）
+- [x] 兩階段完成：08-20 `satellite_pipeline`→`workbench`、`threejs`→`player`；
+      08-21 前後端拆分 `workbench`→`backend/`+`frontend/onboarding/`、`player`→`frontend/player/`
+      （scene-loader 因此改走 `../../scenes/`，部署約束＝**frontend/ 與 scenes/ 必須同層**）
 - [x] `trafficlab-project/` 留原地不改名 + 新增 `OWNERSHIP.md`——那棵樹有 64 檔 25,354 行是我們的
       （改名成 `trafficlab/` 會與其內同名 Python 套件衝突，實測 `import trafficlab.motion` 會爆）
 - [x] `detection_tests/` → `trafficlab-project/`、`open-player.command` → `tools/`、
